@@ -1,0 +1,16 @@
+[project]
+name = "pdf-language-learner"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.116.0",
+    "ollama>=0.5.0",
+    "pydantic>=2.11.0",
+    "uvicorn[standard]>=0.35.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    "pytest>=8.4.0",
+]
