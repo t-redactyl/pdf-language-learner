@@ -21,13 +21,21 @@
     </section>
     <section id="reader" class="reader" hidden>
       <aside class="reader-meta">
+        <section class="saved-vocabulary" aria-labelledby="saved-vocabulary-title">
+          <div class="history-heading">
+            <p id="saved-vocabulary-title" class="eyebrow">Saved vocabulary</p>
+            <span id="saved-vocabulary-count" class="vocabulary-count" aria-live="polite"></span>
+          </div>
+          <p id="saved-vocabulary-empty" class="history-empty">Save words and phrases from your translation history for later revision.</p>
+          <ol id="saved-vocabulary-list"></ol>
+        </section>
         <section class="translation-history" aria-labelledby="translation-history-title">
           <div class="history-heading">
             <p id="translation-history-title" class="eyebrow">Translation history</p>
             <button id="clear-translations" class="text-button history-clear" type="button" hidden>Clear</button>
           </div>
           <p id="translation-history-empty" class="history-empty">Translations you create will appear here.</p>
-          <ol id="translation-history-list" aria-live="polite"></ol>
+          <ol id="translation-history-list"></ol>
         </section>
       </aside>
       <div id="pages" class="pages" aria-label="PDF pages"></div>

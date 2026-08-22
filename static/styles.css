@@ -16,15 +16,21 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .reader { display:grid; grid-template-columns:minmax(160px,220px) minmax(480px,820px) minmax(220px,290px); gap:34px; align-items:start; max-width:1450px; margin:40px auto; padding:0 3vw; }
 .reader-meta,.translation-panel { position:sticky; top:116px; }
 .reader-meta { color:#6a6e67; }
+.saved-vocabulary { margin-bottom:34px; }
 .text-button { padding:0; border:0; border-bottom:1px solid; background:none; color:#656b63; cursor:pointer; }
 .history-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
 .history-heading .eyebrow { margin:0; }
-.history-clear { font-size:12px; }
+.history-clear,.vocabulary-count { font-size:12px; }
 .history-empty { margin:14px 0 0; color:#858980; font-size:13px; }
-#translation-history-list { max-height:48vh; margin:14px 0 0; padding:0; list-style:none; overflow:auto; }
-#translation-history-list li + li { border-top:1px solid var(--line); }
-.history-item { width:100%; padding:13px 2px; border:0; background:none; color:inherit; text-align:left; cursor:pointer; }
+#translation-history-list,#saved-vocabulary-list { margin:14px 0 0; padding:0; list-style:none; overflow:auto; }
+#translation-history-list { max-height:38vh; }
+#saved-vocabulary-list { max-height:28vh; }
+#translation-history-list li + li,#saved-vocabulary-list li + li { border-top:1px solid var(--line); }
+.history-row { position:relative; }
+.history-item { width:100%; padding:13px 32px 13px 2px; border:0; background:none; color:inherit; text-align:left; cursor:pointer; }
 .history-item:hover .history-translation,.history-item:focus-visible .history-translation { color:var(--ink); }
+.vocabulary-toggle { position:absolute; top:13px; right:2px; width:26px; height:26px; padding:0; border:0; border-radius:50%; background:none; color:#7b8078; cursor:pointer; font-size:20px; line-height:1; }
+.vocabulary-toggle:hover,.vocabulary-toggle:focus-visible,.vocabulary-toggle[aria-pressed="true"] { color:#967a16; background:#e5d07724; }
 .history-source,.history-translation { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .history-source { color:#777c74; font:italic 13px/1.45 Georgia,serif; }
 .history-translation { margin-top:3px; color:#343832; font:500 17px/1.35 Georgia,serif; transition:color .15s ease; }

@@ -17,6 +17,10 @@ const characterOffsetsForSpan = new WeakMap();
 const measurementContext = document.createElement("canvas").getContext("2d");
 let selectionDragStart = null;
 let translations = [];
+const LEGACY_SAVED_VOCABULARY_STORAGE_KEY = "margin:saved-vocabulary:v1";
+let savedVocabulary = [];
+
+loadSavedVocabulary().catch(() => {});
 
 document.querySelectorAll("input[type=file]").forEach((input) => input.addEventListener("change", (event) => openPdf(event.target.files[0])));
 
@@ -29,6 +33,7 @@ async function openPdf(file) {
   try { localStorage.removeItem(activeDocumentKey); } catch {}
   translations = readStoredTranslations();
   renderTranslationHistory();
+  renderSavedVocabulary();
   selectedText = "";
   selectedContext = "";
   pendingHighlight = [];
@@ -397,9 +402,15 @@ $("#translate-button").addEventListener("click", async () => {
     showCurrentHighlight(pendingHighlight);
     saveTranslation({
       source: data.normalized_source,
+      originalSource: selectedText,
+      normalizedSource: data.normalized_source,
       translation: data.translation,
       detectedLanguage: data.detected_language,
+      sourceLanguage,
       targetLanguage: $("#target-language").value,
+      context: selectedContext,
+      documentKey: activeDocumentKey,
+      createdAt: new Date().toISOString(),
     });
   } catch (error) { $("#error").textContent = error.message; }
   finally { button.textContent = "Translate selection"; renderSourceLanguageState(); }
@@ -442,6 +453,149 @@ function saveTranslation(translation) {
   renderTranslationHistory();
 }
 
+function readLegacySavedVocabulary() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(LEGACY_SAVED_VOCABULARY_STORAGE_KEY) || "[]");
+    return Array.isArray(stored) ? stored.filter(entry => entry && typeof entry === "object") : [];
+  } catch {
+    return [];
+  }
+}
+
+function vocabularyKey(entry) {
+  return [
+    entry.normalizedSource || entry.source || "",
+    entry.sourceLanguage || entry.detectedLanguage || "",
+  ].map(value => String(value).normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/g, " ")).join("\u0000");
+}
+
+function savedVocabularyIndex(translation) {
+  const key = vocabularyKey(translation);
+  return savedVocabulary.findIndex(entry => vocabularyKey(entry) === key);
+}
+
+function vocabularyRequest(translation) {
+  return {
+    originalSource: translation.originalSource || translation.source,
+    normalizedSource: translation.normalizedSource || translation.source,
+    translation: translation.translation,
+    sourceLanguage: translation.sourceLanguage || translation.detectedLanguage,
+    targetLanguage: translation.targetLanguage,
+    context: translation.context || "",
+    documentKey: translation.documentKey || activeDocumentKey,
+  };
+}
+
+function vocabularyApiPayload(translation) {
+  const item = vocabularyRequest(translation);
+  return {
+    original_source: item.originalSource,
+    normalized_source: item.normalizedSource,
+    translation: item.translation,
+    source_language: item.sourceLanguage,
+    target_language: item.targetLanguage,
+    context: item.context,
+    document_key: item.documentKey,
+  };
+}
+
+function vocabularyFromApi(item) {
+  return {
+    id: item.id,
+    schemaVersion: item.schema_version,
+    source: item.normalized_source,
+    originalSource: item.original_source,
+    normalizedSource: item.normalized_source,
+    translation: item.translation,
+    sourceLanguage: item.source_language,
+    targetLanguage: item.target_language,
+    context: item.context,
+    documentKey: item.document_key,
+    savedAt: item.saved_at,
+    review: item.review,
+  };
+}
+
+async function requestVocabulary(translation) {
+  const response = await fetch("/api/vocabulary", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(vocabularyApiPayload(translation)),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "Vocabulary could not be saved");
+  return vocabularyFromApi(data.item);
+}
+
+async function loadSavedVocabulary() {
+  const legacyVocabulary = readLegacySavedVocabulary();
+  let migrationComplete = legacyVocabulary.length > 0;
+  for (const entry of legacyVocabulary) {
+    try {
+      await requestVocabulary(entry);
+    } catch {
+      migrationComplete = false;
+    }
+  }
+  if (migrationComplete) localStorage.removeItem(LEGACY_SAVED_VOCABULARY_STORAGE_KEY);
+
+  const response = await fetch("/api/vocabulary");
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "Saved vocabulary could not be loaded");
+  savedVocabulary = data.map(vocabularyFromApi);
+  renderTranslationHistory();
+  renderSavedVocabulary();
+}
+
+async function toggleSavedVocabulary(translation) {
+  const index = savedVocabularyIndex(translation);
+  if (index >= 0) {
+    const response = await fetch(`/api/vocabulary/${encodeURIComponent(savedVocabulary[index].id)}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.detail || "Saved vocabulary could not be removed");
+    }
+  } else {
+    await requestVocabulary(translation);
+  }
+  await loadSavedVocabulary();
+}
+
+function createTranslationListItem(translation, index, collection) {
+  const item = document.createElement("li");
+  item.className = "history-row";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "history-item";
+  button.dataset.translationIndex = index;
+  button.dataset.translationCollection = collection;
+
+  const source = document.createElement("span");
+  source.className = "history-source";
+  source.textContent = translation.normalizedSource || translation.source;
+  const translated = document.createElement("span");
+  translated.className = "history-translation";
+  translated.textContent = translation.translation;
+  button.append(source, translated);
+
+  const saveButton = document.createElement("button");
+  const isSaved = savedVocabularyIndex(translation) >= 0;
+  saveButton.type = "button";
+  saveButton.className = "vocabulary-toggle";
+  saveButton.dataset.translationIndex = index;
+  saveButton.dataset.translationCollection = collection;
+  saveButton.setAttribute("aria-pressed", String(isSaved));
+  saveButton.setAttribute("aria-label", isSaved ? `Remove ${source.textContent} from saved vocabulary` : `Save ${source.textContent} for revision`);
+  saveButton.title = isSaved ? "Remove from saved vocabulary" : "Save for revision";
+  saveButton.textContent = isSaved ? "★" : "☆";
+
+  item.append(button, saveButton);
+  return item;
+}
+
 function renderTranslationHistory() {
   const list = $("#translation-history-list");
   if (!list) return;
@@ -452,43 +606,67 @@ function renderTranslationHistory() {
   if (clearButton) clearButton.hidden = translations.length === 0;
 
   translations.forEach((translation, index) => {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "history-item";
-    button.dataset.translationIndex = index;
-
-    const source = document.createElement("span");
-    source.className = "history-source";
-    source.textContent = translation.source;
-    const translated = document.createElement("span");
-    translated.className = "history-translation";
-    translated.textContent = translation.translation;
-    button.append(source, translated);
-    item.append(button);
-    list.append(item);
+    list.append(createTranslationListItem(translation, index, "history"));
   });
 }
 
-$("#translation-history-list")?.addEventListener("click", (event) => {
-  const button = event.target.closest(".history-item");
-  if (!button) return;
-  const translation = translations[Number(button.dataset.translationIndex)];
-  if (!translation) return;
+function renderSavedVocabulary() {
+  const list = $("#saved-vocabulary-list");
+  if (!list) return;
+  list.replaceChildren();
+  $("#saved-vocabulary-empty").hidden = savedVocabulary.length > 0;
+  $("#saved-vocabulary-count").textContent = savedVocabulary.length ? String(savedVocabulary.length) : "";
+  savedVocabulary.forEach((translation, index) => {
+    list.append(createTranslationListItem(translation, index, "saved"));
+  });
+}
 
-  selectedText = translation.source;
-  selectedContext = "";
+function translationFromControl(control) {
+  const collection = control.dataset.translationCollection === "saved" ? savedVocabulary : translations;
+  return collection[Number(control.dataset.translationIndex)];
+}
+
+function showTranslation(translation) {
+  const source = translation.normalizedSource || translation.source;
+  const sourceLanguage = translation.sourceLanguage || translation.detectedLanguage;
+  selectedText = source;
+  selectedContext = translation.context || "";
   pendingHighlight = [];
-  $("#selected-text").textContent = translation.source;
+  $("#selected-text").textContent = translation.originalSource || source;
   $("#target-language").value = translation.targetLanguage;
-  $("#detected-language").textContent = `Source ${translation.detectedLanguage}`;
-  $("#normalized-text").textContent = translation.source;
+  $("#detected-language").textContent = `Source ${sourceLanguage}`;
+  $("#normalized-text").textContent = source;
   $("#translated-text").textContent = translation.translation;
   $("#selection-hint").hidden = true;
   $("#translation-content").hidden = false;
   $("#result").hidden = false;
   $("#error").textContent = "";
-});
+}
+
+async function handleTranslationListClick(event) {
+  const saveButton = event.target.closest(".vocabulary-toggle");
+  if (saveButton) {
+    const translation = translationFromControl(saveButton);
+    if (!translation) return;
+    saveButton.disabled = true;
+    try {
+      await toggleSavedVocabulary(translation);
+    } catch (error) {
+      $("#error").textContent = error.message;
+    } finally {
+      saveButton.disabled = false;
+    }
+    return;
+  }
+
+  const button = event.target.closest(".history-item");
+  if (!button) return;
+  const translation = translationFromControl(button);
+  if (translation) showTranslation(translation);
+}
+
+$("#translation-history-list")?.addEventListener("click", handleTranslationListClick);
+$("#saved-vocabulary-list")?.addEventListener("click", handleTranslationListClick);
 
 $("#clear-translations")?.addEventListener("click", () => {
   translations = [];
