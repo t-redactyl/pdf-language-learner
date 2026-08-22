@@ -21,8 +21,14 @@
     </section>
     <section id="reader" class="reader" hidden>
       <aside class="reader-meta">
-        <p class="eyebrow">Now reading</p><h2 id="document-name"></h2><p id="page-count"></p>
-        <button id="clear-highlights" class="text-button" type="button">Clear highlights</button>
+        <section class="translation-history" aria-labelledby="translation-history-title">
+          <div class="history-heading">
+            <p id="translation-history-title" class="eyebrow">Translation history</p>
+            <button id="clear-translations" class="text-button history-clear" type="button" hidden>Clear</button>
+          </div>
+          <p id="translation-history-empty" class="history-empty">Translations you create will appear here.</p>
+          <ol id="translation-history-list" aria-live="polite"></ol>
+        </section>
       </aside>
       <div id="pages" class="pages" aria-label="PDF pages"></div>
       <aside class="translation-panel">

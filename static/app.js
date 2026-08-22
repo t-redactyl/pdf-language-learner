@@ -10,6 +10,7 @@ const textItemForSpan = new WeakMap();
 const characterOffsetsForSpan = new WeakMap();
 const measurementContext = document.createElement("canvas").getContext("2d");
 let selectionDragStart = null;
+let translations = [];
 
 document.querySelectorAll("input[type=file]").forEach((input) => input.addEventListener("change", (event) => openPdf(event.target.files[0])));
 
@@ -17,13 +18,21 @@ async function openPdf(file) {
   if (!file) return;
   pages.replaceChildren();
   activeDocumentKey = `margin:${file.name}:${file.size}:${file.lastModified}`;
+  // Highlights used to be persisted under the document key. Remove that legacy
+  // data now that highlights are intentionally transient.
+  try { localStorage.removeItem(activeDocumentKey); } catch {}
+  translations = readStoredTranslations();
+  renderTranslationHistory();
+  selectedText = "";
+  pendingHighlight = [];
+  $("#selection-hint").hidden = false;
+  $("#translation-content").hidden = true;
+  $("#result").hidden = true;
+  $("#error").textContent = "";
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-  $("#document-name").textContent = file.name.replace(/\.pdf$/i, "");
-  $("#page-count").textContent = `${pdf.numPages} page${pdf.numPages === 1 ? "" : "s"}`;
   $("#empty-state").hidden = true;
   $("#reader").hidden = false;
   for (let number = 1; number <= pdf.numPages; number += 1) await renderPage(await pdf.getPage(number), number);
-  restoreHighlights();
 }
 
 async function renderPage(page, number) {
@@ -69,7 +78,10 @@ document.addEventListener("selectionchange", () => {
 });
 
 pages.addEventListener("pointerdown", event => {
-  if (event.button === 0 && event.target.closest(".textLayer")) {
+  if (event.button !== 0) return;
+  clearCurrentHighlight();
+  pendingHighlight = [];
+  if (event.target.closest(".textLayer")) {
     selectionDragStart = { x: event.clientX, y: event.clientY };
   }
 });
@@ -252,17 +264,27 @@ $("#translate-button").addEventListener("click", async () => {
     $("#detected-language").textContent = `Detected ${data.detected_language}`;
     $("#translated-text").textContent = data.translation;
     $("#result").hidden = false;
-    saveHighlight(pendingHighlight);
+    showCurrentHighlight(pendingHighlight);
+    saveTranslation({
+      source: selectedText,
+      translation: data.translation,
+      detectedLanguage: data.detected_language,
+      targetLanguage: $("#target-language").value,
+    });
   } catch (error) { $("#error").textContent = error.message; }
   finally { button.disabled = false; button.textContent = "Translate selection"; }
 });
 
-function saveHighlight(rectangles) {
+function showCurrentHighlight(rectangles) {
   if (!rectangles.length) return;
-  const stored = JSON.parse(localStorage.getItem(activeDocumentKey) || "[]");
-  stored.push(rectangles); localStorage.setItem(activeDocumentKey, JSON.stringify(stored));
+  clearCurrentHighlight();
   drawHighlight(rectangles); pendingHighlight = []; window.getSelection()?.removeAllRanges();
 }
+
+function clearCurrentHighlight() {
+  document.querySelectorAll(".highlight-layer").forEach((layer) => layer.replaceChildren());
+}
+
 function drawHighlight(rectangles) {
   for (const rect of rectangles) {
     const mark = document.createElement("span");
@@ -270,5 +292,74 @@ function drawHighlight(rectangles) {
     document.querySelector(`.pdf-page[data-page="${rect.page}"] .highlight-layer`)?.append(mark);
   }
 }
-function restoreHighlights() { for (const rectangles of JSON.parse(localStorage.getItem(activeDocumentKey) || "[]")) drawHighlight(rectangles); }
-$("#clear-highlights").addEventListener("click", () => { localStorage.removeItem(activeDocumentKey); document.querySelectorAll(".highlight-layer").forEach((layer) => layer.replaceChildren()); });
+
+function translationsStorageKey() {
+  return `${activeDocumentKey}:translations`;
+}
+
+function readStoredTranslations() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(translationsStorageKey()) || "[]");
+    return Array.isArray(stored) ? stored : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveTranslation(translation) {
+  translations.unshift(translation);
+  localStorage.setItem(translationsStorageKey(), JSON.stringify(translations));
+  renderTranslationHistory();
+}
+
+function renderTranslationHistory() {
+  const list = $("#translation-history-list");
+  if (!list) return;
+  list.replaceChildren();
+  const emptyState = $("#translation-history-empty");
+  const clearButton = $("#clear-translations");
+  if (emptyState) emptyState.hidden = translations.length > 0;
+  if (clearButton) clearButton.hidden = translations.length === 0;
+
+  translations.forEach((translation, index) => {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "history-item";
+    button.dataset.translationIndex = index;
+
+    const source = document.createElement("span");
+    source.className = "history-source";
+    source.textContent = translation.source;
+    const translated = document.createElement("span");
+    translated.className = "history-translation";
+    translated.textContent = translation.translation;
+    button.append(source, translated);
+    item.append(button);
+    list.append(item);
+  });
+}
+
+$("#translation-history-list")?.addEventListener("click", (event) => {
+  const button = event.target.closest(".history-item");
+  if (!button) return;
+  const translation = translations[Number(button.dataset.translationIndex)];
+  if (!translation) return;
+
+  selectedText = translation.source;
+  pendingHighlight = [];
+  $("#selected-text").textContent = translation.source;
+  $("#target-language").value = translation.targetLanguage;
+  $("#detected-language").textContent = `Detected ${translation.detectedLanguage}`;
+  $("#translated-text").textContent = translation.translation;
+  $("#selection-hint").hidden = true;
+  $("#translation-content").hidden = false;
+  $("#result").hidden = false;
+  $("#error").textContent = "";
+});
+
+$("#clear-translations")?.addEventListener("click", () => {
+  translations = [];
+  localStorage.removeItem(translationsStorageKey());
+  renderTranslationHistory();
+});

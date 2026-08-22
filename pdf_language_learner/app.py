@@ -59,7 +59,9 @@ def translate(request: TranslationRequest) -> TranslationResult:
                         "You are a precise translator for a language-learning "
                         "application. Detect the input language and translate it "
                         "into the requested language. Preserve tone and meaning."
-                        "Do not explain, do not converse, do not add commentary."
+                        "Normalise the source work into its base form."
+                        "For example, plural nouns get converted to the singular: 'cats' -> 'cat'."
+                        "For example, conjugated verbs get converted to the infinitive: 'hat' -> 'haben'."
                     ),
                 },
                 {

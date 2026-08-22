@@ -15,9 +15,19 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .intro { max-width:570px; margin:0 auto 32px; color:#5f645d; font-size:17px; }
 .reader { display:grid; grid-template-columns:minmax(160px,220px) minmax(480px,820px) minmax(220px,290px); gap:34px; align-items:start; max-width:1450px; margin:40px auto; padding:0 3vw; }
 .reader-meta,.translation-panel { position:sticky; top:116px; }
-.reader-meta h2 { font:500 25px/1.2 Georgia,serif; overflow-wrap:anywhere; }
 .reader-meta { color:#6a6e67; }
 .text-button { padding:0; border:0; border-bottom:1px solid; background:none; color:#656b63; cursor:pointer; }
+.history-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.history-heading .eyebrow { margin:0; }
+.history-clear { font-size:12px; }
+.history-empty { margin:14px 0 0; color:#858980; font-size:13px; }
+#translation-history-list { max-height:48vh; margin:14px 0 0; padding:0; list-style:none; overflow:auto; }
+#translation-history-list li + li { border-top:1px solid var(--line); }
+.history-item { width:100%; padding:13px 2px; border:0; background:none; color:inherit; text-align:left; cursor:pointer; }
+.history-item:hover .history-translation,.history-item:focus-visible .history-translation { color:var(--ink); }
+.history-source,.history-translation { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.history-source { color:#777c74; font:italic 13px/1.45 Georgia,serif; }
+.history-translation { margin-top:3px; color:#343832; font:500 17px/1.35 Georgia,serif; transition:color .15s ease; }
 .pages { display:flex; flex-direction:column; align-items:center; gap:28px; min-width:0; }
 .pdf-page { position:relative; flex:none; background:white; box-shadow:0 8px 28px #28261f1a; overflow:hidden; }
 .pdf-page canvas,.textLayer,.highlight-layer { position:absolute; inset:0; }
