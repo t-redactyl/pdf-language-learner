@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+import simplemma
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -10,12 +11,25 @@ from pydantic import BaseModel, Field, field_validator
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 
+LEMMATIZER_LANGUAGES = {
+    "dutch": "nl",
+    "english": "en",
+    "french": "fr",
+    "german": "de",
+    "italian": "it",
+    "polish": "pl",
+    "portuguese": "pt",
+    "spanish": "es",
+}
+
 
 class TranslationRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2_000)
+    source_language: str = Field(min_length=2, max_length=60)
     target_language: str = Field(min_length=2, max_length=60)
+    context: str = Field(default="", max_length=2_000)
 
-    @field_validator("text", "target_language")
+    @field_validator("text", "source_language", "target_language")
     @classmethod
     def strip_value(cls, value: str) -> str:
         value = value.strip()
@@ -23,10 +37,56 @@ class TranslationRequest(BaseModel):
             raise ValueError("must not be blank")
         return value
 
+    @field_validator("context")
+    @classmethod
+    def strip_context(cls, value: str) -> str:
+        return value.strip()
+
+
+class LanguageDetectionRequest(BaseModel):
+    text: str = Field(min_length=20, max_length=12_000)
+
+    @field_validator("text")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+
+class LanguageDetectionResult(BaseModel):
+    detected_language: str = Field(
+        min_length=2,
+        description="The predominant language of the document, written in English",
+    )
+
 
 class TranslationResult(BaseModel):
     detected_language: str = Field(description="The source language in English")
-    translation: str = Field(description="A natural translation in the requested language")
+    normalized_source: str = Field(
+        description=(
+            "The source text in its dictionary form, in the source language "
+            "(for example: singular nouns, infinitive verbs, and undeclined adjectives)"
+        )
+    )
+    translation: str = Field(
+        description="A natural translation of the normalized source in the requested language"
+    )
+
+
+class TranslatedText(BaseModel):
+    translation: str = Field(
+        min_length=1,
+        description="A natural translation in the requested target language",
+    )
+
+
+def normalize_source(text: str, source_language: str) -> str:
+    language = LEMMATIZER_LANGUAGES.get(source_language.casefold())
+    if language is None or len(text.split()) != 1:
+        return text
+    return simplemma.lemmatize(text, lang=language) or text
 
 
 app = FastAPI(title="PDF Language Learner")
@@ -43,44 +103,81 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/api/detect-language", response_model=LanguageDetectionResult)
+def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResult:
+    try:
+        client = Client(host=os.getenv("OLLAMA_HOST", "http://localhost:11434"))
+        translation_model = os.getenv("OLLAMA_MODEL", "translategemma:4b")
+        detection_model = os.getenv("OLLAMA_DETECTION_MODEL", translation_model)
+        response = client.chat(
+            model=detection_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Identify the single predominant language of this document "
+                        "sample. Return its common English name. Ignore isolated names, "
+                        "quotations, page numbers, and foreign words."
+                    ),
+                },
+                {"role": "user", "content": request.text},
+            ],
+            format=LanguageDetectionResult.model_json_schema(),
+            keep_alive="30m",
+            options={"temperature": 0, "num_ctx": 4096, "num_predict": 64},
+        )
+        return LanguageDetectionResult.model_validate_json(response.message.content)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Local language detection model failed: {exc}",
+        ) from exc
+
+
 @app.post("/api/translate", response_model=TranslationResult)
 def translate(request: TranslationRequest) -> TranslationResult:
     try:
         client = Client(
             host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         )
+        translation_model = os.getenv("OLLAMA_MODEL", "translategemma:4b")
+        normalized_source = normalize_source(request.text, request.source_language)
 
-        response = client.chat(
-            model = os.getenv("OLLAMA_MODEL", "translategemma:4b"),
-            messages = [
+        translation_response = client.chat(
+            model=translation_model,
+            messages=[
                 {
                     "role": "system",
                     "content": (
                         "You are a precise translator for a language-learning "
-                        "application. Detect the input language and translate it "
-                        "into the requested language. Preserve tone and meaning."
-                        "Normalise the source work into its base form."
-                        "For example, plural nouns get converted to the singular: 'cats' -> 'cat'."
-                        "For example, conjugated verbs get converted to the infinitive: 'hat' -> 'haben'."
+                        "application. Translate the supplied dictionary form into "
+                        "the requested target language. Use the surrounding context "
+                        "only to choose the correct sense; translate the dictionary "
+                        "form, not the whole context."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
+                        f"Source language: {request.source_language}\n"
                         f"Target language: {request.target_language}\n"
-                        f"Text to translate: \n{request.text}"
+                        f"Dictionary form to translate: {normalized_source}\n"
+                        f"Surrounding context: {request.context or '(not available)'}"
                     ),
                 },
             ],
-            format = TranslationResult.model_json_schema(),
+            format=TranslatedText.model_json_schema(),
             keep_alive="30m",
-            options = {"temperature": 0,
-                       "num_ctx": 1024,
-                       "num_predict": 512}
+            options={"temperature": 0, "num_ctx": 1024, "num_predict": 512},
+        )
+        translated = TranslatedText.model_validate_json(
+            translation_response.message.content
         )
 
-        return TranslationResult.model_validate_json(
-            response.message.content
+        return TranslationResult(
+            detected_language=request.source_language,
+            normalized_source=normalized_source,
+            translation=translated.translation,
         )
 
     except Exception as exc:

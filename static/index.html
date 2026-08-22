@@ -35,15 +35,30 @@
         <p class="eyebrow">Translation</p>
         <p id="selection-hint">Select text in the document to begin.</p>
         <div id="translation-content" hidden>
+          <p class="form-label">Original</p>
           <blockquote id="selected-text"></blockquote>
+          <label for="source-language">Source language</label>
+          <select id="source-language">
+            <option value="auto">Auto-detect</option>
+            <option>English</option><option>German</option><option>Spanish</option><option>French</option>
+            <option>Italian</option><option>Portuguese</option><option>Dutch</option><option>Polish</option>
+            <option>Japanese</option><option>Korean</option><option>Chinese (Simplified)</option>
+          </select>
+          <p id="source-language-status" class="language-status" aria-live="polite"></p>
           <label for="target-language">Translate to</label>
           <select id="target-language">
             <option>English</option><option>German</option><option>Spanish</option><option>French</option>
             <option>Italian</option><option>Portuguese</option><option>Dutch</option><option>Polish</option>
             <option>Japanese</option><option>Korean</option><option>Chinese (Simplified)</option>
           </select>
-          <button id="translate-button" class="primary-button" type="button">Translate selection</button>
-          <div id="result" class="result" hidden><span id="detected-language"></span><p id="translated-text"></p></div>
+          <button id="translate-button" class="primary-button" type="button" disabled>Translate selection</button>
+          <div id="result" class="result" hidden>
+            <span id="detected-language"></span>
+            <p class="result-label">Normalized</p>
+            <p id="normalized-text"></p>
+            <p class="result-label">Translation</p>
+            <p id="translated-text"></p>
+          </div>
           <p id="error" class="error" role="alert"></p>
         </div>
       </aside>

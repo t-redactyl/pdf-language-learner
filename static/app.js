@@ -4,7 +4,13 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs
 const $ = (selector) => document.querySelector(selector);
 const pages = $("#pages");
 let selectedText = "";
+let selectedContext = "";
 let activeDocumentKey = "";
+let detectedSourceLanguage = "";
+let sourceLanguageOverride = "";
+let documentLanguageSample = "";
+let languageDetectionPending = false;
+let languageDetectionError = "";
 let pendingHighlight = [];
 const textItemForSpan = new WeakMap();
 const characterOffsetsForSpan = new WeakMap();
@@ -24,7 +30,13 @@ async function openPdf(file) {
   translations = readStoredTranslations();
   renderTranslationHistory();
   selectedText = "";
+  selectedContext = "";
   pendingHighlight = [];
+  documentLanguageSample = "";
+  languageDetectionPending = false;
+  languageDetectionError = "";
+  readDocumentLanguageState();
+  renderSourceLanguageState();
   $("#selection-hint").hidden = false;
   $("#translation-content").hidden = true;
   $("#result").hidden = true;
@@ -32,7 +44,12 @@ async function openPdf(file) {
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   $("#empty-state").hidden = true;
   $("#reader").hidden = false;
-  for (let number = 1; number <= pdf.numPages; number += 1) await renderPage(await pdf.getPage(number), number);
+  const pageTexts = [];
+  for (let number = 1; number <= pdf.numPages; number += 1) {
+    pageTexts.push(await renderPage(await pdf.getPage(number), number));
+  }
+  documentLanguageSample = pageTexts.join("\n").replace(/\s+/g, " ").trim().slice(0, 12000);
+  if (!detectedSourceLanguage) await detectDocumentLanguage();
 }
 
 async function renderPage(page, number) {
@@ -68,6 +85,7 @@ async function renderPage(page, number) {
   // TextLayer pushes exactly one span per text item, in item order, so the two
   // arrays line up index for index.
   textLayerTask.textDivs.forEach((span, index) => textItemForSpan.set(span, textContent.items[index]));
+  return textContent.items.map(item => `${item.str}${item.hasEOL ? "\n" : " "}`).join("");
 }
 
 document.addEventListener("selectionchange", () => {
@@ -99,14 +117,16 @@ document.addEventListener("pointerup", event => {
   if (selected) showSelection(selected);
 });
 
-function showSelection({ text, rectangles }) {
+function showSelection({ text, rectangles, context = "" }) {
   selectedText = text;
+  selectedContext = context;
   $("#selected-text").textContent = text;
   $("#selection-hint").hidden = true;
   $("#translation-content").hidden = false;
   $("#result").hidden = true;
   $("#error").textContent = "";
   pendingHighlight = rectangles;
+  renderSourceLanguageState();
 }
 
 // The quoted text and the highlight have to come out of a single measurement
@@ -115,7 +135,8 @@ function showSelection({ text, rectangles }) {
 // models differ, which is exactly the mismatch this replaces.
 function readSelection(range, drag = null) {
   const selected = selectionGeometry(range, drag);
-  if (selected.text && selected.rectangles.length) return selected;
+  const context = selectionContext(range);
+  if (selected.text && selected.rectangles.length) return { ...selected, context };
   // Chrome sometimes reports a range whose text is not empty but whose client
   // rectangles are degenerate. Quoting that text would leave the panel showing a
   // phrase with nothing highlighted, so a selection is only accepted when it
@@ -123,7 +144,29 @@ function readSelection(range, drag = null) {
   const text = range.toString().replace(/\s+/g, " ").trim();
   if (!text) return null;
   const rectangles = rangeRectangles(range);
-  return rectangles.length ? { text, rectangles } : null;
+  return rectangles.length ? { text, rectangles, context } : null;
+}
+
+function selectionContext(range) {
+  const startElement = range.startContainer.nodeType === Node.ELEMENT_NODE
+    ? range.startContainer
+    : range.startContainer.parentElement;
+  const endElement = range.endContainer.nodeType === Node.ELEMENT_NODE
+    ? range.endContainer
+    : range.endContainer.parentElement;
+  const page = startElement?.closest?.(".pdf-page");
+  if (!page || page !== endElement?.closest?.(".pdf-page")) return "";
+  const spans = [...page.querySelectorAll(".textLayer span")];
+  const start = spans.indexOf(startElement.closest("span"));
+  const end = spans.indexOf(endElement.closest("span"));
+  if (start < 0 || end < 0) return "";
+  return spans
+    .slice(Math.max(0, Math.min(start, end) - 12), Math.max(start, end) + 13)
+    .map(span => textItemForSpan.get(span)?.str || span.textContent)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 2000);
 }
 
 function selectionGeometry(range, drag) {
@@ -246,11 +289,97 @@ function rangeRectangles(range) {
   return rectangles;
 }
 
+function documentLanguageStorageKey() {
+  return `${activeDocumentKey}:language`;
+}
+
+function readDocumentLanguageState() {
+  detectedSourceLanguage = "";
+  sourceLanguageOverride = "";
+  try {
+    const stored = JSON.parse(localStorage.getItem(documentLanguageStorageKey()) || "{}");
+    if (typeof stored.detectedLanguage === "string") detectedSourceLanguage = stored.detectedLanguage;
+    if (typeof stored.override === "string") sourceLanguageOverride = stored.override;
+  } catch {}
+}
+
+function saveDocumentLanguageState() {
+  localStorage.setItem(documentLanguageStorageKey(), JSON.stringify({
+    detectedLanguage: detectedSourceLanguage,
+    override: sourceLanguageOverride,
+  }));
+}
+
+function effectiveSourceLanguage() {
+  return sourceLanguageOverride || detectedSourceLanguage;
+}
+
+function renderSourceLanguageState(message = "") {
+  const select = $("#source-language");
+  const status = $("#source-language-status");
+  select.value = sourceLanguageOverride || "auto";
+  if (message) {
+    status.textContent = message;
+  } else if (sourceLanguageOverride) {
+    status.textContent = `Using ${sourceLanguageOverride} (manual override)`;
+  } else if (detectedSourceLanguage) {
+    status.textContent = `Detected ${detectedSourceLanguage} for this document`;
+  } else if (languageDetectionPending) {
+    status.textContent = "Detecting document language…";
+  } else if (languageDetectionError) {
+    status.textContent = languageDetectionError;
+  } else {
+    status.textContent = "Choose a language to translate";
+  }
+  $("#translate-button").disabled = !selectedText || !effectiveSourceLanguage();
+}
+
+async function detectDocumentLanguage() {
+  if (languageDetectionPending || detectedSourceLanguage || documentLanguageSample.length < 20) {
+    renderSourceLanguageState();
+    return;
+  }
+  const documentKey = activeDocumentKey;
+  languageDetectionPending = true;
+  languageDetectionError = "";
+  renderSourceLanguageState();
+  try {
+    const response = await fetch("/api/detect-language", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: documentLanguageSample }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || `Language detection failed (${response.status})`);
+    if (activeDocumentKey !== documentKey) return;
+    detectedSourceLanguage = data.detected_language;
+    saveDocumentLanguageState();
+  } catch (error) {
+    if (activeDocumentKey === documentKey) {
+      languageDetectionError = "Automatic detection failed; choose the source language";
+    }
+  } finally {
+    if (activeDocumentKey === documentKey) {
+      languageDetectionPending = false;
+      renderSourceLanguageState();
+    }
+  }
+}
+
+$("#source-language").addEventListener("change", event => {
+  sourceLanguageOverride = event.target.value === "auto" ? "" : event.target.value;
+  saveDocumentLanguageState();
+  renderSourceLanguageState();
+  if (!sourceLanguageOverride && !detectedSourceLanguage) detectDocumentLanguage();
+});
+
 $("#translate-button").addEventListener("click", async () => {
   const button = $("#translate-button");
   button.disabled = true; button.textContent = "Translating…"; $("#error").textContent = "";
   try {
-    const response = await fetch("/api/translate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ text:selectedText, target_language:$("#target-language").value }) });
+    const sourceLanguage = effectiveSourceLanguage();
+    if (!sourceLanguage) throw new Error("Choose the document's source language first");
+    const response = await fetch("/api/translate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ text:selectedText, source_language:sourceLanguage, target_language:$("#target-language").value, context:selectedContext }) });
     const contentType = response.headers.get("content-type") || "";
     const data = contentType.includes("application/json")
       ? await response.json()
@@ -261,18 +390,19 @@ $("#translate-button").addEventListener("click", async () => {
         data.detail || `Translation failed (${response.status})`
       );
     }
-    $("#detected-language").textContent = `Detected ${data.detected_language}`;
+    $("#detected-language").textContent = `Source ${data.detected_language}`;
+    $("#normalized-text").textContent = data.normalized_source;
     $("#translated-text").textContent = data.translation;
     $("#result").hidden = false;
     showCurrentHighlight(pendingHighlight);
     saveTranslation({
-      source: selectedText,
+      source: data.normalized_source,
       translation: data.translation,
       detectedLanguage: data.detected_language,
       targetLanguage: $("#target-language").value,
     });
   } catch (error) { $("#error").textContent = error.message; }
-  finally { button.disabled = false; button.textContent = "Translate selection"; }
+  finally { button.textContent = "Translate selection"; renderSourceLanguageState(); }
 });
 
 function showCurrentHighlight(rectangles) {
@@ -347,10 +477,12 @@ $("#translation-history-list")?.addEventListener("click", (event) => {
   if (!translation) return;
 
   selectedText = translation.source;
+  selectedContext = "";
   pendingHighlight = [];
   $("#selected-text").textContent = translation.source;
   $("#target-language").value = translation.targetLanguage;
-  $("#detected-language").textContent = `Detected ${translation.detectedLanguage}`;
+  $("#detected-language").textContent = `Source ${translation.detectedLanguage}`;
+  $("#normalized-text").textContent = translation.source;
   $("#translated-text").textContent = translation.translation;
   $("#selection-hint").hidden = true;
   $("#translation-content").hidden = false;
