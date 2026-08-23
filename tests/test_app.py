@@ -217,6 +217,163 @@ def test_translate_uses_contextual_pos_to_normalize_words(
     }
 
 
+@pytest.mark.parametrize(
+    (
+        "source",
+        "context",
+        "analysis",
+        "decision",
+        "model_translation",
+        "normalized_source",
+        "translation",
+    ),
+    [
+        (
+            "pongo",
+            "Me pongo el pijama.",
+            WordAnalysis("Me pongo", "poner", "VERB", ("Me",)),
+            {"dictionary_lemma": "ponerse"},
+            "put on",
+            "ponerse",
+            "to put on",
+        ),
+        (
+            "encanta",
+            "Me encanta esta canción.",
+            WordAnalysis("Me encanta", "encantar", "VERB", ("Me",)),
+            {"dictionary_lemma": "encantar"},
+            "love",
+            "encantar",
+            "to love",
+        ),
+        (
+            "veo",
+            "Lo veo claramente.",
+            WordAnalysis("Lo veo", "ver", "VERB", ("Lo",)),
+            {"dictionary_lemma": "ver"},
+            "see",
+            "ver",
+            "to see",
+        ),
+        (
+            "compré",
+            "Me compré un libro.",
+            WordAnalysis("Me compré", "comprar", "VERB", ("Me",)),
+            {"dictionary_lemma": "comprar"},
+            "buy",
+            "comprar",
+            "to buy",
+        ),
+    ],
+)
+def test_translate_semantically_decides_which_clitics_enter_verb_lemma(
+    monkeypatch,
+    source,
+    context,
+    analysis,
+    decision,
+    model_translation,
+    normalized_source,
+    translation,
+) -> None:
+    prompts = []
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            prompt = kwargs["messages"][1]["content"]
+            prompts.append(prompt)
+            required = set(kwargs["format"]["required"])
+            if required == {"dictionary_lemma"}:
+                assert f"Base verb lemma: {analysis.lemma}" in prompt
+                assert (
+                    f"Detected clitic candidates: "
+                    f"{analysis.associated_clitics[0]}" in prompt
+                )
+                assert f"Full sentence context: {context}" in prompt
+                return SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps(decision))
+                )
+            assert required == {"translation"}
+            assert f"Source lemma: {normalized_source}" in prompt
+            return SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps({"translation": model_translation})
+                )
+            )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: analysis,
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": source,
+            "source_language": "Spanish",
+            "target_language": "English",
+            "context": context,
+            "context_offset": context.index(source),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["normalized_source"] == normalized_source
+    assert response.json()["translation"] == translation
+    assert len(prompts) == 2
+
+
+def test_translate_uses_confident_reflexive_lemma_without_classifier(
+    monkeypatch,
+) -> None:
+    analysis = WordAnalysis(
+        "Me preparo",
+        "preparar",
+        "VERB",
+        ("Me",),
+        "prepararse",
+    )
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            assert kwargs["format"]["required"] == ["translation"]
+            prompt = kwargs["messages"][1]["content"]
+            assert "Source lemma: prepararse" in prompt
+            return SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps({"translation": "get ready"})
+                )
+            )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: analysis,
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": "preparo",
+            "source_language": "Spanish",
+            "target_language": "English",
+            "context": "Me preparo para salir.",
+            "context_offset": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["normalized_source"] == "prepararse"
+    assert response.json()["translation"] == "to get ready"
+
+
 def test_translate_retries_without_context_when_model_translates_excerpt(
     monkeypatch,
 ) -> None:
@@ -339,6 +496,338 @@ def test_noun_analysis_prefers_simplemma_singular(monkeypatch) -> None:
     analysis = analyze_word_in_context("Augen", "German", "Augen", 0)
 
     assert analysis == WordAnalysis(token="Augen", lemma="Auge", pos="NOUN")
+
+
+def parsed_word(
+    text,
+    lemma,
+    upos,
+    start,
+    end,
+    word_id,
+    *,
+    head=0,
+    deprel="root",
+    feats=None,
+):
+    return SimpleNamespace(
+        text=text,
+        lemma=lemma,
+        upos=upos,
+        start_char=start,
+        end_char=end,
+        id=word_id,
+        head=head,
+        deprel=deprel,
+        feats=feats,
+    )
+
+
+@pytest.mark.parametrize(
+    ("selected_text", "language", "context", "offset", "words", "expected"),
+    [
+        (
+            "steht",
+            "German",
+            "Er steht früh auf.",
+            3,
+            [
+                parsed_word("Er", "er", "PRON", 0, 2, 1, head=2, deprel="nsubj"),
+                parsed_word("steht", "stehen", "VERB", 3, 8, 2),
+                parsed_word(
+                    "auf",
+                    "auf",
+                    "ADP",
+                    14,
+                    17,
+                    4,
+                    head=2,
+                    deprel="compound:prt",
+                ),
+            ],
+            WordAnalysis("steht auf", "aufstehen", "VERB"),
+        ),
+        (
+            "erinnere",
+            "German",
+            "Ich erinnere mich daran.",
+            4,
+            [
+                parsed_word("erinnere", "erinnern", "VERB", 4, 12, 2),
+                parsed_word(
+                    "mich",
+                    "sich",
+                    "PRON",
+                    13,
+                    17,
+                    3,
+                    head=2,
+                    deprel="obj",
+                    feats="Case=Acc|Reflex=Yes",
+                ),
+            ],
+            WordAnalysis(
+                "erinnere mich", "erinnern", "VERB", ("mich",)
+            ),
+        ),
+        (
+            "levanto",
+            "Spanish",
+            "Me levanto temprano.",
+            3,
+            [
+                parsed_word(
+                    "Me",
+                    "yo",
+                    "PRON",
+                    0,
+                    2,
+                    1,
+                    head=2,
+                    deprel="expl:pv",
+                ),
+                parsed_word("levanto", "levantar", "VERB", 3, 10, 2),
+            ],
+            WordAnalysis("Me levanto", "levantar", "VERB", ("Me",)),
+        ),
+        (
+            "pongo",
+            "Spanish",
+            "Me pongo el pijama.",
+            3,
+            [
+                parsed_word(
+                    "Me",
+                    "yo",
+                    "PRON",
+                    0,
+                    2,
+                    1,
+                    head=2,
+                    deprel="obl:arg",
+                    feats="Number=Sing|Person=1|PronType=Prs",
+                ),
+                parsed_word(
+                    "pongo",
+                    "poner",
+                    "VERB",
+                    3,
+                    8,
+                    2,
+                    feats="Number=Sing|Person=1|VerbForm=Fin",
+                ),
+            ],
+            WordAnalysis("Me pongo", "poner", "VERB", ("Me",)),
+        ),
+        (
+            "preparo",
+            "Spanish",
+            "Me preparo para salir.",
+            3,
+            [
+                parsed_word(
+                    "Me",
+                    "yo",
+                    "PRON",
+                    0,
+                    2,
+                    1,
+                    head=2,
+                    deprel="expl:pv",
+                    feats="Number=Sing|Person=1|PronType=Prs",
+                ),
+                parsed_word(
+                    "preparo",
+                    "preparar",
+                    "VERB",
+                    3,
+                    10,
+                    2,
+                    feats="Number=Sing|Person=1|VerbForm=Fin",
+                ),
+            ],
+            WordAnalysis(
+                "Me preparo",
+                "preparar",
+                "VERB",
+                ("Me",),
+                "prepararse",
+            ),
+        ),
+        (
+            "ducho",
+            "Spanish",
+            "Me ducho por la mañana.",
+            3,
+            [
+                parsed_word(
+                    "Me",
+                    "yo",
+                    "PRON",
+                    0,
+                    2,
+                    1,
+                    head=2,
+                    deprel="expl:pv",
+                    feats="Number=Sing|Person=1|PronType=Prs",
+                ),
+                parsed_word(
+                    "ducho",
+                    "ducir",
+                    "VERB",
+                    3,
+                    8,
+                    2,
+                    feats="Number=Sing|Person=1|VerbForm=Fin",
+                ),
+            ],
+            WordAnalysis(
+                "Me ducho",
+                "duchar",
+                "VERB",
+                ("Me",),
+                "ducharse",
+            ),
+        ),
+        (
+            "veo",
+            "Spanish",
+            "Lo veo claramente.",
+            3,
+            [
+                parsed_word(
+                    "Lo", "él", "PRON", 0, 2, 1, head=2, deprel="obj"
+                ),
+                parsed_word("veo", "ver", "VERB", 3, 6, 2),
+            ],
+            WordAnalysis("Lo veo", "ver", "VERB", ("Lo",)),
+        ),
+    ],
+)
+def test_verb_analysis_detects_dependency_linked_components(
+    monkeypatch, selected_text, language, context, offset, words, expected
+) -> None:
+    pipeline = lambda text: SimpleNamespace(
+        sentences=[SimpleNamespace(words=words)]
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.stanza_pipeline", lambda _: pipeline
+    )
+
+    assert analyze_word_in_context(
+        selected_text, language, context, offset
+    ) == expected
+
+
+def test_verb_analysis_ignores_unattached_reflexive_pronoun(monkeypatch) -> None:
+    words = [
+        parsed_word("me", "yo", "PRON", 0, 2, 1, head=3, deprel="obj"),
+        parsed_word("habla", "hablar", "VERB", 3, 8, 2),
+    ]
+    pipeline = lambda text: SimpleNamespace(
+        sentences=[SimpleNamespace(words=words)]
+    )
+    monkeypatch.setattr("pdf_language_learner.app.stanza_pipeline", lambda _: pipeline)
+
+    analysis = analyze_word_in_context("habla", "Spanish", "Me habla.", 3)
+
+    assert analysis == WordAnalysis("habla", "hablar", "VERB")
+
+
+def test_spanish_verb_analysis_detects_non_reflexive_clitic(monkeypatch) -> None:
+    words = [
+        parsed_word(
+            "Me",
+            "yo",
+            "PRON",
+            0,
+            2,
+            1,
+            head=2,
+            deprel="expl:pv",
+            feats="Number=Sing|Person=1|PronType=Prs",
+        ),
+        parsed_word(
+            "ve",
+            "ver",
+            "VERB",
+            3,
+            5,
+            2,
+            feats="Number=Sing|Person=3|VerbForm=Fin",
+        ),
+    ]
+    pipeline = lambda text: SimpleNamespace(
+        sentences=[SimpleNamespace(words=words)]
+    )
+    monkeypatch.setattr("pdf_language_learner.app.stanza_pipeline", lambda _: pipeline)
+
+    analysis = analyze_word_in_context("ve", "Spanish", "Me ve.", 3)
+
+    assert analysis == WordAnalysis("Me ve", "ver", "VERB", ("Me",))
+
+
+def test_spanish_verb_analysis_detects_clitic_climbing(monkeypatch) -> None:
+    words = [
+        parsed_word("Me", "yo", "PRON", 0, 2, 1, head=2, deprel="expl:pv"),
+        parsed_word("quiero", "querer", "VERB", 3, 9, 2),
+        parsed_word(
+            "acostar", "acostar", "VERB", 10, 17, 3, head=2,
+            deprel="xcomp",
+        ),
+    ]
+    pipeline = lambda text: SimpleNamespace(
+        sentences=[SimpleNamespace(words=words)]
+    )
+    monkeypatch.setattr("pdf_language_learner.app.stanza_pipeline", lambda _: pipeline)
+
+    analysis = analyze_word_in_context(
+        "acostar", "Spanish", "Me quiero acostar.", 10
+    )
+
+    assert analysis == WordAnalysis(
+        "Me acostar", "acostar", "VERB", ("Me",)
+    )
+
+
+def test_spanish_verb_analysis_detects_clitics_inside_surface_token(
+    monkeypatch,
+) -> None:
+    words = [
+        parsed_word("Da", "dar", "VERB", None, None, 1),
+        parsed_word(
+            "me", "yo", "PRON", None, None, 2, head=1,
+            deprel="obl:arg",
+        ),
+        # Stanza can misattach a clitic in an imperative, but its membership in
+        # the same surface token still makes it a valid stage-one candidate.
+        parsed_word(
+            "lo", "él", "PRON", None, None, 3, head=4, deprel="det"
+        ),
+        parsed_word("mañana", "mañana", "NOUN", 7, 13, 4, head=1),
+    ]
+    surface_token = SimpleNamespace(
+        text="Dámelo", start_char=0, end_char=6, words=words[:3]
+    )
+    mañana_token = SimpleNamespace(
+        text="mañana", start_char=7, end_char=13, words=words[3:]
+    )
+    pipeline = lambda text: SimpleNamespace(
+        sentences=[
+            SimpleNamespace(
+                words=words, tokens=[surface_token, mañana_token]
+            )
+        ]
+    )
+    monkeypatch.setattr("pdf_language_learner.app.stanza_pipeline", lambda _: pipeline)
+
+    analysis = analyze_word_in_context(
+        "Dámelo", "Spanish", "Dámelo mañana.", 0
+    )
+
+    assert analysis == WordAnalysis(
+        "Da me lo", "dar", "VERB", ("me", "lo")
+    )
 
 
 def test_translate_rejects_blank_text() -> None:

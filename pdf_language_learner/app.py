@@ -5,7 +5,7 @@ import threading
 import unicodedata
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -56,6 +56,17 @@ STANZA_LANGUAGES = {
 NOUN_POS = {"NOUN"}
 VERB_POS = {"VERB", "AUX"}
 STANZA_PIPELINE_LOCK = threading.Lock()
+
+VERB_CLITICS = {
+    # German does not have Romance-style clitics, but these are the forms that
+    # can realize a reflexive pronoun associated with a dictionary verb.
+    "german": {"mir", "mich", "dir", "dich", "sich", "uns", "euch"},
+    "spanish": {
+        "me", "te", "se", "nos", "os",
+        "lo", "la", "los", "las",
+        "le", "les",
+    },
+}
 
 DEFINITE_ARTICLES = {
     "dutch": ("de", "het"),
@@ -128,6 +139,14 @@ class TranslatedText(BaseModel):
     translation: str = Field(
         min_length=1,
         description="A natural translation in the requested target language",
+    )
+
+
+class VerbLemmaDecision(BaseModel):
+    dictionary_lemma: str = Field(
+        min_length=1,
+        max_length=200,
+        description="The contextual source-language dictionary form of the verb",
     )
 
 
@@ -242,16 +261,22 @@ class WordAnalysis:
     token: str
     lemma: str
     pos: str
+    associated_clitics: tuple[str, ...] = ()
+    confident_verb_lemma: str | None = None
 
 
 @lru_cache(maxsize=len(STANZA_LANGUAGES))
 def stanza_pipeline(source_language: str):
-    language = STANZA_LANGUAGES.get(source_language.casefold())
+    normalized_language = source_language.casefold()
+    language = STANZA_LANGUAGES.get(normalized_language)
     if language is None:
         raise ValueError(f"POS tagging is not supported for {source_language}")
+    processors = "tokenize,pos,lemma"
+    if normalized_language in VERB_CLITICS:
+        processors += ",depparse"
     return stanza.Pipeline(
         lang=language,
-        processors="tokenize,pos,lemma",
+        processors=processors,
         download_method=stanza.DownloadMethod.REUSE_RESOURCES,
         use_gpu=False,
         verbose=False,
@@ -263,6 +288,130 @@ def normalize_source(text: str, source_language: str) -> str:
     if language is None or len(text.split()) != 1:
         return text
     return simplemma.lemmatize(text, lang=language) or text
+
+
+def morphological_features(word) -> dict[str, str]:
+    return {
+        key: value
+        for feature in (getattr(word, "feats", None) or "").split("|")
+        if "=" in feature
+        for key, value in [feature.split("=", 1)]
+    }
+
+
+def is_confident_spanish_reflexive(clitic, verb) -> bool:
+    if (getattr(clitic, "deprel", None) or "") != "expl:pv":
+        return False
+    clitic_features = morphological_features(clitic)
+    verb_features = morphological_features(verb)
+    verb_person = verb_features.get("Person")
+    if verb_person is None or clitic_features.get("Person") != verb_person:
+        return False
+    clitic_number = clitic_features.get("Number")
+    verb_number = verb_features.get("Number")
+    return clitic_number is None or clitic_number == verb_number
+
+
+def verb_associated_clitics(
+    selected,
+    sentence_words: list,
+    source_language: str,
+    selected_token_words: list | None = None,
+) -> list:
+    """Collect syntax-linked clitic candidates without interpreting their role."""
+
+    clitic_forms = VERB_CLITICS.get(source_language.casefold(), set())
+    if not clitic_forms:
+        return []
+    selected_token_words = selected_token_words or [selected]
+    selected_id = getattr(selected, "id", None)
+    possible_heads = {selected_id}
+
+    # Spanish permits clitic climbing ("me quiero acostar"). When the selected
+    # verb is an open complement, expose clitics attached to its governing verb
+    # as candidates; the semantic decision stage will decide where they belong.
+    if (
+        source_language.casefold() == "spanish"
+        and (getattr(selected, "deprel", None) or "") == "xcomp"
+    ):
+        possible_heads.add(getattr(selected, "head", None))
+
+    clitics = [
+        word
+        for word in sentence_words
+        if getattr(word, "upos", None) == "PRON"
+        and canonicalize(word.text) in clitic_forms
+        and (
+            getattr(word, "head", None) in possible_heads
+            or word in selected_token_words
+        )
+    ]
+    clitics.sort(key=lambda word: getattr(word, "start_char", 0) or 0)
+    return clitics
+
+
+def verb_analysis_with_dependents(
+    selected,
+    sentence_words: list,
+    source_language: str,
+    selected_token_words: list | None = None,
+    base_lemma: str | None = None,
+) -> WordAnalysis:
+    """Normalize a particle and record clitics linked to the selected verb."""
+
+    lemma = base_lemma or selected.lemma or selected.text
+    selected_id = getattr(selected, "id", None)
+    if selected_id is None or (selected.upos or "X") not in VERB_POS:
+        return WordAnalysis(selected.text, lemma, selected.upos or "X")
+
+    dependents = [
+        word
+        for word in sentence_words
+        if getattr(word, "head", None) == selected_id
+    ]
+    associated = []
+    language = source_language.casefold()
+
+    if language == "german":
+        particles = [
+            word
+            for word in dependents
+            if (getattr(word, "deprel", None) or "") == "compound:prt"
+        ]
+        particles.sort(key=lambda word: getattr(word, "start_char", 0) or 0)
+        for particle in particles:
+            prefix = (particle.lemma or particle.text).casefold()
+            if prefix and not lemma.casefold().startswith(prefix):
+                lemma = f"{prefix}{lemma}"
+        associated.extend(particles)
+
+    clitics = verb_associated_clitics(
+        selected,
+        sentence_words,
+        source_language,
+        selected_token_words,
+    )
+    associated.extend(clitics)
+    confident_verb_lemma = None
+    if (
+        language == "spanish"
+        and len(clitics) == 1
+        and is_confident_spanish_reflexive(clitics[0], selected)
+    ):
+        confident_verb_lemma = (
+            lemma if lemma.casefold().endswith("se") else f"{lemma}se"
+        )
+
+    token_words = [selected, *associated]
+    token_words.sort(key=lambda word: getattr(word, "start_char", 0) or 0)
+    token = " ".join(word.text for word in token_words)
+    return WordAnalysis(
+        token=token,
+        lemma=lemma,
+        pos=selected.upos or "X",
+        associated_clitics=tuple(word.text for word in clitics),
+        confident_verb_lemma=confident_verb_lemma,
+    )
 
 
 def analyze_word_in_context(
@@ -281,29 +430,78 @@ def analyze_word_in_context(
     pipeline = stanza_pipeline(source_language)
     with STANZA_PIPELINE_LOCK:
         document = pipeline(context_text)
-    words = [word for sentence in document.sentences for word in sentence.words]
+    located_words = []
+    for sentence in document.sentences:
+        tokens = getattr(sentence, "tokens", None)
+        if tokens:
+            for token in tokens:
+                token_words = token.words
+                for word in token_words:
+                    located_words.append(
+                        (
+                            word,
+                            sentence.words,
+                            token_words,
+                            word.start_char
+                            if word.start_char is not None
+                            else token.start_char,
+                            word.end_char
+                            if word.end_char is not None
+                            else token.end_char,
+                        )
+                    )
+        else:
+            located_words.extend(
+                (
+                    word,
+                    sentence.words,
+                    [word],
+                    word.start_char,
+                    word.end_char,
+                )
+                for word in sentence.words
+            )
     overlapping = [
-        word
-        for word in words
-        if word.start_char is not None
-        and word.end_char is not None
-        and word.start_char < selected_end
-        and word.end_char > selected_start
+        (word, sentence_words, token_words)
+        for word, sentence_words, token_words, word_start, word_end in located_words
+        if word_start is not None
+        and word_end is not None
+        and word_start < selected_end
+        and word_end > selected_start
         and word.upos not in {"PUNCT", "SYM"}
     ]
-    selected = overlapping[0] if overlapping else None
-    if selected is None:
+    selected_location = overlapping[0] if overlapping else None
+    if selected_location is None:
         selected_key = canonicalize(text.strip(".,;:!?¡¿()[]{}\"“”'‘’"))
-        selected = next(
-            (word for word in words if canonicalize(word.text) == selected_key),
+        selected_location = next(
+            (
+                (word, sentence_words, token_words)
+                for word, sentence_words, token_words, _, _ in located_words
+                if canonicalize(word.text) == selected_key
+            ),
             None,
         )
-    if selected is None:
+    if selected_location is None:
         raise ValueError("the selected word could not be located in its context")
+
+    selected, sentence_words, selected_token_words = selected_location
 
     stanza_lemma = selected.lemma or selected.text
     simplemma_lemma = normalize_source(selected.text, source_language)
     lemma = simplemma_lemma if selected.upos in NOUN_POS else stanza_lemma
+    if selected.upos in VERB_POS:
+        if (
+            source_language.casefold() == "spanish"
+            and simplemma_lemma.casefold().endswith(("ar", "er", "ir"))
+        ):
+            lemma = simplemma_lemma
+        return verb_analysis_with_dependents(
+            selected,
+            sentence_words,
+            source_language,
+            selected_token_words,
+            lemma,
+        )
     return WordAnalysis(
         token=selected.text,
         lemma=lemma,
@@ -367,6 +565,54 @@ def source_article_messages(
             ),
         },
     ]
+
+
+def verb_lemma_messages(
+    analysis: WordAnalysis, source_language: str, context: str
+) -> list[dict[str, str]]:
+    candidates = ", ".join(analysis.associated_clitics)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a grammatical dictionary-form classifier. A dependency "
+                "parser has already detected pronoun/clitic candidates associated "
+                "with one selected verb. Decide which candidates, if any, are part "
+                "of the contextual dictionary verb. Include reflexive, reciprocal, "
+                "inherently pronominal, and fixed lexicalized clitics when omitting "
+                "them would lose the verb construction's dictionary meaning. "
+                "Exclude ordinary direct or indirect objects and optional "
+                "benefactive or ethical datives. For Spanish, convert person-specific "
+                "reflexive forms to the conventional infinitive ending in -se; retain "
+                "other clitics only in genuinely fixed dictionary constructions. For "
+                "German, use 'sich' with the infinitive for a dictionary-form "
+                "reflexive. A German separable prefix is already included in the base "
+                "lemma. Return only the source-language dictionary lemma; do not "
+                "translate anything. Examples: 'me pongo el pijama' -> ponerse; "
+                "'me acuesto' -> acostarse; 'me preparo' -> prepararse; 'me "
+                "encanta' -> encantar; 'me gusta' -> gustar; 'lo veo' -> ver; "
+                "'me compré un libro' -> comprar."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Source language: {source_language}\n"
+                f"Selected verb and candidates: {analysis.token}\n"
+                f"Base verb lemma: {analysis.lemma}\n"
+                f"Detected clitic candidates: {candidates}\n"
+                f"Full sentence context: {context or '(not available)'}\n"
+                "Return the contextual dictionary lemma."
+            ),
+        },
+    ]
+
+
+def apply_verb_lemma_decision(
+    analysis: WordAnalysis, decision: VerbLemmaDecision
+) -> WordAnalysis:
+    dictionary_lemma = decision.dictionary_lemma.strip()
+    return replace(analysis, lemma=dictionary_lemma)
 
 
 def normalized_article(article: str, language: str) -> str:
@@ -867,6 +1113,37 @@ def translate(request: TranslationRequest) -> TranslationResult:
             if is_word
             else None
         )
+        if (
+            word_analysis is not None
+            and word_analysis.pos in VERB_POS
+            and word_analysis.associated_clitics
+        ):
+            if word_analysis.confident_verb_lemma is not None:
+                word_analysis = replace(
+                    word_analysis, lemma=word_analysis.confident_verb_lemma
+                )
+            else:
+                lemma_response = client.chat(
+                    model=translation_model,
+                    messages=verb_lemma_messages(
+                        word_analysis,
+                        request.source_language,
+                        request.context,
+                    ),
+                    format=VerbLemmaDecision.model_json_schema(),
+                    keep_alive="30m",
+                    options={
+                        "temperature": 0,
+                        "num_ctx": 1024,
+                        "num_predict": 96,
+                    },
+                )
+                word_analysis = apply_verb_lemma_decision(
+                    word_analysis,
+                    VerbLemmaDecision.model_validate_json(
+                        lemma_response.message.content
+                    ),
+                )
         source_article = ""
         if word_analysis is not None and word_analysis.pos in NOUN_POS:
             allowed_articles = definite_articles(request.source_language)
