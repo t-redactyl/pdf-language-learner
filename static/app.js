@@ -1,11 +1,12 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
-import { sentenceContaining } from "./text.js";
+import { sentenceContext } from "./text.js?v=2";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
 const pages = $("#pages");
 let selectedText = "";
 let selectedContext = "";
+let selectedContextOffset = null;
 let activeDocumentKey = "";
 let detectedSourceLanguage = "";
 let sourceLanguageOverride = "";
@@ -37,6 +38,7 @@ async function openPdf(file) {
   renderSavedVocabulary();
   selectedText = "";
   selectedContext = "";
+  selectedContextOffset = null;
   pendingHighlight = [];
   documentLanguageSample = "";
   languageDetectionPending = false;
@@ -123,9 +125,10 @@ document.addEventListener("pointerup", event => {
   if (selected) showSelection(selected);
 });
 
-function showSelection({ text, rectangles, context = "" }) {
+function showSelection({ text, rectangles, context = "", contextOffset = null }) {
   selectedText = text;
   selectedContext = context;
+  selectedContextOffset = contextOffset;
   $("#selected-text").textContent = text;
   $("#selection-hint").hidden = true;
   $("#translation-content").hidden = false;
@@ -142,7 +145,7 @@ function showSelection({ text, rectangles, context = "" }) {
 function readSelection(range, drag = null) {
   const selected = selectionGeometry(range, drag);
   if (selected.text && selected.rectangles.length) {
-    return { ...selected, context: selectionContext(range, selected.text) };
+    return { ...selected, ...selectionContext(range, selected.text) };
   }
   // Chrome sometimes reports a range whose text is not empty but whose client
   // rectangles are degenerate. Quoting that text would leave the panel showing a
@@ -152,7 +155,7 @@ function readSelection(range, drag = null) {
   if (!text) return null;
   const rectangles = rangeRectangles(range);
   return rectangles.length
-    ? { text, rectangles, context: selectionContext(range, text) }
+    ? { text, rectangles, ...selectionContext(range, text) }
     : null;
 }
 
@@ -164,11 +167,11 @@ function selectionContext(range, selectedText) {
     ? range.endContainer
     : range.endContainer.parentElement;
   const page = startElement?.closest?.(".pdf-page");
-  if (!page || page !== endElement?.closest?.(".pdf-page")) return "";
+  if (!page || page !== endElement?.closest?.(".pdf-page")) return { context: "", contextOffset: null };
   const spans = [...page.querySelectorAll(".textLayer span")];
   const start = spans.indexOf(startElement.closest("span"));
   const end = spans.indexOf(endElement.closest("span"));
-  if (start < 0 || end < 0) return "";
+  if (start < 0 || end < 0) return { context: "", contextOffset: null };
   const selectedStart = Math.min(start, end);
   const spanText = span => textItemForSpan.get(span)?.str || span.textContent;
   const offsetWithinSpan = range.startContainer.nodeType === Node.TEXT_NODE
@@ -186,7 +189,11 @@ function selectionContext(range, selectedText) {
     context += separator + spanText(span);
     previousRect = rect;
   });
-  return sentenceContaining(context, selectedText, approximateOffset).slice(0, 2000);
+  const sentence = sentenceContext(context, selectedText, approximateOffset);
+  return {
+    context: sentence.text.slice(0, 2000),
+    contextOffset: sentence.offset,
+  };
 }
 
 function selectionGeometry(range, drag) {
@@ -404,7 +411,7 @@ $("#translate-button").addEventListener("click", async () => {
   try {
     const sourceLanguage = effectiveSourceLanguage();
     if (!sourceLanguage) throw new Error("Choose the document's source language first");
-    const response = await fetch("/api/translate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ text:selectedText, source_language:sourceLanguage, target_language:$("#target-language").value, context:selectedContext }) });
+    const response = await fetch("/api/translate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ text:selectedText, source_language:sourceLanguage, target_language:$("#target-language").value, context:selectedContext, context_offset:selectedContextOffset }) });
     const contentType = response.headers.get("content-type") || "";
     const data = contentType.includes("application/json")
       ? await response.json()
@@ -431,6 +438,7 @@ $("#translate-button").addEventListener("click", async () => {
       sourceLanguage,
       targetLanguage: $("#target-language").value,
       context: selectedContext,
+      contextOffset: selectedContextOffset,
       documentKey: activeDocumentKey,
       createdAt: new Date().toISOString(),
       isWord,
@@ -655,8 +663,9 @@ function translationFromControl(control) {
 function showTranslation(translation) {
   const source = translation.normalizedSource || translation.source;
   const sourceLanguage = translation.sourceLanguage || translation.detectedLanguage;
-  selectedText = source;
+  selectedText = translation.originalSource || source;
   selectedContext = translation.context || "";
+  selectedContextOffset = translation.contextOffset ?? null;
   pendingHighlight = [];
   $("#selected-text").textContent = translation.originalSource || source;
   $("#target-language").value = translation.targetLanguage;

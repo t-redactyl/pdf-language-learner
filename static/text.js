@@ -1,17 +1,27 @@
 export function sentenceContaining(text, needle, approximateOffset = null) {
-  const cleanText = String(text || "").replace(/\s+/g, " ").trim();
-  if (!cleanText) return "";
+  return sentenceContext(text, needle, approximateOffset).text;
+}
 
-  let offset = findIgnoringCase(cleanText, needle);
+export function sentenceContext(text, needle, approximateOffset = null) {
+  const cleanText = String(text || "").replace(/\s+/g, " ").trim();
+  if (!cleanText) return { text: "", offset: null };
+
+  let offset = closestMatchIgnoringCase(cleanText, needle, approximateOffset);
   if (offset < 0 && Number.isFinite(approximateOffset)) {
     offset = Math.max(0, Math.min(approximateOffset, cleanText.length - 1));
   }
-  if (offset < 0) return cleanText;
+  if (offset < 0) return { text: cleanText, offset: null };
 
   const segments = sentenceSegments(cleanText);
-  return segments.find(segment =>
+  const segment = segments.find(segment =>
     offset >= segment.index && offset < segment.index + segment.text.length
-  )?.text.trim() || cleanText;
+  );
+  if (!segment) return { text: cleanText, offset };
+  const leadingWhitespace = segment.text.length - segment.text.trimStart().length;
+  return {
+    text: segment.text.trim(),
+    offset: Math.max(0, offset - segment.index - leadingWhitespace),
+  };
 }
 
 export function renderHighlightedSentence(element, text, needles, prefix = "") {
@@ -43,6 +53,27 @@ function findIgnoringCase(text, needle) {
   const candidate = String(needle || "").trim();
   if (!candidate) return -1;
   return text.toLocaleLowerCase().indexOf(candidate.toLocaleLowerCase());
+}
+
+function closestMatchIgnoringCase(text, needle, approximateOffset) {
+  const candidate = String(needle || "").trim().toLocaleLowerCase();
+  if (!candidate) return -1;
+  const haystack = text.toLocaleLowerCase();
+  const matches = [];
+  let from = 0;
+  while (from <= haystack.length - candidate.length) {
+    const match = haystack.indexOf(candidate, from);
+    if (match < 0) break;
+    matches.push(match);
+    from = match + Math.max(1, candidate.length);
+  }
+  if (!matches.length) return -1;
+  if (!Number.isFinite(approximateOffset)) return matches[0];
+  return matches.reduce((closest, match) =>
+    Math.abs(match - approximateOffset) < Math.abs(closest - approximateOffset)
+      ? match
+      : closest
+  );
 }
 
 function sentenceSegments(text) {

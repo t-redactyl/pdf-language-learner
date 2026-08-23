@@ -1,14 +1,18 @@
 import os
 import random
 import sqlite3
+import threading
 import unicodedata
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterator
 
 import simplemma
+import stanza
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,12 +46,34 @@ LEMMATIZER_LANGUAGES = {
     "spanish": "es",
 }
 
+STANZA_LANGUAGES = {
+    **LEMMATIZER_LANGUAGES,
+    "chinese (simplified)": "zh-hans",
+    "japanese": "ja",
+    "korean": "ko",
+}
+
+NOUN_POS = {"NOUN"}
+VERB_POS = {"VERB", "AUX"}
+STANZA_PIPELINE_LOCK = threading.Lock()
+
+DEFINITE_ARTICLES = {
+    "dutch": ("de", "het"),
+    "english": ("the",),
+    "french": ("le", "la", "l'"),
+    "german": ("der", "die", "das"),
+    "italian": ("il", "lo", "la", "l'"),
+    "portuguese": ("o", "a"),
+    "spanish": ("el", "la"),
+}
+
 
 class TranslationRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2_000)
     source_language: str = Field(min_length=2, max_length=60)
     target_language: str = Field(min_length=2, max_length=60)
     context: str = Field(default="", max_length=2_000)
+    context_offset: int | None = Field(default=None, ge=0, le=2_000)
 
     @field_validator("text", "source_language", "target_language")
     @classmethod
@@ -102,6 +128,19 @@ class TranslatedText(BaseModel):
     translation: str = Field(
         min_length=1,
         description="A natural translation in the requested target language",
+    )
+
+
+class NounTranslation(BaseModel):
+    source_definite_article: str = Field(
+        description="The source noun's definite article, without the noun",
+    )
+    target_lemma: str = Field(
+        min_length=1,
+        description="The singular target-language noun without an article",
+    )
+    target_definite_article: str = Field(
+        description="The target noun's definite article, without the noun",
     )
 
 
@@ -195,6 +234,27 @@ class RevisionAnswerResult(BaseModel):
     item: VocabularyItem
 
 
+@dataclass(frozen=True)
+class WordAnalysis:
+    token: str
+    lemma: str
+    pos: str
+
+
+@lru_cache(maxsize=len(STANZA_LANGUAGES))
+def stanza_pipeline(source_language: str):
+    language = STANZA_LANGUAGES.get(source_language.casefold())
+    if language is None:
+        raise ValueError(f"POS tagging is not supported for {source_language}")
+    return stanza.Pipeline(
+        lang=language,
+        processors="tokenize,pos,lemma",
+        download_method=stanza.DownloadMethod.REUSE_RESOURCES,
+        use_gpu=False,
+        verbose=False,
+    )
+
+
 def normalize_source(text: str, source_language: str) -> str:
     language = LEMMATIZER_LANGUAGES.get(source_language.casefold())
     if language is None or len(text.split()) != 1:
@@ -202,12 +262,98 @@ def normalize_source(text: str, source_language: str) -> str:
     return simplemma.lemmatize(text, lang=language) or text
 
 
-def is_sentence_like_word_translation(source: str, translation: str) -> bool:
+def analyze_word_in_context(
+    text: str,
+    source_language: str,
+    context: str,
+    context_offset: int | None,
+) -> WordAnalysis:
+    context_text = context or text
+    selected_start = context_offset
+    if selected_start is None:
+        found = context_text.casefold().find(text.casefold())
+        selected_start = found if found >= 0 else 0
+    selected_end = selected_start + len(text)
+
+    pipeline = stanza_pipeline(source_language)
+    with STANZA_PIPELINE_LOCK:
+        document = pipeline(context_text)
+    words = [word for sentence in document.sentences for word in sentence.words]
+    overlapping = [
+        word
+        for word in words
+        if word.start_char is not None
+        and word.end_char is not None
+        and word.start_char < selected_end
+        and word.end_char > selected_start
+        and word.upos not in {"PUNCT", "SYM"}
+    ]
+    selected = overlapping[0] if overlapping else None
+    if selected is None:
+        selected_key = canonicalize(text.strip(".,;:!?¡¿()[]{}\"“”'‘’"))
+        selected = next(
+            (word for word in words if canonicalize(word.text) == selected_key),
+            None,
+        )
+    if selected is None:
+        raise ValueError("the selected word could not be located in its context")
+
+    stanza_lemma = selected.lemma or selected.text
+    simplemma_lemma = normalize_source(selected.text, source_language)
+    lemma = simplemma_lemma if selected.upos in NOUN_POS else stanza_lemma
+    return WordAnalysis(
+        token=selected.text,
+        lemma=lemma,
+        pos=selected.upos or "X",
+    )
+
+
+def is_sentence_like_word_translation(translation: str) -> bool:
     """Detect when a one-word lookup was answered with contextual prose."""
 
-    if len(source.split()) != 1:
-        return False
     return len(translation.split()) > 8 or len(translation) > 120
+
+
+def english_infinitive(value: str) -> str:
+    value = value.strip()
+    return value if value.casefold().startswith("to ") else f"to {value}"
+
+
+def definite_articles(language: str) -> tuple[str, ...]:
+    # Polish and the supported East Asian languages do not have definite articles.
+    return DEFINITE_ARTICLES.get(language.casefold(), ("",))
+
+
+def noun_translation_schema(
+    source_language: str, target_language: str
+) -> dict:
+    schema = NounTranslation.model_json_schema()
+    schema["properties"]["source_definite_article"]["enum"] = list(
+        definite_articles(source_language)
+    )
+    schema["properties"]["target_definite_article"]["enum"] = list(
+        definite_articles(target_language)
+    )
+    return schema
+
+
+def normalized_article(article: str, language: str) -> str:
+    article = article.strip().casefold().replace("’", "'")
+    allowed = definite_articles(language)
+    if article not in allowed:
+        expected = ", ".join(repr(value) for value in allowed)
+        raise ValueError(
+            f"invalid definite article {article!r} for {language}; expected {expected}"
+        )
+    return article
+
+
+def article_and_lemma(article: str, lemma: str) -> str:
+    article = article.strip()
+    lemma = lemma.strip()
+    if not article:
+        return lemma
+    return f"{article}{lemma}" if article.endswith("'") else f"{article} {lemma}"
 
 
 def translation_messages(
@@ -217,6 +363,7 @@ def translation_messages(
     target_language: str,
     context: str,
     is_word: bool,
+    word_analysis: WordAnalysis | None = None,
 ) -> list[dict[str, str]]:
     if not is_word:
         return [
@@ -245,17 +392,34 @@ def translation_messages(
             },
         ]
 
+    if word_analysis is None:
+        raise ValueError("word analysis is required for a single-word translation")
+    form_instruction = (
+        "This is a noun. Return its source definite article separately in "
+        "source_definite_article. Translate the supplied singular source lemma "
+        "to a singular target noun in target_lemma, with no article attached, "
+        "and return its target definite article separately in "
+        "target_definite_article. Use an empty article only for a language that "
+        "has no definite articles."
+        if word_analysis.pos in NOUN_POS
+        else (
+            "This is a verb. Translate the supplied source lemma into the target "
+            "language's infinitive. English infinitives must include 'to'."
+            if word_analysis.pos in VERB_POS
+            else "Translate the supplied source lemma without adding an article."
+        )
+    )
     return [
         {
             "role": "system",
             "content": (
                 "You are a precise dictionary translator for a language-learning "
-                "application. Translate only the supplied dictionary form into "
-                "the requested target language. Return only a word or short "
-                "dictionary-style equivalent in the translation field, never a "
-                "sentence, excerpt, explanation, or example. Use the surrounding "
-                "context only to disambiguate meaning; never translate any part "
-                "of the context."
+                "application. Follow the supplied part-of-speech analysis; do not "
+                "reclassify the word. Return only the requested structured fields "
+                "and a short dictionary-style translation, never a sentence, "
+                "excerpt, explanation, or example. Use the surrounding context "
+                "only to disambiguate meaning; never translate the context. "
+                f"{form_instruction}"
             ),
         },
         {
@@ -263,10 +427,12 @@ def translation_messages(
             "content": (
                 f"Source language: {source_language}\n"
                 f"Target language: {target_language}\n"
-                f"Dictionary form to translate: {source}\n"
+                f"Selected token: {word_analysis.token}\n"
+                f"Part of speech (Universal POS): {word_analysis.pos}\n"
+                f"Source lemma: {word_analysis.lemma}\n"
                 f"Surrounding context (do not translate): "
                 f"{context or '(not available)'}\n"
-                "Translate the dictionary form only."
+                "Return only the requested dictionary fields."
             ),
         },
     ]
@@ -660,48 +826,100 @@ def translate(request: TranslationRequest) -> TranslationResult:
         )
         translation_model = os.getenv("OLLAMA_MODEL", "translategemma:4b")
         is_word = len(request.text.split()) == 1
-        normalized_source = (
-            normalize_source(request.text, request.source_language)
+        word_analysis = (
+            analyze_word_in_context(
+                request.text,
+                request.source_language,
+                request.context,
+                request.context_offset,
+            )
             if is_word
-            else request.text
+            else None
         )
 
-        def request_translation(context: str) -> TranslatedText:
+        def request_translation(
+            context: str,
+        ) -> TranslatedText | NounTranslation:
+            is_noun = word_analysis is not None and word_analysis.pos in NOUN_POS
+            response_model = NounTranslation if is_noun else TranslatedText
+            response_schema = (
+                noun_translation_schema(
+                    request.source_language, request.target_language
+                )
+                if is_noun
+                else response_model.model_json_schema()
+            )
             response = client.chat(
                 model=translation_model,
                 messages=translation_messages(
-                    source=normalized_source,
+                    source=request.text,
                     source_language=request.source_language,
                     target_language=request.target_language,
                     context=context,
                     is_word=is_word,
+                    word_analysis=word_analysis,
                 ),
-                format=TranslatedText.model_json_schema(),
+                format=response_schema,
                 keep_alive="30m",
                 options={"temperature": 0, "num_ctx": 1024, "num_predict": 128},
             )
-            return TranslatedText.model_validate_json(response.message.content)
+            return response_model.model_validate_json(response.message.content)
 
         translated = request_translation(request.context)
+        translated_text = (
+            translated.target_lemma
+            if isinstance(translated, NounTranslation)
+            else translated.translation
+        )
         if is_word and request.context and is_sentence_like_word_translation(
-            normalized_source, translated.translation
+            translated_text
         ):
             # Small local models occasionally translate the context despite the
             # instruction. A context-free retry still gives a useful dictionary
             # answer and prevents an excerpt from being saved as vocabulary.
             translated = request_translation("")
-        if is_word and is_sentence_like_word_translation(
-            normalized_source, translated.translation
-        ):
+            translated_text = (
+                translated.target_lemma
+                if isinstance(translated, NounTranslation)
+                else translated.translation
+            )
+        if is_word and is_sentence_like_word_translation(translated_text):
             raise ValueError(
                 "the model returned a sentence instead of a word translation"
             )
+
+        normalized_source = request.text
+        translation = translated_text
+        if word_analysis is not None:
+            if word_analysis.pos in VERB_POS:
+                normalized_source = word_analysis.lemma
+                if request.source_language.casefold() == "english":
+                    normalized_source = english_infinitive(normalized_source)
+                if request.target_language.casefold() == "english":
+                    translation = english_infinitive(translation)
+            elif word_analysis.pos in NOUN_POS:
+                assert isinstance(translated, NounTranslation)
+                source_article = normalized_article(
+                    translated.source_definite_article, request.source_language
+                )
+                target_article = normalized_article(
+                    translated.target_definite_article, request.target_language
+                )
+                normalized_source = article_and_lemma(
+                    source_article, word_analysis.lemma
+                )
+                target_lemma = normalize_source(
+                    translated.target_lemma, request.target_language
+                )
+                translation = article_and_lemma(target_article, target_lemma)
+            else:
+                normalized_source = word_analysis.lemma
 
         return TranslationResult(
             detected_language=request.source_language,
             is_word=is_word,
             normalized_source=normalized_source,
-            translation=translated.translation,
+            translation=translation,
         )
 
     except Exception as exc:
