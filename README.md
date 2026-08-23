@@ -11,7 +11,7 @@ uv run python main.py
 
 Open <http://127.0.0.1:8000>, choose a text-based PDF or paste a public article URL, select text, choose a target language, and translate. Starred vocabulary is saved to `data/margin.db` by default and remains available across documents and browser sessions. Set `MARGIN_DATABASE_PATH` to use a different SQLite file.
 
-URL imports are downloaded by the local FastAPI server and reduced to plain transcript paragraphs plus a direct audio URL when the publisher exposes one. Dynamic sites are supported through embedded transcript data (including DW lesson manuscripts). Some publishers keep audio behind their own JavaScript player; in that case Margin links to the original player while still making the extracted article text selectable.
+URL imports are downloaded by the local FastAPI server and reduced to plain transcript paragraphs plus a direct audio URL when the publisher exposes one. Dynamic sites are supported through embedded transcript data (including DW lesson manuscripts), and linked transcript PDFs such as Deutsch-to-go's “Text (PDF)” attachments are detected and extracted automatically. Some publishers keep audio behind their own JavaScript player; in that case Margin links to the original player while still making the extracted article text selectable.
 
 The reader loads PDF.js from cdnjs, so the first page load needs an internet connection. Scanned/image-only PDFs require OCR, which is not part of this first version.
 

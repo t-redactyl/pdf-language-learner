@@ -8,6 +8,7 @@ dependencies = [
     "httpx>=0.28.0",
     "ollama>=0.5.0",
     "pydantic>=2.11.0",
+    "pypdf>=6.0.0",
     "simplemma>=2.0.0",
     "stanza>=1.14.0",
     "uvicorn[standard]>=0.35.0",
