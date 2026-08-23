@@ -14,6 +14,7 @@ let documentLanguageSample = "";
 let languageDetectionPending = false;
 let languageDetectionError = "";
 let pendingHighlight = [];
+let pendingTranscriptRange = null;
 const textItemForSpan = new WeakMap();
 const characterOffsetsForSpan = new WeakMap();
 const measurementContext = document.createElement("canvas").getContext("2d");
@@ -26,31 +27,10 @@ document.querySelectorAll("input[type=file]").forEach((input) => input.addEventL
 
 async function openPdf(file) {
   if (!file) return;
-  pages.replaceChildren();
-  activeDocumentKey = `margin:${file.name}:${file.size}:${file.lastModified}`;
+  prepareDocument(`margin:${file.name}:${file.size}:${file.lastModified}`);
   // Highlights used to be persisted under the document key. Remove that legacy
   // data now that highlights are intentionally transient.
   try { localStorage.removeItem(activeDocumentKey); } catch {}
-  translations = readStoredTranslations();
-  renderTranslationHistory();
-  savedVocabulary = [];
-  renderSavedVocabulary();
-  selectedText = "";
-  selectedContext = "";
-  selectedContextOffset = null;
-  pendingHighlight = [];
-  documentLanguageSample = "";
-  languageDetectionPending = false;
-  languageDetectionError = "";
-  readDocumentLanguageState();
-  renderSourceLanguageState();
-  if (effectiveSourceLanguage()) {
-    loadSavedVocabulary(effectiveSourceLanguage()).catch(() => {});
-  }
-  $("#selection-hint").hidden = false;
-  $("#translation-content").hidden = true;
-  $("#result").hidden = true;
-  $("#error").textContent = "";
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   $("#empty-state").hidden = true;
   $("#reader").hidden = false;
@@ -60,6 +40,127 @@ async function openPdf(file) {
   }
   documentLanguageSample = pageTexts.join("\n").replace(/\s+/g, " ").trim().slice(0, 12000);
   if (!detectedSourceLanguage) await detectDocumentLanguage();
+}
+
+function prepareDocument(documentKey) {
+  clearCurrentHighlight();
+  pages.replaceChildren();
+  activeDocumentKey = documentKey;
+  translations = readStoredTranslations();
+  renderTranslationHistory();
+  savedVocabulary = [];
+  renderSavedVocabulary();
+  selectedText = "";
+  selectedContext = "";
+  selectedContextOffset = null;
+  pendingHighlight = [];
+  pendingTranscriptRange = null;
+  documentLanguageSample = "";
+  languageDetectionPending = false;
+  languageDetectionError = "";
+  readDocumentLanguageState();
+  renderSourceLanguageState();
+  if (effectiveSourceLanguage()) loadSavedVocabulary(effectiveSourceLanguage()).catch(() => {});
+  $("#selection-hint").hidden = false;
+  $("#translation-content").hidden = true;
+  $("#result").hidden = true;
+  $("#error").textContent = "";
+}
+
+document.querySelectorAll(".web-url-form").forEach(form => form.addEventListener("submit", async event => {
+  event.preventDefault();
+  const input = form.elements.url;
+  const button = form.querySelector("button[type=submit]");
+  const url = input.value.trim();
+  if (!url) return;
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "Importing…";
+  setWebImportStatus("");
+  try {
+    const response = await fetch("/api/import-web", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || `Page import failed (${response.status})`);
+    openWebDocument(data);
+    document.querySelectorAll(".web-url-form input[name=url]").forEach(other => { other.value = data.url; });
+  } catch (error) {
+    setWebImportStatus(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}));
+
+function setWebImportStatus(message) {
+  document.querySelectorAll(".web-import-status").forEach(node => { node.textContent = message; });
+  if (message && $("#reader").hidden === false) $("#error").textContent = message;
+}
+
+function openWebDocument(data) {
+  prepareDocument(`margin:web:${data.url}`);
+  const article = document.createElement("article");
+  article.className = "web-document";
+  const header = document.createElement("header");
+  header.className = "web-document-header";
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "eyebrow";
+  eyebrow.textContent = "Audio transcript";
+  const title = document.createElement("h1");
+  title.textContent = data.title;
+  const source = document.createElement("a");
+  source.className = "web-source-link";
+  source.href = data.url;
+  source.target = "_blank";
+  source.rel = "noopener noreferrer";
+  source.textContent = new URL(data.url).hostname;
+  header.append(eyebrow, title, source);
+  if (data.audio_url) {
+    const audio = document.createElement("audio");
+    audio.className = "web-audio";
+    audio.controls = true;
+    audio.preload = "metadata";
+    audio.src = data.audio_url;
+    header.append(audio);
+  } else {
+    const audioNotice = document.createElement("p");
+    audioNotice.className = "audio-notice";
+    audioNotice.append("This site does not expose a direct audio file. ");
+    const listenLink = source.cloneNode(true);
+    listenLink.textContent = "Listen on the original page";
+    audioNotice.append(listenLink);
+    header.append(audioNotice);
+  }
+  const transcript = document.createElement("section");
+  transcript.className = "web-transcript";
+  transcript.setAttribute("aria-label", "Transcript");
+  if (data.transcript.length) {
+    data.transcript.forEach(value => {
+      const paragraph = document.createElement("p");
+      paragraph.textContent = value;
+      transcript.append(paragraph);
+    });
+  } else {
+    const message = document.createElement("p");
+    message.className = "transcript-empty";
+    message.textContent = "No transcript could be found on this page, but you can still play its audio.";
+    transcript.append(message);
+  }
+  article.append(header, transcript);
+  pages.append(article);
+  $("#empty-state").hidden = true;
+  $("#reader").hidden = false;
+  documentLanguageSample = data.transcript.join(" ").replace(/\s+/g, " ").trim().slice(0, 12000);
+  if (!detectedSourceLanguage && data.source_language) {
+    detectedSourceLanguage = data.source_language;
+    saveDocumentLanguageState();
+    loadSavedVocabulary(effectiveSourceLanguage()).catch(() => {});
+  }
+  renderSourceLanguageState();
+  if (!detectedSourceLanguage) detectDocumentLanguage();
 }
 
 async function renderPage(page, number) {
@@ -109,7 +210,7 @@ pages.addEventListener("pointerdown", event => {
   if (event.button !== 0) return;
   clearCurrentHighlight();
   pendingHighlight = [];
-  if (event.target.closest(".textLayer")) {
+  if (event.target.closest(".textLayer, .web-transcript")) {
     selectionDragStart = { x: event.clientX, y: event.clientY };
   }
 });
@@ -145,6 +246,8 @@ function showSelection({ text, rectangles, context = "", contextOffset = null })
 // the native Range makes the two disagree by however much the two coordinate
 // models differ, which is exactly the mismatch this replaces.
 function readSelection(range, drag = null) {
+  const transcriptSelection = readTranscriptSelection(range);
+  if (transcriptSelection) return transcriptSelection;
   const selected = selectionGeometry(range, drag);
   if (selected.text && selected.rectangles.length) {
     return { ...selected, ...selectionContext(range, selected.text) };
@@ -159,6 +262,30 @@ function readSelection(range, drag = null) {
   return rectangles.length
     ? { text, rectangles, ...selectionContext(range, text) }
     : null;
+}
+
+function readTranscriptSelection(range) {
+  const start = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+  const end = range.endContainer.nodeType === Node.ELEMENT_NODE ? range.endContainer : range.endContainer.parentElement;
+  const transcript = start?.closest?.(".web-transcript");
+  if (!transcript || transcript !== end?.closest?.(".web-transcript")) return null;
+  const text = range.toString().replace(/\s+/g, " ").trim();
+  if (!text || ![...range.getClientRects()].some(rect => rect.width >= 1 && rect.height >= 1)) return null;
+  pendingTranscriptRange = range.cloneRange();
+  const paragraph = start.closest("p");
+  if (!paragraph || paragraph !== end.closest("p")) {
+    return { text, rectangles: [{ transcript: true }], context: "", contextOffset: null };
+  }
+  const prefix = document.createRange();
+  prefix.selectNodeContents(paragraph);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  const sentence = sentenceContext(paragraph.textContent, text, prefix.toString().length);
+  return {
+    text,
+    rectangles: [{ transcript: true }],
+    context: sentence.text.slice(0, 2000),
+    contextOffset: sentence.offset,
+  };
 }
 
 function selectionContext(range, selectedText) {
@@ -457,11 +584,17 @@ $("#translate-button").addEventListener("click", async () => {
 function showCurrentHighlight(rectangles) {
   if (!rectangles.length) return;
   clearCurrentHighlight();
-  drawHighlight(rectangles); pendingHighlight = []; window.getSelection()?.removeAllRanges();
+  if (pendingTranscriptRange && window.Highlight && CSS.highlights) {
+    CSS.highlights.set("margin-current-selection", new Highlight(pendingTranscriptRange));
+  } else {
+    drawHighlight(rectangles);
+  }
+  pendingHighlight = []; pendingTranscriptRange = null; window.getSelection()?.removeAllRanges();
 }
 
 function clearCurrentHighlight() {
   document.querySelectorAll(".highlight-layer").forEach((layer) => layer.replaceChildren());
+  CSS.highlights?.delete("margin-current-selection");
 }
 
 function drawHighlight(rectangles) {

@@ -3,7 +3,9 @@ name = "pdf-language-learner"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "beautifulsoup4>=4.13.0",
     "fastapi>=0.116.0",
+    "httpx>=0.28.0",
     "ollama>=0.5.0",
     "pydantic>=2.11.0",
     "simplemma>=2.0.0",
@@ -13,6 +15,5 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.0",
     "pytest>=8.4.0",
 ]

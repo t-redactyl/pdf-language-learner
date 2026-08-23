@@ -30,6 +30,7 @@ from pdf_language_learner.revision import (
     revision_category,
     schedule_review,
 )
+from pdf_language_learner.web_import import WebImportError, fetch_web_document
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -404,6 +405,23 @@ class LanguageDetectionRequest(BaseModel):
         if not value:
             raise ValueError("must not be blank")
         return value
+
+
+class WebImportRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2_000)
+
+    @field_validator("url")
+    @classmethod
+    def strip_url(cls, value: str) -> str:
+        return value.strip()
+
+
+class WebImportResult(BaseModel):
+    url: str
+    title: str
+    transcript: list[str]
+    audio_url: str | None = None
+    source_language: str | None = None
 
 
 class LanguageDetectionResult(BaseModel):
@@ -1412,6 +1430,21 @@ def index() -> FileResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/import-web", response_model=WebImportResult)
+def import_web(request: WebImportRequest) -> WebImportResult:
+    try:
+        document = fetch_web_document(request.url)
+    except WebImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return WebImportResult(
+        url=document.url,
+        title=document.title,
+        transcript=document.transcript,
+        audio_url=document.audio_url,
+        source_language=document.source_language,
+    )
 
 
 @app.get("/api/vocabulary/languages", response_model=list[str])

@@ -3,13 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Margin — PDF language reader</title>
+  <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Margin home"><span>Margin</span><small>PDF language reader</small></a>
+    <a class="brand" href="/" aria-label="Margin home"><span>Margin</span><small>Language reader</small></a>
     <div class="topbar-actions">
+      <form class="web-url-form topbar-url-form">
+        <label class="visually-hidden" for="topbar-web-url">Article or transcript URL</label>
+        <input id="topbar-web-url" name="url" type="url" inputmode="url" placeholder="Paste an article URL" required>
+        <button class="secondary-button" type="submit">Open URL</button>
+      </form>
       <button id="open-revision" class="secondary-button" type="button">Revise vocabulary</button>
       <label class="file-button">Open PDF<input id="pdf-input" type="file" accept="application/pdf"></label>
     </div>
@@ -66,8 +71,17 @@
       <div class="empty-mark">M</div>
       <p class="eyebrow">Read beyond your vocabulary</p>
       <h1>A quieter way to read<br>in another language.</h1>
-      <p class="intro">Open a PDF, select any word or phrase, and translate it without leaving the page. Your document stays in your browser.</p>
+      <p class="intro">Open a PDF or import an audio article with a transcript. Select any word or phrase and translate it without leaving the page.</p>
       <label class="primary-button">Choose a PDF<input type="file" accept="application/pdf"></label>
+      <span class="source-divider">or</span>
+      <form class="web-url-form empty-url-form">
+        <label for="empty-web-url">Article or transcript URL</label>
+        <div class="url-controls">
+          <input id="empty-web-url" name="url" type="url" inputmode="url" placeholder="https://…" required>
+          <button class="primary-button" type="submit">Import page</button>
+        </div>
+        <p class="web-import-status error" role="alert"></p>
+      </form>
     </section>
     <section id="reader" class="reader" hidden>
       <aside class="reader-meta">
@@ -88,7 +102,7 @@
           <ol id="translation-history-list"></ol>
         </section>
       </aside>
-      <div id="pages" class="pages" aria-label="PDF pages"></div>
+      <div id="pages" class="pages" aria-label="Document content"></div>
       <aside class="translation-panel">
         <p class="eyebrow">Translation</p>
         <p id="selection-hint">Select text in the document to begin.</p>
