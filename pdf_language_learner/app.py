@@ -132,15 +132,18 @@ class TranslatedText(BaseModel):
 
 
 class NounTranslation(BaseModel):
-    source_definite_article: str = Field(
-        description="The source noun's definite article, without the noun",
-    )
     target_lemma: str = Field(
         min_length=1,
         description="The singular target-language noun without an article",
     )
     target_definite_article: str = Field(
         description="The target noun's definite article, without the noun",
+    )
+
+
+class SourceArticle(BaseModel):
+    article: str = Field(
+        description="The definite article for the supplied normalized source lemma",
     )
 
 
@@ -325,16 +328,45 @@ def definite_articles(language: str) -> tuple[str, ...]:
 
 
 def noun_translation_schema(
-    source_language: str, target_language: str
+    target_language: str,
 ) -> dict:
     schema = NounTranslation.model_json_schema()
-    schema["properties"]["source_definite_article"]["enum"] = list(
-        definite_articles(source_language)
-    )
     schema["properties"]["target_definite_article"]["enum"] = list(
         definite_articles(target_language)
     )
     return schema
+
+
+def source_article_schema(source_language: str) -> dict:
+    schema = SourceArticle.model_json_schema()
+    schema["properties"]["article"]["enum"] = list(
+        definite_articles(source_language)
+    )
+    return schema
+
+
+def source_article_messages(
+    lemma: str, source_language: str
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Choose the definite article that grammatically agrees with the "
+                "exact normalized dictionary lemma supplied. Base the choice only "
+                "on that lemma and its language. Do not infer gender from an "
+                "original inflected form, a person, or sentence context. Return "
+                "only the article field."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Source language: {source_language}\n"
+                f"Normalized dictionary lemma: {lemma}"
+            ),
+        },
+    ]
 
 
 def normalized_article(article: str, language: str) -> str:
@@ -395,12 +427,11 @@ def translation_messages(
     if word_analysis is None:
         raise ValueError("word analysis is required for a single-word translation")
     form_instruction = (
-        "This is a noun. Return its source definite article separately in "
-        "source_definite_article. Translate the supplied singular source lemma "
-        "to a singular target noun in target_lemma, with no article attached, "
-        "and return its target definite article separately in "
+        "This is a noun. Translate the supplied singular source lemma to a "
+        "singular target noun in target_lemma, with no article attached, and "
+        "return its target definite article separately in "
         "target_definite_article. Use an empty article only for a language that "
-        "has no definite articles."
+        "has no definite articles. Do not return or choose the source article."
         if word_analysis.pos in NOUN_POS
         else (
             "This is a verb. Translate the supplied source lemma into the target "
@@ -836,6 +867,29 @@ def translate(request: TranslationRequest) -> TranslationResult:
             if is_word
             else None
         )
+        source_article = ""
+        if word_analysis is not None and word_analysis.pos in NOUN_POS:
+            allowed_articles = definite_articles(request.source_language)
+            if allowed_articles != ("",):
+                article_response = client.chat(
+                    model=translation_model,
+                    messages=source_article_messages(
+                        word_analysis.lemma, request.source_language
+                    ),
+                    format=source_article_schema(request.source_language),
+                    keep_alive="30m",
+                    options={
+                        "temperature": 0,
+                        "num_ctx": 256,
+                        "num_predict": 16,
+                    },
+                )
+                source_article = normalized_article(
+                    SourceArticle.model_validate_json(
+                        article_response.message.content
+                    ).article,
+                    request.source_language,
+                )
 
         def request_translation(
             context: str,
@@ -843,9 +897,7 @@ def translate(request: TranslationRequest) -> TranslationResult:
             is_noun = word_analysis is not None and word_analysis.pos in NOUN_POS
             response_model = NounTranslation if is_noun else TranslatedText
             response_schema = (
-                noun_translation_schema(
-                    request.source_language, request.target_language
-                )
+                noun_translation_schema(request.target_language)
                 if is_noun
                 else response_model.model_json_schema()
             )
@@ -899,9 +951,6 @@ def translate(request: TranslationRequest) -> TranslationResult:
                     translation = english_infinitive(translation)
             elif word_analysis.pos in NOUN_POS:
                 assert isinstance(translated, NounTranslation)
-                source_article = normalized_article(
-                    translated.source_definite_article, request.source_language
-                )
                 target_article = normalized_article(
                     translated.target_definite_article, request.target_language
                 )

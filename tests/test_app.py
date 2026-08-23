@@ -119,6 +119,16 @@ def test_detect_language_uses_document_sample(monkeypatch) -> None:
             },
             "das Auge", "the eye",
         ),
+        (
+            "profesora", "Spanish", "English",
+            WordAnalysis("profesora", "profesor", "NOUN"),
+            {
+                "source_definite_article": "el",
+                "target_lemma": "teacher",
+                "target_definite_article": "the",
+            },
+            "el profesor", "the teacher",
+        ),
     ],
 )
 def test_translate_uses_contextual_pos_to_normalize_words(
@@ -142,19 +152,32 @@ def test_translate_uses_contextual_pos_to_normalize_words(
             self.host = host
 
         def chat(self, **kwargs):
-            if analysis.pos == "NOUN":
-                assert set(kwargs["format"]["required"]) == {
-                    "source_definite_article",
-                    "target_lemma",
-                    "target_definite_article",
-                }
-                assert kwargs["format"]["properties"][
-                    "source_definite_article"
-                ]["enum"] == list({
+            required = set(kwargs["format"]["required"])
+            if required == {"article"}:
+                prompt = kwargs["messages"][1]["content"]
+                assert f"Normalized dictionary lemma: {analysis.lemma}" in prompt
+                assert "Selected token:" not in prompt
+                assert "Surrounding context:" not in prompt
+                if source.casefold() != analysis.lemma.casefold():
+                    assert source not in prompt
+                assert kwargs["format"]["properties"]["article"][
+                    "enum"
+                ] == list({
                     "German": ("der", "die", "das"),
                     "Italian": ("il", "lo", "la", "l'"),
                     "English": ("the",),
+                    "Spanish": ("el", "la"),
                 }[source_language])
+                return SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps({
+                        "article": model_response["source_definite_article"]
+                    }))
+                )
+            if analysis.pos == "NOUN":
+                assert set(kwargs["format"]["required"]) == {
+                    "target_lemma",
+                    "target_definite_article",
+                }
             else:
                 assert kwargs["format"]["required"] == ["translation"]
             prompt = kwargs["messages"][1]["content"]
@@ -164,8 +187,10 @@ def test_translate_uses_contextual_pos_to_normalize_words(
                 "Surrounding context (do not translate): Ein Beispiel im Kontext."
                 in prompt
             )
+            response_data = dict(model_response)
+            response_data.pop("source_definite_article", None)
             return SimpleNamespace(
-                message=SimpleNamespace(content=json.dumps(model_response))
+                message=SimpleNamespace(content=json.dumps(response_data))
             )
 
     monkeypatch.setattr(
