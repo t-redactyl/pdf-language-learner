@@ -394,7 +394,11 @@ def verb_analysis_with_dependents(
     )
     associated.extend(clitics)
     confident_verb_lemma = None
-    if (
+    if language == "german" and any(
+        canonicalize(clitic.text) == "sich" for clitic in clitics
+    ):
+        confident_verb_lemma = f"sich {lemma}"
+    elif (
         language == "spanish"
         and len(clitics) == 1
         and is_confident_spanish_reflexive(clitics[0], selected)
@@ -486,6 +490,31 @@ def analyze_word_in_context(
         raise ValueError("the selected word could not be located in its context")
 
     selected, sentence_words, selected_token_words = selected_location
+
+    # PDF typography often uppercases a run of text for emphasis. Stanza can
+    # consequently interpret an inflected verb such as German "ERINNERTE" as a
+    # proper noun and preserve it as the lemma. Retry ambiguous all-caps tokens
+    # with casing removed from the full context so syntax-linked dependents are
+    # recovered as well. Only use the retry when lowercasing preserves offsets.
+    if (
+        (selected.upos or "X") in {"PROPN", "X"}
+        and text.isupper()
+        and text != text.lower()
+    ):
+        lowercase_context = context_text.lower()
+        lowercase_text = text.lower()
+        if (
+            len(lowercase_context) == len(context_text)
+            and len(lowercase_text) == len(text)
+        ):
+            lowercase_analysis = analyze_word_in_context(
+                lowercase_text,
+                source_language,
+                lowercase_context,
+                selected_start,
+            )
+            if lowercase_analysis.pos not in {"PROPN", "X"}:
+                return lowercase_analysis
 
     stanza_lemma = selected.lemma or selected.text
     simplemma_lemma = normalize_source(selected.text, source_language)

@@ -375,6 +375,53 @@ def test_translate_uses_confident_reflexive_lemma_without_classifier(
     assert response.json()["translation"] == "to get ready"
 
 
+def test_translate_uses_confident_german_sich_lemma_without_classifier(
+    monkeypatch,
+) -> None:
+    analysis = WordAnalysis(
+        "erinnerte sich",
+        "erinnern",
+        "VERB",
+        ("sich",),
+        "sich erinnern",
+    )
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            assert kwargs["format"]["required"] == ["translation"]
+            prompt = kwargs["messages"][1]["content"]
+            assert "Source lemma: sich erinnern" in prompt
+            return SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps({"translation": "remember"})
+                )
+            )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: analysis,
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": "ERINNERTE",
+            "source_language": "German",
+            "target_language": "English",
+            "context": "ER ERINNERTE SICH AN diese alte Eiche.",
+            "context_offset": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["normalized_source"] == "sich erinnern"
+    assert response.json()["translation"] == "to remember"
+
+
 def test_translate_retries_without_context_when_model_translates_excerpt(
     monkeypatch,
 ) -> None:
@@ -497,6 +544,60 @@ def test_noun_analysis_prefers_simplemma_singular(monkeypatch) -> None:
     analysis = analyze_word_in_context("Augen", "German", "Augen", 0)
 
     assert analysis == WordAnalysis(token="Augen", lemma="Auge", pos="NOUN")
+
+
+def test_word_analysis_retries_all_caps_proper_noun_as_lowercase(monkeypatch) -> None:
+    context = (
+        "ER ERINNERTE SICH AN diese alte Eiche, die mit dem gespaltenen Stamm."
+    )
+    parsed_contexts = []
+
+    def pipeline(parsed_context):
+        parsed_contexts.append(parsed_context)
+        if parsed_context == context:
+            words = [
+                SimpleNamespace(
+                    text="ERINNERTE",
+                    lemma="ERINNERTE",
+                    upos="PROPN",
+                    start_char=3,
+                    end_char=12,
+                )
+            ]
+        else:
+            words = [
+                parsed_word(
+                    "erinnerte", "erinnern", "VERB", 3, 12, 2
+                ),
+                parsed_word(
+                    "sich",
+                    "sich",
+                    "PRON",
+                    13,
+                    17,
+                    3,
+                    head=2,
+                    deprel="obj",
+                ),
+            ]
+        return SimpleNamespace(sentences=[SimpleNamespace(words=words)])
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.stanza_pipeline", lambda _: pipeline
+    )
+
+    analysis = analyze_word_in_context(
+        "ERINNERTE", "German", context, context.index("ERINNERTE")
+    )
+
+    assert parsed_contexts == [context, context.lower()]
+    assert analysis == WordAnalysis(
+        "erinnerte sich",
+        "erinnern",
+        "VERB",
+        ("sich",),
+        "sich erinnern",
+    )
 
 
 def parsed_word(
