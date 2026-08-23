@@ -10,10 +10,25 @@ let queue = [];
 let currentCard = null;
 let answered = 0;
 let correctAnswers = 0;
+let documentLanguage = "";
 
 $("#open-revision")?.addEventListener("click", openRevision);
 $("#close-revision")?.addEventListener("click", closeRevision);
 $("#revision-continue")?.addEventListener("click", renderNextCard);
+$("#revision-language")?.addEventListener("change", loadRevisionSession);
+document.addEventListener("margin:document-language", event => {
+  const nextLanguage = event.detail?.language || "";
+  if (normalize(nextLanguage) === normalize(documentLanguage)) return;
+  documentLanguage = nextLanguage;
+  if (documentLanguage && !view.hidden) {
+    const select = $("#revision-language");
+    if (![...select.options].some(option => normalize(option.value) === normalize(documentLanguage))) {
+      select.add(new Option(documentLanguage, documentLanguage));
+    }
+    select.value = documentLanguage;
+    loadRevisionSession();
+  }
+});
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !view.hidden) closeRevision();
 });
@@ -21,6 +36,31 @@ document.addEventListener("keydown", event => {
 async function openRevision() {
   view.hidden = false;
   document.body.classList.add("revision-open");
+  try {
+    await populateLanguageSelector();
+  } catch (error) {
+    showRevisionError(error);
+    return;
+  }
+  await loadRevisionSession();
+}
+
+async function populateLanguageSelector() {
+  const response = await fetch("/api/vocabulary/languages");
+  const languages = await response.json();
+  if (!response.ok) throw new Error(languages.detail || "Languages could not be loaded");
+  const select = $("#revision-language");
+  select.replaceChildren(new Option("Select language", ""));
+  const choices = [...languages];
+  if (documentLanguage && !choices.some(language => normalize(language) === normalize(documentLanguage))) {
+    choices.push(documentLanguage);
+  }
+  choices.sort((left, right) => left.localeCompare(right));
+  choices.forEach(language => select.add(new Option(language, language)));
+  select.value = documentLanguage || "";
+}
+
+async function loadRevisionSession() {
   loading.hidden = false;
   empty.hidden = true;
   session.hidden = true;
@@ -29,8 +69,18 @@ async function openRevision() {
   answered = 0;
   correctAnswers = 0;
 
+  const language = $("#revision-language").value;
+  if (!language) {
+    loading.hidden = true;
+    empty.hidden = false;
+    $("#revision-empty-title").textContent = "Select a language";
+    $("#revision-empty-copy").textContent = "Choose a saved vocabulary language to begin revising.";
+    return;
+  }
+
   try {
-    const response = await fetch("/api/revision/session?limit=40");
+    const params = new URLSearchParams({ language, limit: "40" });
+    const response = await fetch(`/api/revision/session?${params}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || "Revision could not be loaded");
     queue = data.cards.map(card => ({ ...card, retryCount: 0 }));
@@ -42,11 +92,16 @@ async function openRevision() {
     session.hidden = false;
     renderNextCard();
   } catch (error) {
-    loading.hidden = true;
-    empty.hidden = false;
-    $("#revision-empty-title").textContent = "Revision could not be loaded";
-    $("#revision-empty-copy").textContent = error.message;
+    showRevisionError(error);
   }
+}
+
+function showRevisionError(error) {
+  loading.hidden = true;
+  empty.hidden = false;
+  session.hidden = true;
+  $("#revision-empty-title").textContent = "Revision could not be loaded";
+  $("#revision-empty-copy").textContent = error.message;
 }
 
 function closeRevision() {

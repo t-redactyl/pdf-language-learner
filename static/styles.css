@@ -62,6 +62,8 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:28px; }
 .revision-heading .eyebrow { margin:0 0 6px; }
 .revision-heading h2 { margin:0; font:500 clamp(32px,5vw,48px)/1.1 Georgia,serif; letter-spacing:-.035em; }
+.revision-language-label { display:inline-block; margin:18px 8px 0 0; color:#777c74; font-size:12px; font-weight:700; }
+#revision-language { min-width:190px; padding:8px 10px; border:1px solid var(--line); background:white; }
 .revision-message { padding:34px; border:1px solid var(--line); background:var(--card); text-align:center; }
 .revision-message h3 { margin:0 0 8px; font:500 27px/1.2 Georgia,serif; }
 .revision-message p { margin:0; color:#6a6e67; }

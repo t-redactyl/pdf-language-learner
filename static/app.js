@@ -22,8 +22,6 @@ let translations = [];
 const LEGACY_SAVED_VOCABULARY_STORAGE_KEY = "margin:saved-vocabulary:v1";
 let savedVocabulary = [];
 
-loadSavedVocabulary().catch(() => {});
-
 document.querySelectorAll("input[type=file]").forEach((input) => input.addEventListener("change", (event) => openPdf(event.target.files[0])));
 
 async function openPdf(file) {
@@ -35,6 +33,7 @@ async function openPdf(file) {
   try { localStorage.removeItem(activeDocumentKey); } catch {}
   translations = readStoredTranslations();
   renderTranslationHistory();
+  savedVocabulary = [];
   renderSavedVocabulary();
   selectedText = "";
   selectedContext = "";
@@ -45,6 +44,9 @@ async function openPdf(file) {
   languageDetectionError = "";
   readDocumentLanguageState();
   renderSourceLanguageState();
+  if (effectiveSourceLanguage()) {
+    loadSavedVocabulary(effectiveSourceLanguage()).catch(() => {});
+  }
   $("#selection-hint").hidden = false;
   $("#translation-content").hidden = true;
   $("#result").hidden = true;
@@ -359,6 +361,9 @@ function renderSourceLanguageState(message = "") {
     status.textContent = "Choose a language to translate";
   }
   $("#translate-button").disabled = !selectedText || !effectiveSourceLanguage();
+  document.dispatchEvent(new CustomEvent("margin:document-language", {
+    detail: { language: detectedSourceLanguage },
+  }));
 }
 
 async function detectDocumentLanguage() {
@@ -381,6 +386,7 @@ async function detectDocumentLanguage() {
     if (activeDocumentKey !== documentKey) return;
     detectedSourceLanguage = data.detected_language;
     saveDocumentLanguageState();
+    loadSavedVocabulary(effectiveSourceLanguage()).catch(() => {});
   } catch (error) {
     if (activeDocumentKey === documentKey) {
       languageDetectionError = "Automatic detection failed; choose the source language";
@@ -393,10 +399,11 @@ async function detectDocumentLanguage() {
   }
 }
 
-$("#source-language").addEventListener("change", event => {
+$("#source-language").addEventListener("change", async event => {
   sourceLanguageOverride = event.target.value === "auto" ? "" : event.target.value;
   saveDocumentLanguageState();
   renderSourceLanguageState();
+  await loadSavedVocabulary(effectiveSourceLanguage()).catch(() => {});
   if (!sourceLanguageOverride && !detectedSourceLanguage) detectDocumentLanguage();
 });
 
@@ -558,7 +565,7 @@ async function requestVocabulary(translation) {
   return vocabularyFromApi(data.item);
 }
 
-async function loadSavedVocabulary() {
+async function loadSavedVocabulary(language = "") {
   const legacyVocabulary = readLegacySavedVocabulary();
   let migrationComplete = legacyVocabulary.length > 0;
   for (const entry of legacyVocabulary) {
@@ -570,7 +577,8 @@ async function loadSavedVocabulary() {
   }
   if (migrationComplete) localStorage.removeItem(LEGACY_SAVED_VOCABULARY_STORAGE_KEY);
 
-  const response = await fetch("/api/vocabulary");
+  const query = language ? `?${new URLSearchParams({ language })}` : "";
+  const response = await fetch(`/api/vocabulary${query}`);
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || "Saved vocabulary could not be loaded");
   savedVocabulary = data.map(vocabularyFromApi);

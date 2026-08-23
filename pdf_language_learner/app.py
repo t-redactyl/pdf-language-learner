@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import sqlite3
 import threading
 import unicodedata
@@ -719,6 +720,131 @@ def canonicalize(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+def vocabulary_table_slug(language: str) -> str:
+    ascii_language = unicodedata.normalize("NFKD", canonicalize(language)).encode(
+        "ascii", "ignore"
+    ).decode()
+    slug = re.sub(r"[^a-z0-9]+", "_", ascii_language).strip("_")
+    return slug or f"language_{uuid.uuid5(uuid.NAMESPACE_URL, canonicalize(language)).hex[:8]}"
+
+
+def create_vocabulary_table(connection: sqlite3.Connection, table_name: str) -> None:
+    if not re.fullmatch(r"vocabulary_[a-z0-9_]+", table_name):
+        raise ValueError("Invalid vocabulary table name")
+    connection.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            id TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            original_source TEXT NOT NULL,
+            normalized_source TEXT NOT NULL,
+            canonical_source TEXT NOT NULL,
+            translation TEXT NOT NULL,
+            source_language TEXT NOT NULL,
+            canonical_source_language TEXT NOT NULL,
+            target_language TEXT NOT NULL,
+            context TEXT NOT NULL DEFAULT '',
+            document_key TEXT NOT NULL DEFAULT '',
+            saved_at TEXT NOT NULL,
+            last_reviewed_at TEXT,
+            next_review_at TEXT,
+            repetitions INTEGER NOT NULL DEFAULT 0,
+            lapses INTEGER NOT NULL DEFAULT 0,
+            consecutive_correct INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    connection.execute(
+        f"""
+        CREATE UNIQUE INDEX IF NOT EXISTS {table_name}_normalized_source
+            ON {table_name} (canonical_source)
+        """
+    )
+
+
+def language_table(
+    connection: sqlite3.Connection, language: str, *, create: bool = False
+) -> str | None:
+    canonical_language = canonicalize(language)
+    row = connection.execute(
+        """
+        SELECT table_name FROM vocabulary_languages
+        WHERE canonical_language = ?
+        """,
+        (canonical_language,),
+    ).fetchone()
+    if row is not None:
+        return row["table_name"]
+    if not create:
+        return None
+
+    base_name = f"vocabulary_{vocabulary_table_slug(language)}"
+    table_name = base_name
+    collision = connection.execute(
+        "SELECT 1 FROM vocabulary_languages WHERE table_name = ?", (table_name,)
+    ).fetchone()
+    if collision is not None:
+        suffix = uuid.uuid5(uuid.NAMESPACE_URL, canonical_language).hex[:8]
+        table_name = f"{base_name}_{suffix}"
+    create_vocabulary_table(connection, table_name)
+    connection.execute(
+        """
+        INSERT INTO vocabulary_languages (
+            canonical_language, display_name, table_name
+        ) VALUES (?, ?, ?)
+        """,
+        (canonical_language, language.strip(), table_name),
+    )
+    return table_name
+
+
+def registered_language_tables(
+    connection: sqlite3.Connection,
+) -> list[sqlite3.Row]:
+    return connection.execute(
+        """
+        SELECT display_name, table_name
+        FROM vocabulary_languages
+        ORDER BY display_name COLLATE NOCASE
+        """
+    ).fetchall()
+
+
+def migrate_legacy_vocabulary(connection: sqlite3.Connection) -> None:
+    legacy_exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vocabulary'"
+    ).fetchone()
+    if legacy_exists is None:
+        return
+
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(vocabulary)").fetchall()
+    }
+    if "consecutive_correct" not in columns:
+        connection.execute(
+            """
+            ALTER TABLE vocabulary
+            ADD COLUMN consecutive_correct INTEGER NOT NULL DEFAULT 0
+            """
+        )
+    rows = connection.execute("SELECT * FROM vocabulary").fetchall()
+    column_names = (
+        "id, schema_version, original_source, normalized_source, canonical_source, "
+        "translation, source_language, canonical_source_language, target_language, "
+        "context, document_key, saved_at, last_reviewed_at, next_review_at, "
+        "repetitions, lapses, consecutive_correct"
+    )
+    placeholders = ", ".join("?" for _ in range(17))
+    for row in rows:
+        table_name = language_table(connection, row["source_language"], create=True)
+        connection.execute(
+            f"INSERT OR IGNORE INTO {table_name} ({column_names}) VALUES ({placeholders})",
+            tuple(row[name.strip()] for name in column_names.split(",")),
+        )
+    connection.execute("DROP TABLE vocabulary")
+
+
 @contextmanager
 def vocabulary_database() -> Iterator[sqlite3.Connection]:
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -728,44 +854,14 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute(
             """
-            CREATE TABLE IF NOT EXISTS vocabulary (
-                id TEXT PRIMARY KEY,
-                schema_version INTEGER NOT NULL DEFAULT 1,
-                original_source TEXT NOT NULL,
-                normalized_source TEXT NOT NULL,
-                canonical_source TEXT NOT NULL,
-                translation TEXT NOT NULL,
-                source_language TEXT NOT NULL,
-                canonical_source_language TEXT NOT NULL,
-                target_language TEXT NOT NULL,
-                context TEXT NOT NULL DEFAULT '',
-                document_key TEXT NOT NULL DEFAULT '',
-                saved_at TEXT NOT NULL,
-                last_reviewed_at TEXT,
-                next_review_at TEXT,
-                repetitions INTEGER NOT NULL DEFAULT 0,
-                lapses INTEGER NOT NULL DEFAULT 0,
-                consecutive_correct INTEGER NOT NULL DEFAULT 0
+            CREATE TABLE IF NOT EXISTS vocabulary_languages (
+                canonical_language TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                table_name TEXT NOT NULL UNIQUE
             )
             """
         )
-        columns = {
-            row["name"]
-            for row in connection.execute("PRAGMA table_info(vocabulary)").fetchall()
-        }
-        if "consecutive_correct" not in columns:
-            connection.execute(
-                """
-                ALTER TABLE vocabulary
-                ADD COLUMN consecutive_correct INTEGER NOT NULL DEFAULT 0
-                """
-            )
-        connection.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS vocabulary_normalized_source
-                ON vocabulary (canonical_source_language, canonical_source)
-            """
-        )
+        migrate_legacy_vocabulary(connection)
         yield connection
         connection.commit()
     finally:
@@ -930,12 +1026,34 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/vocabulary", response_model=list[VocabularyItem])
-def list_vocabulary() -> list[VocabularyItem]:
+@app.get("/api/vocabulary/languages", response_model=list[str])
+def list_vocabulary_languages() -> list[str]:
     with vocabulary_database() as connection:
-        rows = connection.execute(
-            "SELECT * FROM vocabulary ORDER BY saved_at DESC"
-        ).fetchall()
+        languages = [row["display_name"] for row in registered_language_tables(connection)]
+    return languages
+
+
+@app.get("/api/vocabulary", response_model=list[VocabularyItem])
+def list_vocabulary(language: str | None = None) -> list[VocabularyItem]:
+    with vocabulary_database() as connection:
+        if language is not None:
+            table_name = language_table(connection, language)
+            rows = (
+                connection.execute(
+                    f"SELECT * FROM {table_name} ORDER BY saved_at DESC"
+                ).fetchall()
+                if table_name is not None
+                else []
+            )
+        else:
+            rows = [
+                row
+                for registered in registered_language_tables(connection)
+                for row in connection.execute(
+                    f"SELECT * FROM {registered['table_name']}"
+                ).fetchall()
+            ]
+            rows.sort(key=lambda row: row["saved_at"], reverse=True)
     return [vocabulary_item(row) for row in rows]
 
 
@@ -946,9 +1064,10 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
     canonical_source = canonicalize(request.normalized_source)
     canonical_language = canonicalize(request.source_language)
     with vocabulary_database() as connection:
+        table_name = language_table(connection, request.source_language, create=True)
         cursor = connection.execute(
-            """
-            INSERT OR IGNORE INTO vocabulary (
+            f"""
+            INSERT OR IGNORE INTO {table_name} (
                 id, original_source, normalized_source, canonical_source,
                 translation, source_language, canonical_source_language,
                 target_language, context, document_key, saved_at
@@ -970,13 +1089,12 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
         )
         created = cursor.rowcount == 1
         row = connection.execute(
-            """
+            f"""
             SELECT *
-            FROM vocabulary
-            WHERE canonical_source_language = ?
-              AND canonical_source = ?
+            FROM {table_name}
+            WHERE canonical_source = ?
             """,
-            (canonical_language, canonical_source),
+            (canonical_source,),
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=500, detail="Vocabulary could not be saved")
@@ -986,18 +1104,39 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
 @app.delete("/api/vocabulary/{item_id}", status_code=204)
 def delete_vocabulary(item_id: str) -> Response:
     with vocabulary_database() as connection:
-        cursor = connection.execute("DELETE FROM vocabulary WHERE id = ?", (item_id,))
-    if cursor.rowcount == 0:
+        deleted = False
+        for registered in registered_language_tables(connection):
+            cursor = connection.execute(
+                f"DELETE FROM {registered['table_name']} WHERE id = ?", (item_id,)
+            )
+            if cursor.rowcount:
+                deleted = True
+                break
+    if not deleted:
         raise HTTPException(status_code=404, detail="Saved vocabulary item not found")
     return Response(status_code=204)
 
 
 @app.get("/api/revision/session", response_model=RevisionSession)
-def revision_session(limit: int = 40) -> RevisionSession:
+def revision_session(language: str | None = None, limit: int = 40) -> RevisionSession:
     limit = max(1, min(limit, 100))
     now = datetime.now(UTC)
     with vocabulary_database() as connection:
-        rows = connection.execute("SELECT * FROM vocabulary").fetchall()
+        if language is not None:
+            table_name = language_table(connection, language)
+            rows = (
+                connection.execute(f"SELECT * FROM {table_name}").fetchall()
+                if table_name is not None
+                else []
+            )
+        else:
+            rows = [
+                row
+                for registered in registered_language_tables(connection)
+                for row in connection.execute(
+                    f"SELECT * FROM {registered['table_name']}"
+                ).fetchall()
+            ]
 
     eligible_rows = [
         row
@@ -1020,9 +1159,16 @@ def revision_session(limit: int = 40) -> RevisionSession:
 def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResult:
     reviewed_at = datetime.now(UTC)
     with vocabulary_database() as connection:
-        row = connection.execute(
-            "SELECT * FROM vocabulary WHERE id = ?", (item_id,)
-        ).fetchone()
+        row = None
+        table_name = None
+        for registered in registered_language_tables(connection):
+            candidate_table = registered["table_name"]
+            row = connection.execute(
+                f"SELECT * FROM {candidate_table} WHERE id = ?", (item_id,)
+            ).fetchone()
+            if row is not None:
+                table_name = candidate_table
+                break
         if row is None:
             raise HTTPException(status_code=404, detail="Vocabulary item not found")
 
@@ -1037,8 +1183,8 @@ def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResu
             schedule_state(row), correct=correct, reviewed_at=reviewed_at
         )
         connection.execute(
-            """
-            UPDATE vocabulary
+            f"""
+            UPDATE {table_name}
             SET last_reviewed_at = ?, next_review_at = ?, repetitions = ?,
                 lapses = ?, consecutive_correct = ?
             WHERE id = ?
@@ -1053,7 +1199,7 @@ def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResu
             ),
         )
         updated_row = connection.execute(
-            "SELECT * FROM vocabulary WHERE id = ?", (item_id,)
+            f"SELECT * FROM {table_name} WHERE id = ?", (item_id,)
         ).fetchone()
 
     return RevisionAnswerResult(

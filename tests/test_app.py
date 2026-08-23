@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -855,6 +856,7 @@ def vocabulary_database(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "pdf_language_learner.app.DATABASE_PATH", tmp_path / "margin.db"
     )
+    return tmp_path
 
 
 def vocabulary_payload(**overrides) -> dict[str, str]:
@@ -905,7 +907,7 @@ def test_vocabulary_deduplicates_normalized_form(vocabulary_database) -> None:
 
 
 def test_vocabulary_keeps_same_spelling_from_different_languages(
-        vocabulary_database,
+    vocabulary_database,
 ) -> None:
     client.post("/api/vocabulary", json=vocabulary_payload())
     second = client.post(
@@ -915,6 +917,91 @@ def test_vocabulary_keeps_same_spelling_from_different_languages(
 
     assert second.json()["created"] is True
     assert len(client.get("/api/vocabulary").json()) == 2
+
+
+def test_vocabulary_uses_and_lists_language_specific_tables(
+    vocabulary_database,
+) -> None:
+    client.post("/api/vocabulary", json=vocabulary_payload())
+    client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(
+            original_source="books",
+            normalized_source="book",
+            source_language="English",
+            translation="Buch",
+            target_language="German",
+        ),
+    )
+
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+
+    assert "vocabulary" not in tables
+    assert {"vocabulary_german", "vocabulary_english"} <= tables
+    assert client.get("/api/vocabulary/languages").json() == ["English", "German"]
+    german = client.get("/api/vocabulary", params={"language": "German"}).json()
+    english = client.get("/api/vocabulary", params={"language": "English"}).json()
+    assert [item["normalized_source"] for item in german] == ["Wort"]
+    assert [item["normalized_source"] for item in english] == ["book"]
+
+
+def test_legacy_vocabulary_table_is_migrated(vocabulary_database) -> None:
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            """
+            CREATE TABLE vocabulary (
+                id TEXT PRIMARY KEY,
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                original_source TEXT NOT NULL,
+                normalized_source TEXT NOT NULL,
+                canonical_source TEXT NOT NULL,
+                translation TEXT NOT NULL,
+                source_language TEXT NOT NULL,
+                canonical_source_language TEXT NOT NULL,
+                target_language TEXT NOT NULL,
+                context TEXT NOT NULL DEFAULT '',
+                document_key TEXT NOT NULL DEFAULT '',
+                saved_at TEXT NOT NULL,
+                last_reviewed_at TEXT,
+                next_review_at TEXT,
+                repetitions INTEGER NOT NULL DEFAULT 0,
+                lapses INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO vocabulary (
+                id, original_source, normalized_source, canonical_source,
+                translation, source_language, canonical_source_language,
+                target_language, context, document_key, saved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-id", "Wörter", "Wort", "wort", "word", "German",
+                "german", "English", "Viele Wörter.", "legacy-document",
+                "2026-08-23T12:00:00+00:00",
+            ),
+        )
+
+    assert client.get("/api/vocabulary/languages").json() == ["German"]
+    items = client.get("/api/vocabulary", params={"language": "German"}).json()
+    assert [item["id"] for item in items] == ["legacy-id"]
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    assert "vocabulary" not in tables
+    assert "vocabulary_german" in tables
 
 
 def test_vocabulary_can_be_deleted(vocabulary_database) -> None:
@@ -958,6 +1045,31 @@ def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:
     }
     assert all(2 <= len(card["choices"]) <= 4 for card in session["cards"])
     assert all(card["category"] == "new" for card in session["cards"])
+
+
+def test_revision_session_only_uses_selected_language(vocabulary_database) -> None:
+    german = save_revision_vocabulary()
+    for source, translation in (("book", "Buch"), ("cat", "Katze")):
+        client.post(
+            "/api/vocabulary",
+            json=vocabulary_payload(
+                original_source=source,
+                normalized_source=source,
+                translation=translation,
+                source_language="English",
+                target_language="German",
+            ),
+        )
+
+    session = client.get(
+        "/api/revision/session", params={"language": "German"}
+    ).json()
+
+    assert session["due_count"] == 4
+    assert {card["item_id"] for card in session["cards"]} == {
+        item["id"] for item in german
+    }
+    assert all(card["source_language"] == "German" for card in session["cards"])
 
 
 def test_correct_revision_is_persisted_and_no_longer_due(
