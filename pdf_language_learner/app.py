@@ -1,4 +1,5 @@
 import os
+import random
 import sqlite3
 import unicodedata
 import uuid
@@ -13,6 +14,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from ollama import Client
 from pydantic import BaseModel, Field, field_validator
+
+from pdf_language_learner.revision import (
+    RevisionCategory,
+    RevisionDirection,
+    ScheduleState,
+    is_due,
+    parse_timestamp,
+    revision_category,
+    schedule_review,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -146,6 +157,41 @@ class VocabularySaveResult(BaseModel):
     created: bool
 
 
+class RevisionCard(BaseModel):
+    item_id: str
+    prompt: str
+    direction: RevisionDirection
+    choices: list[str]
+    category: RevisionCategory
+    source_language: str
+    target_language: str
+
+
+class RevisionSession(BaseModel):
+    cards: list[RevisionCard]
+    due_count: int
+
+
+class RevisionAnswer(BaseModel):
+    direction: RevisionDirection
+    selected_answer: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("selected_answer")
+    @classmethod
+    def strip_answer(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+
+class RevisionAnswerResult(BaseModel):
+    correct: bool
+    correct_answer: str
+    category: RevisionCategory
+    item: VocabularyItem
+
+
 def normalize_source(text: str, source_language: str) -> str:
     language = LEMMATIZER_LANGUAGES.get(source_language.casefold())
     if language is None or len(text.split()) != 1:
@@ -182,10 +228,22 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
                 last_reviewed_at TEXT,
                 next_review_at TEXT,
                 repetitions INTEGER NOT NULL DEFAULT 0,
-                lapses INTEGER NOT NULL DEFAULT 0
+                lapses INTEGER NOT NULL DEFAULT 0,
+                consecutive_correct INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(vocabulary)").fetchall()
+        }
+        if "consecutive_correct" not in columns:
+            connection.execute(
+                """
+                ALTER TABLE vocabulary
+                ADD COLUMN consecutive_correct INTEGER NOT NULL DEFAULT 0
+                """
+            )
         connection.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS vocabulary_normalized_source
@@ -216,6 +274,129 @@ def vocabulary_item(row: sqlite3.Row) -> VocabularyItem:
             repetitions=row["repetitions"],
             lapses=row["lapses"],
         ),
+    )
+
+
+def schedule_state(row: sqlite3.Row) -> ScheduleState:
+    return ScheduleState(
+        repetitions=row["repetitions"],
+        lapses=row["lapses"],
+        consecutive_correct=row["consecutive_correct"],
+        last_reviewed_at=parse_timestamp(row["last_reviewed_at"]),
+        next_review_at=parse_timestamp(row["next_review_at"]),
+    )
+
+
+def select_session_rows(
+    rows: list[sqlite3.Row], *, now: datetime, limit: int
+) -> list[sqlite3.Row]:
+    """Choose a balanced session while never showing a card before it is due."""
+
+    groups: dict[RevisionCategory, list[sqlite3.Row]] = {
+        category: [] for category in RevisionCategory
+    }
+    for row in rows:
+        state = schedule_state(row)
+        if is_due(state, at=now):
+            groups[revision_category(state)].append(row)
+
+    generator = random.SystemRandom()
+    for group in groups.values():
+        generator.shuffle(group)
+
+    new_limit = min(8, max(1, round(limit * 0.2)))
+    targets = {
+        RevisionCategory.NEEDS_PRACTICE: round(limit * 0.35),
+        RevisionCategory.USUALLY_CORRECT: round(limit * 0.30),
+        RevisionCategory.ALWAYS_CORRECT: round(limit * 0.15),
+        RevisionCategory.NEW: new_limit,
+    }
+    selected: list[sqlite3.Row] = []
+    for category in (
+        RevisionCategory.NEEDS_PRACTICE,
+        RevisionCategory.USUALLY_CORRECT,
+        RevisionCategory.ALWAYS_CORRECT,
+        RevisionCategory.NEW,
+    ):
+        selected.extend(groups[category][: targets[category]])
+        groups[category] = groups[category][targets[category] :]
+
+    for category in (
+        RevisionCategory.NEEDS_PRACTICE,
+        RevisionCategory.USUALLY_CORRECT,
+        RevisionCategory.ALWAYS_CORRECT,
+        RevisionCategory.NEW,
+    ):
+        if len(selected) >= limit:
+            break
+        capacity = limit - len(selected)
+        if category is RevisionCategory.NEW:
+            already_new = sum(
+                revision_category(schedule_state(row)) is RevisionCategory.NEW
+                for row in selected
+            )
+            capacity = min(capacity, max(0, new_limit - already_new))
+        selected.extend(groups[category][:capacity])
+
+    generator.shuffle(selected)
+    return selected[:limit]
+
+
+def revision_choices(
+    row: sqlite3.Row,
+    rows: list[sqlite3.Row],
+    direction: RevisionDirection,
+) -> list[str]:
+    answer_field = (
+        "translation"
+        if direction is RevisionDirection.SOURCE_TO_TRANSLATION
+        else "normalized_source"
+    )
+    compatible = [
+        candidate[answer_field]
+        for candidate in rows
+        if canonicalize(candidate["source_language"])
+        == canonicalize(row["source_language"])
+        and canonicalize(candidate["target_language"])
+        == canonicalize(row["target_language"])
+    ]
+    unique = {
+        canonicalize(value): value
+        for value in compatible
+        if canonicalize(value) != canonicalize(row[answer_field])
+    }
+    distractors = list(unique.values())
+    generator = random.SystemRandom()
+    generator.shuffle(distractors)
+    choices = [row[answer_field], *distractors[:3]]
+    generator.shuffle(choices)
+    return choices
+
+
+def revision_card(
+    row: sqlite3.Row, rows: list[sqlite3.Row]
+) -> RevisionCard | None:
+    directions = [
+        direction
+        for direction in RevisionDirection
+        if len(revision_choices(row, rows, direction)) >= 2
+    ]
+    if not directions:
+        return None
+    direction = random.SystemRandom().choice(directions)
+    prompt_field = (
+        "normalized_source"
+        if direction is RevisionDirection.SOURCE_TO_TRANSLATION
+        else "translation"
+    )
+    return RevisionCard(
+        item_id=row["id"],
+        prompt=row[prompt_field],
+        direction=direction,
+        choices=revision_choices(row, rows, direction),
+        category=revision_category(schedule_state(row)),
+        source_language=row["source_language"],
+        target_language=row["target_language"],
     )
 
 
@@ -293,6 +474,78 @@ def delete_vocabulary(item_id: str) -> Response:
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Saved vocabulary item not found")
     return Response(status_code=204)
+
+
+@app.get("/api/revision/session", response_model=RevisionSession)
+def revision_session(limit: int = 40) -> RevisionSession:
+    limit = max(1, min(limit, 100))
+    now = datetime.now(UTC)
+    with vocabulary_database() as connection:
+        rows = connection.execute("SELECT * FROM vocabulary").fetchall()
+
+    eligible_rows = [
+        row
+        for row in rows
+        if any(len(revision_choices(row, rows, direction)) >= 2 for direction in RevisionDirection)
+    ]
+    due_count = sum(is_due(schedule_state(row), at=now) for row in eligible_rows)
+    selected = select_session_rows(eligible_rows, now=now, limit=limit)
+    cards = [revision_card(row, rows) for row in selected]
+    return RevisionSession(
+        cards=[card for card in cards if card is not None],
+        due_count=due_count,
+    )
+
+
+@app.post(
+    "/api/revision/{item_id}/answer",
+    response_model=RevisionAnswerResult,
+)
+def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResult:
+    reviewed_at = datetime.now(UTC)
+    with vocabulary_database() as connection:
+        row = connection.execute(
+            "SELECT * FROM vocabulary WHERE id = ?", (item_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Vocabulary item not found")
+
+        answer_field = (
+            "translation"
+            if request.direction is RevisionDirection.SOURCE_TO_TRANSLATION
+            else "normalized_source"
+        )
+        correct_answer = row[answer_field]
+        correct = canonicalize(request.selected_answer) == canonicalize(correct_answer)
+        updated = schedule_review(
+            schedule_state(row), correct=correct, reviewed_at=reviewed_at
+        )
+        connection.execute(
+            """
+            UPDATE vocabulary
+            SET last_reviewed_at = ?, next_review_at = ?, repetitions = ?,
+                lapses = ?, consecutive_correct = ?
+            WHERE id = ?
+            """,
+            (
+                updated.last_reviewed_at.isoformat(),
+                updated.next_review_at.isoformat(),
+                updated.repetitions,
+                updated.lapses,
+                updated.consecutive_correct,
+                item_id,
+            ),
+        )
+        updated_row = connection.execute(
+            "SELECT * FROM vocabulary WHERE id = ?", (item_id,)
+        ).fetchone()
+
+    return RevisionAnswerResult(
+        correct=correct,
+        correct_answer=correct_answer,
+        category=revision_category(updated),
+        item=vocabulary_item(updated_row),
+    )
 
 
 @app.post("/api/detect-language", response_model=LanguageDetectionResult)
@@ -377,27 +630,3 @@ def translate(request: TranslationRequest) -> TranslationResult:
             status_code=502,
             detail=f"Local translation model failed: {exc}",
         ) from exc
-
-    # if not os.getenv("OPENAI_API_KEY"):
-    #     raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
-    #
-    # try:
-    #     response = OpenAI().responses.parse(
-    #         model=os.getenv("OPENAI_MODEL", "gpt-5-mini"),
-    #         instructions=(
-    #             "You are a precise translator for a language-learning reading app. "
-    #             "Detect the input language, then translate into the requested language. "
-    #             "Preserve tone and meaning. Return only the requested structured result."
-    #         ),
-    #         input=(
-    #             f"Target language: {request.target_language}\n"
-    #             f"Text to detect and translate:\n{request.text}"
-    #         ),
-    #         text_format=TranslationResult,
-    #     )
-    # except Exception as exc:
-    #     raise HTTPException(status_code=502, detail="Translation service failed") from exc
-    #
-    # if response.output_parsed is None:
-    #     raise HTTPException(status_code=502, detail="Translation service returned no result")
-    # return response.output_parsed

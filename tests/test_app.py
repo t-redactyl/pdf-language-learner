@@ -18,6 +18,7 @@ def test_home_serves_reader() -> None:
     assert response.status_code == 200
     assert "PDF language reader" in response.text
     assert 'id="saved-vocabulary-list"' in response.text
+    assert 'id="revision-view"' in response.text
 
 
 def test_detect_language_uses_document_sample(monkeypatch) -> None:
@@ -185,3 +186,105 @@ def test_vocabulary_can_be_deleted(vocabulary_database) -> None:
     assert client.delete(f"/api/vocabulary/{item_id}").status_code == 204
     assert client.get("/api/vocabulary").json() == []
     assert client.delete(f"/api/vocabulary/{item_id}").status_code == 404
+
+
+def save_revision_vocabulary() -> list[dict]:
+    words = [
+        ("Wort", "word"),
+        ("Haus", "house"),
+        ("Katze", "cat"),
+        ("Buch", "book"),
+    ]
+    return [
+        client.post(
+            "/api/vocabulary",
+            json=vocabulary_payload(
+                original_source=source,
+                normalized_source=source,
+                translation=translation,
+            ),
+        ).json()["item"]
+        for source, translation in words
+    ]
+
+
+def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:
+    saved = save_revision_vocabulary()
+
+    response = client.get("/api/revision/session")
+
+    assert response.status_code == 200
+    session = response.json()
+    assert session["due_count"] == 4
+    assert {card["item_id"] for card in session["cards"]} == {
+        item["id"] for item in saved
+    }
+    assert all(2 <= len(card["choices"]) <= 4 for card in session["cards"])
+    assert all(card["category"] == "new" for card in session["cards"])
+
+
+def test_correct_revision_is_persisted_and_no_longer_due(
+    vocabulary_database,
+) -> None:
+    saved = save_revision_vocabulary()
+    item = saved[0]
+
+    response = client.post(
+        f"/api/revision/{item['id']}/answer",
+        json={
+            "direction": "source_to_translation",
+            "selected_answer": " WORD ",
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["correct"] is True
+    assert result["correct_answer"] == "word"
+    assert result["category"] == "usually_correct"
+    assert result["item"]["review"]["repetitions"] == 1
+    assert result["item"]["review"]["lapses"] == 0
+    session = client.get("/api/revision/session").json()
+    assert session["due_count"] == 3
+    assert item["id"] not in {card["item_id"] for card in session["cards"]}
+
+
+def test_incorrect_revision_records_lapse(vocabulary_database) -> None:
+    item = save_revision_vocabulary()[0]
+
+    response = client.post(
+        f"/api/revision/{item['id']}/answer",
+        json={
+            "direction": "translation_to_source",
+            "selected_answer": "Haus",
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["correct"] is False
+    assert result["correct_answer"] == "Wort"
+    assert result["category"] == "needs_practice"
+    assert result["item"]["review"]["repetitions"] == 0
+    assert result["item"]["review"]["lapses"] == 1
+
+
+def test_revision_requires_distractors(vocabulary_database) -> None:
+    client.post("/api/vocabulary", json=vocabulary_payload())
+
+    assert client.get("/api/revision/session").json() == {
+        "cards": [],
+        "due_count": 0,
+    }
+
+
+def test_revision_of_unknown_word_returns_not_found(vocabulary_database) -> None:
+    response = client.post(
+        "/api/revision/missing/answer",
+        json={
+            "direction": "source_to_translation",
+            "selected_answer": "word",
+        },
+    )
+
+    assert response.status_code == 404

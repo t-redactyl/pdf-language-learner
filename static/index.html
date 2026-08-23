@@ -9,9 +9,44 @@
 <body>
   <header class="topbar">
     <a class="brand" href="/" aria-label="Margin home"><span>Margin</span><small>PDF language reader</small></a>
-    <label class="file-button">Open PDF<input id="pdf-input" type="file" accept="application/pdf"></label>
+    <div class="topbar-actions">
+      <button id="open-revision" class="secondary-button" type="button">Revise vocabulary</button>
+      <label class="file-button">Open PDF<input id="pdf-input" type="file" accept="application/pdf"></label>
+    </div>
   </header>
   <main>
+    <section id="revision-view" class="revision-view" aria-labelledby="revision-title" hidden>
+      <div class="revision-shell">
+        <div class="revision-heading">
+          <div>
+            <p class="eyebrow">Spaced repetition</p>
+            <h2 id="revision-title">Vocabulary revision</h2>
+          </div>
+          <button id="close-revision" class="text-button" type="button">Close</button>
+        </div>
+        <p id="revision-loading" class="revision-message">Preparing your due words…</p>
+        <div id="revision-empty" class="revision-message" hidden>
+          <h3 id="revision-empty-title">Nothing due right now</h3>
+          <p id="revision-empty-copy">Save at least two words in the same language pair to begin revising.</p>
+        </div>
+        <div id="revision-session" hidden>
+          <div class="revision-progress">
+            <span id="revision-progress-text"></span>
+            <span id="revision-score"></span>
+          </div>
+          <article class="revision-card">
+            <p id="revision-direction" class="eyebrow"></p>
+            <h3 id="revision-prompt"></h3>
+            <div id="revision-choices" class="revision-choices"></div>
+            <div id="revision-feedback" class="revision-feedback" aria-live="polite" hidden>
+              <p id="revision-feedback-title"></p>
+              <p id="revision-context" class="revision-context"></p>
+              <button id="revision-continue" class="primary-button" type="button">Continue</button>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
     <section id="empty-state" class="empty-state">
       <div class="empty-mark">M</div>
       <p class="eyebrow">Read beyond your vocabulary</p>
@@ -72,6 +107,7 @@
       </aside>
     </section>
   </main>
+  <script type="module" src="/static/revision.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

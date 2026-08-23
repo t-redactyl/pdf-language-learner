@@ -1,4 +1,5 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
+import { sentenceContaining } from "./text.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -140,8 +141,9 @@ function showSelection({ text, rectangles, context = "" }) {
 // models differ, which is exactly the mismatch this replaces.
 function readSelection(range, drag = null) {
   const selected = selectionGeometry(range, drag);
-  const context = selectionContext(range);
-  if (selected.text && selected.rectangles.length) return { ...selected, context };
+  if (selected.text && selected.rectangles.length) {
+    return { ...selected, context: selectionContext(range, selected.text) };
+  }
   // Chrome sometimes reports a range whose text is not empty but whose client
   // rectangles are degenerate. Quoting that text would leave the panel showing a
   // phrase with nothing highlighted, so a selection is only accepted when it
@@ -149,10 +151,12 @@ function readSelection(range, drag = null) {
   const text = range.toString().replace(/\s+/g, " ").trim();
   if (!text) return null;
   const rectangles = rangeRectangles(range);
-  return rectangles.length ? { text, rectangles, context } : null;
+  return rectangles.length
+    ? { text, rectangles, context: selectionContext(range, text) }
+    : null;
 }
 
-function selectionContext(range) {
+function selectionContext(range, selectedText) {
   const startElement = range.startContainer.nodeType === Node.ELEMENT_NODE
     ? range.startContainer
     : range.startContainer.parentElement;
@@ -165,13 +169,24 @@ function selectionContext(range) {
   const start = spans.indexOf(startElement.closest("span"));
   const end = spans.indexOf(endElement.closest("span"));
   if (start < 0 || end < 0) return "";
-  return spans
-    .slice(Math.max(0, Math.min(start, end) - 12), Math.max(start, end) + 13)
-    .map(span => textItemForSpan.get(span)?.str || span.textContent)
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 2000);
+  const selectedStart = Math.min(start, end);
+  const spanText = span => textItemForSpan.get(span)?.str || span.textContent;
+  const offsetWithinSpan = range.startContainer.nodeType === Node.TEXT_NODE
+    ? range.startOffset
+    : 0;
+  let context = "";
+  let approximateOffset = 0;
+  let previousRect = null;
+  spans.forEach((span, index) => {
+    const rect = span.getBoundingClientRect();
+    const separator = context ? separatorBefore(rect, previousRect) : "";
+    if (index === selectedStart) {
+      approximateOffset = context.length + separator.length + offsetWithinSpan;
+    }
+    context += separator + spanText(span);
+    previousRect = rect;
+  });
+  return sentenceContaining(context, selectedText, approximateOffset).slice(0, 2000);
 }
 
 function selectionGeometry(range, drag) {
