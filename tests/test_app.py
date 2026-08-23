@@ -1242,6 +1242,19 @@ def test_vocabulary_can_be_deleted(vocabulary_database) -> None:
     assert client.delete(f"/api/vocabulary/{item_id}").status_code == 404
 
 
+def test_deleted_vocabulary_is_removed_from_revision(vocabulary_database) -> None:
+    item_id = client.post(
+        "/api/vocabulary", json=vocabulary_payload()
+    ).json()["item"]["id"]
+
+    assert client.get("/api/revision/session").json()["due_count"] == 1
+    assert client.delete(f"/api/vocabulary/{item_id}").status_code == 204
+    assert client.get("/api/revision/session").json() == {
+        "cards": [],
+        "due_count": 0,
+    }
+
+
 def save_revision_vocabulary() -> list[dict]:
     words = [
         ("Wort", "word"),
@@ -1274,6 +1287,7 @@ def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:
         item["id"] for item in saved
     }
     assert all(2 <= len(card["choices"]) <= 4 for card in session["cards"])
+    assert all(card["exercise"] == "multiple_choice" for card in session["cards"])
     assert all(card["category"] == "new" for card in session["cards"])
 
 
@@ -1348,13 +1362,40 @@ def test_incorrect_revision_records_lapse(vocabulary_database) -> None:
     assert result["item"]["review"]["lapses"] == 1
 
 
-def test_revision_requires_distractors(vocabulary_database) -> None:
-    client.post("/api/vocabulary", json=vocabulary_payload())
+def test_revision_without_distractors_uses_typed_recall(vocabulary_database) -> None:
+    item = client.post("/api/vocabulary", json=vocabulary_payload()).json()["item"]
 
-    assert client.get("/api/revision/session").json() == {
-        "cards": [],
-        "due_count": 0,
-    }
+    session = client.get("/api/revision/session").json()
+
+    assert session["due_count"] == 1
+    assert len(session["cards"]) == 1
+    card = session["cards"][0]
+    assert card["item_id"] == item["id"]
+    assert card["exercise"] == "typed_recall"
+    assert card["choices"] == []
+    assert card["category"] == "new"
+
+
+def test_familiar_due_vocabulary_uses_typed_recall(vocabulary_database) -> None:
+    saved = save_revision_vocabulary()
+    item = saved[0]
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            """
+            UPDATE vocabulary_german
+            SET repetitions = 1, consecutive_correct = 1,
+                next_review_at = '2026-08-22T12:00:00+00:00'
+            WHERE id = ?
+            """,
+            (item["id"],),
+        )
+
+    session = client.get("/api/revision/session").json()
+    card = next(card for card in session["cards"] if card["item_id"] == item["id"])
+
+    assert card["category"] == "usually_correct"
+    assert card["exercise"] == "typed_recall"
+    assert card["choices"] == []
 
 
 def test_revision_of_unknown_word_returns_not_found(vocabulary_database) -> None:

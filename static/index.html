@@ -31,7 +31,7 @@
         <p id="revision-loading" class="revision-message">Preparing your due words…</p>
         <div id="revision-empty" class="revision-message" hidden>
           <h3 id="revision-empty-title">Nothing due right now</h3>
-          <p id="revision-empty-copy">Save at least two words in the same language pair to begin revising.</p>
+          <p id="revision-empty-copy">Save vocabulary while reading to build future revision sessions.</p>
         </div>
         <div id="revision-session" hidden>
           <div class="revision-progress">
@@ -41,7 +41,18 @@
           <article class="revision-card">
             <p id="revision-direction" class="eyebrow"></p>
             <h3 id="revision-prompt"></h3>
+            <div class="revision-card-actions">
+              <button id="revision-remove" class="text-button" type="button">Remove from revision</button>
+              <p id="revision-action-error" role="alert"></p>
+            </div>
             <div id="revision-choices" class="revision-choices"></div>
+            <form id="revision-recall" class="revision-recall" hidden>
+              <label for="revision-recall-answer">Type your answer</label>
+              <div class="revision-recall-controls">
+                <input id="revision-recall-answer" type="text" required maxlength="2000" autocomplete="off" autocapitalize="off" spellcheck="false">
+                <button class="primary-button" type="submit">Check answer</button>
+              </div>
+            </form>
             <div id="revision-feedback" class="revision-feedback" aria-live="polite" hidden>
               <p id="revision-feedback-title"></p>
               <p id="revision-context" class="revision-context"></p>
@@ -113,7 +124,7 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="/static/revision.js?v=2"></script>
-  <script type="module" src="/static/app.js?v=4"></script>
+  <script type="module" src="/static/revision.js?v=4"></script>
+  <script type="module" src="/static/app.js?v=5"></script>
 </body>
 </html>

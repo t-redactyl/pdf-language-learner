@@ -663,6 +663,13 @@ function renderSavedVocabulary() {
   });
 }
 
+document.addEventListener("margin:vocabulary-removed", event => {
+  const itemId = event.detail?.itemId;
+  if (!itemId) return;
+  savedVocabulary = savedVocabulary.filter(entry => entry.id !== itemId);
+  renderSavedVocabulary();
+});
+
 function translationFromControl(control) {
   const collection = control.dataset.translationCollection === "saved" ? savedVocabulary : translations;
   return collection[Number(control.dataset.translationIndex)];

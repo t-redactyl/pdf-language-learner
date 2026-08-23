@@ -26,6 +26,11 @@ class RevisionDirection(StrEnum):
     TRANSLATION_TO_SOURCE = "translation_to_source"
 
 
+class RevisionExercise(StrEnum):
+    MULTIPLE_CHOICE = "multiple_choice"
+    TYPED_RECALL = "typed_recall"
+
+
 @dataclass(frozen=True)
 class ScheduleState:
     """The persisted values needed to calculate one card's next review."""

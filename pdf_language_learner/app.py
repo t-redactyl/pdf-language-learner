@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, field_validator
 from pdf_language_learner.revision import (
     RevisionCategory,
     RevisionDirection,
+    RevisionExercise,
     ScheduleState,
     is_due,
     parse_timestamp,
@@ -521,6 +522,7 @@ class RevisionCard(BaseModel):
     item_id: str
     prompt: str
     direction: RevisionDirection
+    exercise: RevisionExercise
     choices: list[str]
     category: RevisionCategory
     source_language: str
@@ -1356,14 +1358,26 @@ def revision_choices(
 
 def revision_card(
     row: sqlite3.Row, rows: list[sqlite3.Row]
-) -> RevisionCard | None:
-    directions = [
+) -> RevisionCard:
+    multiple_choice_directions = [
         direction
         for direction in RevisionDirection
         if len(revision_choices(row, rows, direction)) >= 2
     ]
-    if not directions:
-        return None
+    category = revision_category(schedule_state(row))
+    exercise = (
+        RevisionExercise.TYPED_RECALL
+        if category in {
+            RevisionCategory.ALWAYS_CORRECT,
+            RevisionCategory.USUALLY_CORRECT,
+        } or not multiple_choice_directions
+        else RevisionExercise.MULTIPLE_CHOICE
+    )
+    directions = (
+        list(RevisionDirection)
+        if exercise is RevisionExercise.TYPED_RECALL
+        else multiple_choice_directions
+    )
     direction = random.SystemRandom().choice(directions)
     prompt_field = (
         "normalized_source"
@@ -1374,8 +1388,13 @@ def revision_card(
         item_id=row["id"],
         prompt=row[prompt_field],
         direction=direction,
-        choices=revision_choices(row, rows, direction),
-        category=revision_category(schedule_state(row)),
+        exercise=exercise,
+        choices=(
+            revision_choices(row, rows, direction)
+            if exercise is RevisionExercise.MULTIPLE_CHOICE
+            else []
+        ),
+        category=category,
         source_language=row["source_language"],
         target_language=row["target_language"],
     )
@@ -1507,16 +1526,10 @@ def revision_session(language: str | None = None, limit: int = 40) -> RevisionSe
                 ).fetchall()
             ]
 
-    eligible_rows = [
-        row
-        for row in rows
-        if any(len(revision_choices(row, rows, direction)) >= 2 for direction in RevisionDirection)
-    ]
-    due_count = sum(is_due(schedule_state(row), at=now) for row in eligible_rows)
-    selected = select_session_rows(eligible_rows, now=now, limit=limit)
-    cards = [revision_card(row, rows) for row in selected]
+    due_count = sum(is_due(schedule_state(row), at=now) for row in rows)
+    selected = select_session_rows(rows, now=now, limit=limit)
     return RevisionSession(
-        cards=[card for card in cards if card is not None],
+        cards=[revision_card(row, rows) for row in selected],
         due_count=due_count,
     )
 
