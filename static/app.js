@@ -95,6 +95,13 @@ document.querySelectorAll(".web-url-form").forEach(form => form.addEventListener
   }
 }));
 
+document.querySelectorAll(".url-clear-button").forEach(button => button.addEventListener("click", () => {
+  document.querySelectorAll(".web-url-form input[name=url]").forEach(input => { input.value = ""; });
+  setWebImportStatus("");
+  $("#error").textContent = "";
+  button.closest(".web-url-form")?.elements.url.focus();
+}));
+
 function setWebImportStatus(message) {
   document.querySelectorAll(".web-import-status").forEach(node => { node.textContent = message; });
   if (message && $("#reader").hidden === false) $("#error").textContent = message;

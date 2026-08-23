@@ -13,6 +13,8 @@ button,select,input { font:inherit; }
 .topbar-url-form { display:flex; }
 .topbar-url-form input { width:min(25vw,290px); padding:9px 11px; border:1px solid var(--line); border-right:0; background:white; }
 .topbar-url-form button { border-color:var(--line); background:var(--card); }
+.topbar-url-form .url-clear-button { padding:8px 11px; border:1px solid var(--line); border-right:0; color:#777c74; cursor:pointer; font-size:20px; line-height:1; }
+.topbar-url-form .url-clear-button:hover,.topbar-url-form .url-clear-button:focus-visible { color:var(--ink); background:white; }
 .secondary-button { padding:10px 16px; border:1px solid var(--ink); border-radius:2px; background:transparent; color:var(--ink); cursor:pointer; }
 input[type=file] { display:none; }
 .empty-state { max-width:760px; margin:15vh auto; padding:0 24px; text-align:center; }

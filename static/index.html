@@ -13,6 +13,7 @@
       <form class="web-url-form topbar-url-form">
         <label class="visually-hidden" for="topbar-web-url">Article or transcript URL</label>
         <input id="topbar-web-url" name="url" type="url" inputmode="url" placeholder="Paste an article URL" required>
+        <button class="url-clear-button" type="button" aria-label="Clear URL" title="Clear URL">×</button>
         <button class="secondary-button" type="submit">Open URL</button>
       </form>
       <button id="open-revision" class="secondary-button" type="button">Revise vocabulary</button>
@@ -78,6 +79,7 @@
         <label for="empty-web-url">Article or transcript URL</label>
         <div class="url-controls">
           <input id="empty-web-url" name="url" type="url" inputmode="url" placeholder="https://…" required>
+          <button class="secondary-button url-clear-button" type="button">Clear</button>
           <button class="primary-button" type="submit">Import page</button>
         </div>
         <p class="web-import-status error" role="alert"></p>
