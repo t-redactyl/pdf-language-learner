@@ -67,8 +67,9 @@ def test_translate_returns_normalized_words_across_languages(
             assert f"Dictionary form to translate: {normalized_source}" in (
                 kwargs["messages"][1]["content"]
             )
-            assert "Surrounding context: Ein Beispiel im Kontext." in (
-                kwargs["messages"][1]["content"]
+            assert (
+                "Surrounding context (do not translate): Ein Beispiel im Kontext."
+                in kwargs["messages"][1]["content"]
             )
             return SimpleNamespace(
                 message=SimpleNamespace(content=json.dumps({"translation": translation}))
@@ -88,8 +89,88 @@ def test_translate_returns_normalized_words_across_languages(
     assert response.status_code == 200
     assert response.json() == {
         "detected_language": source_language,
+        "is_word": True,
         "normalized_source": normalized_source,
         "translation": translation,
+    }
+
+
+def test_translate_retries_without_context_when_model_translates_excerpt(
+    monkeypatch,
+) -> None:
+    prompts = []
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            prompts.append(kwargs["messages"][1]["content"])
+            translation = (
+                "pleasant, compared to visiting Charlotte and her awful husband, "
+                "while her cold fingers were forgotten as she danced along the path, "
+                "occasionally stopping to admire the beautiful shapes of the "
+                "snowflakes that surrounded her on the long journey home"
+                if len(prompts) == 1
+                else "do"
+            )
+            return SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps({"translation": translation}))
+            )
+
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": "täte",
+            "source_language": "German",
+            "target_language": "English",
+            "context": "Ein langer Satz, der nicht übersetzt werden soll.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["normalized_source"] == "tun"
+    assert response.json()["translation"] == "do"
+    assert len(prompts) == 2
+    assert "(not available)" in prompts[1]
+
+
+def test_translate_phrase_without_normalizing_or_word_validation(monkeypatch) -> None:
+    phrase = "gingen nach Hause"
+    translated_phrase = "went home after the party when everybody was already tired"
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            prompt = kwargs["messages"][1]["content"]
+            assert f"Phrase to translate: {phrase}" in prompt
+            assert "Dictionary form to translate" not in prompt
+            return SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps({"translation": translated_phrase})
+                )
+            )
+
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": phrase,
+            "source_language": "German",
+            "target_language": "English",
+            "context": "Sie gingen nach Hause.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "detected_language": "German",
+        "is_word": False,
+        "normalized_source": phrase,
+        "translation": translated_phrase,
     }
 
 

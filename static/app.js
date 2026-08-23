@@ -393,6 +393,11 @@ $("#source-language").addEventListener("change", event => {
   if (!sourceLanguageOverride && !detectedSourceLanguage) detectDocumentLanguage();
 });
 
+function showNormalizedResult(source, isWord) {
+  $("#normalized-result").hidden = !isWord;
+  $("#normalized-text").textContent = source;
+}
+
 $("#translate-button").addEventListener("click", async () => {
   const button = $("#translate-button");
   button.disabled = true; button.textContent = "Translating…"; $("#error").textContent = "";
@@ -411,7 +416,9 @@ $("#translate-button").addEventListener("click", async () => {
       );
     }
     $("#detected-language").textContent = `Source ${data.detected_language}`;
-    $("#normalized-text").textContent = data.normalized_source;
+    const isWord = data.is_word === true
+      && selectedText.trim().split(/\s+/).length === 1;
+    showNormalizedResult(data.normalized_source, isWord);
     $("#translated-text").textContent = data.translation;
     $("#result").hidden = false;
     showCurrentHighlight(pendingHighlight);
@@ -426,6 +433,7 @@ $("#translate-button").addEventListener("click", async () => {
       context: selectedContext,
       documentKey: activeDocumentKey,
       createdAt: new Date().toISOString(),
+      isWord,
     });
   } catch (error) { $("#error").textContent = error.message; }
   finally { button.textContent = "Translate selection"; renderSourceLanguageState(); }
@@ -596,6 +604,8 @@ function createTranslationListItem(translation, index, collection) {
   translated.textContent = translation.translation;
   button.append(source, translated);
 
+  const isWord = translation.isWord
+    ?? String(translation.originalSource || translation.source || "").trim().split(/\s+/).length === 1;
   const saveButton = document.createElement("button");
   const isSaved = savedVocabularyIndex(translation) >= 0;
   saveButton.type = "button";
@@ -607,7 +617,8 @@ function createTranslationListItem(translation, index, collection) {
   saveButton.title = isSaved ? "Remove from saved vocabulary" : "Save for revision";
   saveButton.textContent = isSaved ? "★" : "☆";
 
-  item.append(button, saveButton);
+  item.append(button);
+  if (isWord || collection === "saved") item.append(saveButton);
   return item;
 }
 
@@ -650,7 +661,9 @@ function showTranslation(translation) {
   $("#selected-text").textContent = translation.originalSource || source;
   $("#target-language").value = translation.targetLanguage;
   $("#detected-language").textContent = `Source ${sourceLanguage}`;
-  $("#normalized-text").textContent = source;
+  const isWord = translation.isWord
+    ?? String(translation.originalSource || source).trim().split(/\s+/).length === 1;
+  showNormalizedResult(source, isWord);
   $("#translated-text").textContent = translation.translation;
   $("#selection-hint").hidden = true;
   $("#translation-content").hidden = false;

@@ -61,7 +61,7 @@
             <p id="saved-vocabulary-title" class="eyebrow">Saved vocabulary</p>
             <span id="saved-vocabulary-count" class="vocabulary-count" aria-live="polite"></span>
           </div>
-          <p id="saved-vocabulary-empty" class="history-empty">Save words and phrases from your translation history for later revision.</p>
+          <p id="saved-vocabulary-empty" class="history-empty">Save translated words for later revision.</p>
           <ol id="saved-vocabulary-list"></ol>
         </section>
         <section class="translation-history" aria-labelledby="translation-history-title">
@@ -97,8 +97,10 @@
           <button id="translate-button" class="primary-button" type="button" disabled>Translate selection</button>
           <div id="result" class="result" hidden>
             <span id="detected-language"></span>
-            <p class="result-label">Normalized</p>
-            <p id="normalized-text"></p>
+            <div id="normalized-result">
+              <p class="result-label">Normalized</p>
+              <p id="normalized-text"></p>
+            </div>
             <p class="result-label">Translation</p>
             <p id="translated-text"></p>
           </div>
@@ -108,6 +110,6 @@
     </section>
   </main>
   <script type="module" src="/static/revision.js"></script>
-  <script type="module" src="/static/app.js"></script>
+  <script type="module" src="/static/app.js?v=2"></script>
 </body>
 </html>

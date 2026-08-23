@@ -84,10 +84,13 @@ class LanguageDetectionResult(BaseModel):
 
 class TranslationResult(BaseModel):
     detected_language: str = Field(description="The source language in English")
+    is_word: bool = Field(
+        description="Whether the selected text is a single-word vocabulary lookup"
+    )
     normalized_source: str = Field(
         description=(
-            "The source text in its dictionary form, in the source language "
-            "(for example: singular nouns, infinitive verbs, and undeclined adjectives)"
+            "The source text in dictionary form for a word lookup, or the unchanged "
+            "source text for a phrase translation"
         )
     )
     translation: str = Field(
@@ -197,6 +200,76 @@ def normalize_source(text: str, source_language: str) -> str:
     if language is None or len(text.split()) != 1:
         return text
     return simplemma.lemmatize(text, lang=language) or text
+
+
+def is_sentence_like_word_translation(source: str, translation: str) -> bool:
+    """Detect when a one-word lookup was answered with contextual prose."""
+
+    if len(source.split()) != 1:
+        return False
+    return len(translation.split()) > 8 or len(translation) > 120
+
+
+def translation_messages(
+    *,
+    source: str,
+    source_language: str,
+    target_language: str,
+    context: str,
+    is_word: bool,
+) -> list[dict[str, str]]:
+    if not is_word:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise translator for a language-learning "
+                    "application. Translate the supplied phrase naturally into "
+                    "the requested target language. Preserve its meaning as used "
+                    "and do not rewrite it into dictionary form. Return only the "
+                    "translation, without an explanation. Use the surrounding "
+                    "context only to disambiguate the phrase; do not translate "
+                    "any additional text from the context."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Source language: {source_language}\n"
+                    f"Target language: {target_language}\n"
+                    f"Phrase to translate: {source}\n"
+                    f"Surrounding context (do not translate): "
+                    f"{context or '(not available)'}\n"
+                    "Translate the phrase only."
+                ),
+            },
+        ]
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a precise dictionary translator for a language-learning "
+                "application. Translate only the supplied dictionary form into "
+                "the requested target language. Return only a word or short "
+                "dictionary-style equivalent in the translation field, never a "
+                "sentence, excerpt, explanation, or example. Use the surrounding "
+                "context only to disambiguate meaning; never translate any part "
+                "of the context."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Source language: {source_language}\n"
+                f"Target language: {target_language}\n"
+                f"Dictionary form to translate: {source}\n"
+                f"Surrounding context (do not translate): "
+                f"{context or '(not available)'}\n"
+                "Translate the dictionary form only."
+            ),
+        },
+    ]
 
 
 def canonicalize(value: str) -> str:
@@ -586,41 +659,47 @@ def translate(request: TranslationRequest) -> TranslationResult:
             host=os.getenv("OLLAMA_HOST", "http://localhost:11434")
         )
         translation_model = os.getenv("OLLAMA_MODEL", "translategemma:4b")
-        normalized_source = normalize_source(request.text, request.source_language)
+        is_word = len(request.text.split()) == 1
+        normalized_source = (
+            normalize_source(request.text, request.source_language)
+            if is_word
+            else request.text
+        )
 
-        translation_response = client.chat(
-            model=translation_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a precise translator for a language-learning "
-                        "application. Translate the supplied dictionary form into "
-                        "the requested target language. Use the surrounding context "
-                        "only to choose the correct sense; translate the dictionary "
-                        "form, not the whole context."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Source language: {request.source_language}\n"
-                        f"Target language: {request.target_language}\n"
-                        f"Dictionary form to translate: {normalized_source}\n"
-                        f"Surrounding context: {request.context or '(not available)'}"
-                    ),
-                },
-            ],
-            format=TranslatedText.model_json_schema(),
-            keep_alive="30m",
-            options={"temperature": 0, "num_ctx": 1024, "num_predict": 512},
-        )
-        translated = TranslatedText.model_validate_json(
-            translation_response.message.content
-        )
+        def request_translation(context: str) -> TranslatedText:
+            response = client.chat(
+                model=translation_model,
+                messages=translation_messages(
+                    source=normalized_source,
+                    source_language=request.source_language,
+                    target_language=request.target_language,
+                    context=context,
+                    is_word=is_word,
+                ),
+                format=TranslatedText.model_json_schema(),
+                keep_alive="30m",
+                options={"temperature": 0, "num_ctx": 1024, "num_predict": 128},
+            )
+            return TranslatedText.model_validate_json(response.message.content)
+
+        translated = request_translation(request.context)
+        if is_word and request.context and is_sentence_like_word_translation(
+            normalized_source, translated.translation
+        ):
+            # Small local models occasionally translate the context despite the
+            # instruction. A context-free retry still gives a useful dictionary
+            # answer and prevents an excerpt from being saved as vocabulary.
+            translated = request_translation("")
+        if is_word and is_sentence_like_word_translation(
+            normalized_source, translated.translation
+        ):
+            raise ValueError(
+                "the model returned a sentence instead of a word translation"
+            )
 
         return TranslationResult(
             detected_language=request.source_language,
+            is_word=is_word,
             normalized_source=normalized_source,
             translation=translated.translation,
         )
