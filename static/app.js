@@ -430,8 +430,8 @@ $("#translate-button").addEventListener("click", async () => {
       );
     }
     $("#detected-language").textContent = `Source ${data.detected_language}`;
-    const isWord = data.is_word === true
-      && selectedText.trim().split(/\s+/).length === 1;
+    // The API can resolve a one-word selection to a known multi-word term.
+    const isWord = data.is_word === true;
     showNormalizedResult(data.normalized_source, isWord);
     $("#translated-text").textContent = data.translation;
     $("#result").hidden = false;

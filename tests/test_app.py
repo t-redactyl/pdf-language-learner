@@ -5,7 +5,13 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from pdf_language_learner.app import WordAnalysis, analyze_word_in_context, app
+from pdf_language_learner.app import (
+    MULTI_WORD_TERMS,
+    WordAnalysis,
+    analyze_word_in_context,
+    app,
+    multi_word_term_in_context,
+)
 
 client = TestClient(app)
 
@@ -508,6 +514,129 @@ def test_translate_phrase_without_normalizing_or_word_validation(monkeypatch) ->
         "is_word": False,
         "normalized_source": phrase,
         "translation": translated_phrase,
+    }
+
+
+@pytest.mark.parametrize(
+    ("text", "language", "context", "offset", "expected"),
+    [
+        ("veces", "Spanish", "A veces leo por la noche.", 2, "a veces"),
+        ("tal", "Spanish", "Tal vez venga mañana.", 0, "tal vez"),
+        ("eso", "Spanish", "No había pan; por eso salí.", 18, "por eso"),
+        (
+            "por",
+            "Spanish",
+            "Por la tarde, cuando vuelvo a casa.",
+            0,
+            "por la tarde",
+        ),
+        (
+            "por",
+            "Spanish",
+            "Por la noche, me preparo la cena.",
+            0,
+            "por la noche",
+        ),
+        (
+            "Beispiel",
+            "German",
+            "Das ist zum Beispiel üblich.",
+            12,
+            "zum Beispiel",
+        ),
+        ("Fall", "German", "Ich komme auf jeden Fall.", 20, "auf jeden Fall"),
+        (
+            "fin",
+            "Spanish",
+            "A fin de cuentas, no importa.",
+            2,
+            "a fin de cuentas",
+        ),
+        (
+            "Grunde",
+            "German",
+            "Das ist im Grunde genommen richtig.",
+            11,
+            "im Grunde genommen",
+        ),
+    ],
+)
+def test_multi_word_term_contains_selected_word(
+    text, language, context, offset, expected
+) -> None:
+    assert multi_word_term_in_context(text, language, context, offset) == expected
+
+
+@pytest.mark.parametrize("language", ["german", "spanish"])
+def test_multi_word_term_lexicon_is_broad_and_has_no_duplicates(language) -> None:
+    terms = MULTI_WORD_TERMS[language]
+    canonical_terms = [term.casefold() for term in terms]
+
+    assert len(terms) >= 100
+    assert len(canonical_terms) == len(set(canonical_terms))
+
+
+@pytest.mark.parametrize(
+    ("text", "context", "offset", "resolved_term", "translation"),
+    [
+        ("veces", "A veces leo por la noche.", 2, "a veces", "sometimes"),
+        (
+            "por",
+            "Por la tarde, cuando vuelvo a casa.",
+            0,
+            "por la tarde",
+            "in the afternoon",
+        ),
+        (
+            "por",
+            "Por la noche, me preparo la cena.",
+            0,
+            "por la noche",
+            "at night",
+        ),
+    ],
+)
+def test_translate_expands_selected_word_to_known_expression(
+    monkeypatch, text, context, offset, resolved_term, translation
+) -> None:
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            prompt = kwargs["messages"][1]["content"]
+            assert f"Phrase to translate: {resolved_term}" in prompt
+            return SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps({"translation": translation})
+                )
+            )
+
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: pytest.fail(
+            "known expressions must not use single-word analysis"
+        ),
+    )
+
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": text,
+            "source_language": "Spanish",
+            "target_language": "English",
+            "context": context,
+            "context_offset": offset,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "detected_language": "Spanish",
+        "is_word": True,
+        "normalized_source": resolved_term,
+        "translation": translation,
     }
 
 

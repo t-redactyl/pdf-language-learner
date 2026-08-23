@@ -79,6 +79,298 @@ DEFINITE_ARTICLES = {
     "spanish": ("el", "la"),
 }
 
+# Expressions in this lexicon are vocabulary terms even though they contain
+# spaces. Keep the entries in dictionary form; matching is case-insensitive
+# and tolerates PDF whitespace between their component words.
+MULTI_WORD_TERMS = {
+    "german": (
+        "ab und zu",
+        "allein schon",
+        "alles in allem",
+        "als Erstes",
+        "als Nächstes",
+        "als ob",
+        "an erster Stelle",
+        "an und für sich",
+        "anders als",
+        "anstatt zu",
+        "auf Anhieb",
+        "auf Dauer",
+        "auf der anderen Seite",
+        "auf der einen Seite",
+        "auf diese Art",
+        "auf diese Weise",
+        "auf einmal",
+        "auf jeden Fall",
+        "auf keinen Fall",
+        "auf lange Sicht",
+        "aus diesem Grund",
+        "bei Weitem",
+        "bis auf Weiteres",
+        "bis dahin",
+        "bis jetzt",
+        "bitte schön",
+        "da und dort",
+        "das heißt",
+        "des Weiteren",
+        "ein bisschen",
+        "ein für alle Mal",
+        "eines Tages",
+        "einer nach dem anderen",
+        "es sei denn",
+        "früher oder später",
+        "für gewöhnlich",
+        "für immer",
+        "für kurze Zeit",
+        "ganz und gar",
+        "ganz zu schweigen von",
+        "genau genommen",
+        "gern geschehen",
+        "gute Nacht",
+        "guten Abend",
+        "guten Morgen",
+        "guten Tag",
+        "Hand in Hand",
+        "herzlich willkommen",
+        "hin und wieder",
+        "im Allgemeinen",
+        "im Detail",
+        "im Endeffekt",
+        "im Ernst",
+        "im Gegensatz dazu",
+        "im Gegensatz zu",
+        "im Großen und Ganzen",
+        "im Grunde",
+        "im Grunde genommen",
+        "im Hinblick auf",
+        "im Laufe der Zeit",
+        "im Laufe von",
+        "im Nachhinein",
+        "im Prinzip",
+        "im Rahmen von",
+        "im Vergleich dazu",
+        "im Vergleich zu",
+        "im Voraus",
+        "im Wesentlichen",
+        "im Zusammenhang mit",
+        "in Anbetracht",
+        "in Bezug auf",
+        "in der Nähe von",
+        "in der Regel",
+        "in der Tat",
+        "in der Zwischenzeit",
+        "in diesem Fall",
+        "in erster Linie",
+        "in gewisser Weise",
+        "in letzter Zeit",
+        "in Wirklichkeit",
+        "je nachdem",
+        "kein Problem",
+        "keine Ahnung",
+        "kurz gesagt",
+        "mehr oder weniger",
+        "meiner Ansicht nach",
+        "meiner Meinung nach",
+        "mit anderen Worten",
+        "nach und nach",
+        "nach wie vor",
+        "nicht einmal",
+        "nicht mehr",
+        "noch einmal",
+        "noch lange nicht",
+        "noch nie",
+        "nun gut",
+        "ohne Weiteres",
+        "ohne Zweifel",
+        "Schritt für Schritt",
+        "seit Kurzem",
+        "seit Langem",
+        "so gut wie",
+        "so oder so",
+        "so schnell wie möglich",
+        "so viel wie möglich",
+        "Tag für Tag",
+        "tut mir leid",
+        "über kurz oder lang",
+        "unter anderem",
+        "unter keinen Umständen",
+        "vielen Dank",
+        "von Anfang an",
+        "von mir aus",
+        "von nun an",
+        "von Zeit zu Zeit",
+        "vor allem",
+        "weder noch",
+        "wenn auch",
+        "wie dem auch sei",
+        "wie gesagt",
+        "zu Ende",
+        "zu Fuß",
+        "zu Hause",
+        "zum Beispiel",
+        "zum Glück",
+        "zum größten Teil",
+        "zum Schluss",
+        "zum Teil",
+        "zur gleichen Zeit",
+    ),
+    "spanish": (
+        "a base de",
+        "a causa de",
+        "a continuación",
+        "a corto plazo",
+        "a diferencia de",
+        "a fin de",
+        "a fin de cuentas",
+        "a la larga",
+        "a la vez",
+        "a largo plazo",
+        "a lo largo de",
+        "a lo mejor",
+        "a menudo",
+        "a partir de",
+        "a pesar de",
+        "a primera vista",
+        "a propósito",
+        "a través de",
+        "a veces",
+        "al contrario",
+        "al fin",
+        "al fin y al cabo",
+        "al final",
+        "al lado de",
+        "al menos",
+        "al mismo tiempo",
+        "alrededor de",
+        "ante todo",
+        "antes de",
+        "aparte de",
+        "aquí y allá",
+        "así como",
+        "así que",
+        "aun así",
+        "bajo ningún concepto",
+        "buenas noches",
+        "buenas tardes",
+        "buenos días",
+        "cada vez",
+        "cada vez más",
+        "cada vez menos",
+        "cerca de",
+        "claro que no",
+        "claro que sí",
+        "como máximo",
+        "como mínimo",
+        "con el fin de",
+        "con respecto a",
+        "con tal de",
+        "cuanto antes",
+        "de acuerdo",
+        "de antemano",
+        "de hecho",
+        "de inmediato",
+        "de la misma manera",
+        "de nuevo",
+        "de ningún modo",
+        "de ninguna manera",
+        "de pronto",
+        "de repente",
+        "de todos modos",
+        "de vez en cuando",
+        "debajo de",
+        "debido a",
+        "delante de",
+        "dentro de",
+        "desde entonces",
+        "desde luego",
+        "después de",
+        "detrás de",
+        "día tras día",
+        "en absoluto",
+        "en adelante",
+        "en cambio",
+        "en caso de",
+        "en cuanto a",
+        "en efecto",
+        "en el fondo",
+        "en general",
+        "en lugar de",
+        "en medio de",
+        "en otras palabras",
+        "en particular",
+        "en primer lugar",
+        "en realidad",
+        "en resumen",
+        "en segundo lugar",
+        "en seguida",
+        "en serio",
+        "en todo caso",
+        "en torno a",
+        "en última instancia",
+        "en vano",
+        "en vez de",
+        "encima de",
+        "frente a",
+        "fuera de",
+        "gracias a",
+        "hasta ahora",
+        "hasta cierto punto",
+        "hasta luego",
+        "hasta pronto",
+        "hoy en día",
+        "junto a",
+        "lejos de",
+        "lo antes posible",
+        "lo siento",
+        "más allá de",
+        "más o menos",
+        "mientras tanto",
+        "ni más ni menos",
+        "ni siquiera",
+        "no obstante",
+        "paso a paso",
+        "poco a poco",
+        "por casualidad",
+        "por cierto",
+        "por consiguiente",
+        "por el contrario",
+        "por ejemplo",
+        "por eso",
+        "por favor",
+        "por fin",
+        "por el día",
+        "por la mañana",
+        "por la madrugada",
+        "por la noche",
+        "por la tarde",
+        "por las mañanas",
+        "por las noches",
+        "por las tardes",
+        "por lo general",
+        "por lo menos",
+        "por lo tanto",
+        "por otro lado",
+        "por otra parte",
+        "por primera vez",
+        "por si acaso",
+        "por supuesto",
+        "por último",
+        "por una parte",
+        "qué tal",
+        "sin duda",
+        "sin embargo",
+        "sin más",
+        "sin problema",
+        "sobre todo",
+        "tal vez",
+        "tan pronto como",
+        "tarde o temprano",
+        "una vez más",
+        "una y otra vez",
+        "ya que",
+    ),
+}
+
 
 class TranslationRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2_000)
@@ -123,7 +415,10 @@ class LanguageDetectionResult(BaseModel):
 class TranslationResult(BaseModel):
     detected_language: str = Field(description="The source language in English")
     is_word: bool = Field(
-        description="Whether the selected text is a single-word vocabulary lookup"
+        description=(
+            "Whether the selection resolves to a dictionary-style vocabulary "
+            "term, including a recognized multi-word expression"
+        )
     )
     normalized_source: str = Field(
         description=(
@@ -289,6 +584,49 @@ def normalize_source(text: str, source_language: str) -> str:
     if language is None or len(text.split()) != 1:
         return text
     return simplemma.lemmatize(text, lang=language) or text
+
+
+def multi_word_term_in_context(
+    text: str,
+    source_language: str,
+    context: str,
+    context_offset: int | None,
+) -> str | None:
+    """Return the longest known expression containing the selected text."""
+
+    terms = MULTI_WORD_TERMS.get(source_language.casefold(), ())
+    if not terms:
+        return None
+
+    selected_key = canonicalize(text)
+    ordered_terms = sorted(terms, key=lambda term: len(term.split()), reverse=True)
+    for term in ordered_terms:
+        if selected_key == canonicalize(term):
+            return term
+    if not context:
+        return None
+
+    selected_spans: list[tuple[int, int]] = []
+    if context_offset is not None and context_offset <= len(context):
+        selected_spans.append((context_offset, context_offset + len(text)))
+    else:
+        selected_pattern = re.compile(re.escape(text), re.IGNORECASE)
+        selected_spans.extend(
+            match.span() for match in selected_pattern.finditer(context)
+        )
+
+    for term in ordered_terms:
+        expression = r"(?<!\w)" + r"\s+".join(
+            re.escape(word) for word in term.split()
+        ) + r"(?!\w)"
+        for match in re.finditer(expression, context, re.IGNORECASE):
+            if any(
+                match.start() <= selected_start
+                and selected_end <= match.end()
+                for selected_start, selected_end in selected_spans
+            ):
+                return term
+    return None
 
 
 def morphological_features(word) -> dict[str, str]:
@@ -726,6 +1064,8 @@ def translation_messages(
                 "and a short dictionary-style translation, never a sentence, "
                 "excerpt, explanation, or example. Use the surrounding context "
                 "only to disambiguate meaning; never translate the context. "
+                "For a function word, return only its contextual equivalent; "
+                "never append translations of neighboring words. "
                 f"{form_instruction}"
             ),
         },
@@ -1277,7 +1617,15 @@ def translate(request: TranslationRequest) -> TranslationResult:
             host=os.getenv("OLLAMA_HOST", "http://localhost:11434")
         )
         translation_model = os.getenv("OLLAMA_MODEL", "translategemma:4b")
-        is_word = len(request.text.split()) == 1
+        multi_word_term = multi_word_term_in_context(
+            request.text,
+            request.source_language,
+            request.context,
+            request.context_offset,
+        )
+        is_single_word = multi_word_term is None and len(request.text.split()) == 1
+        is_term = is_single_word or multi_word_term is not None
+        source_text = multi_word_term or request.text
         word_analysis = (
             analyze_word_in_context(
                 request.text,
@@ -1285,7 +1633,7 @@ def translate(request: TranslationRequest) -> TranslationResult:
                 request.context,
                 request.context_offset,
             )
-            if is_word
+            if is_single_word
             else None
         )
         if (
@@ -1356,11 +1704,11 @@ def translate(request: TranslationRequest) -> TranslationResult:
             response = client.chat(
                 model=translation_model,
                 messages=translation_messages(
-                    source=request.text,
+                    source=source_text,
                     source_language=request.source_language,
                     target_language=request.target_language,
                     context=context,
-                    is_word=is_word,
+                    is_word=is_single_word,
                     word_analysis=word_analysis,
                 ),
                 format=response_schema,
@@ -1375,8 +1723,10 @@ def translate(request: TranslationRequest) -> TranslationResult:
             if isinstance(translated, NounTranslation)
             else translated.translation
         )
-        if is_word and request.context and is_sentence_like_word_translation(
-            translated_text
+        if (
+            is_single_word
+            and request.context
+            and is_sentence_like_word_translation(translated_text)
         ):
             # Small local models occasionally translate the context despite the
             # instruction. A context-free retry still gives a useful dictionary
@@ -1387,12 +1737,12 @@ def translate(request: TranslationRequest) -> TranslationResult:
                 if isinstance(translated, NounTranslation)
                 else translated.translation
             )
-        if is_word and is_sentence_like_word_translation(translated_text):
+        if is_single_word and is_sentence_like_word_translation(translated_text):
             raise ValueError(
                 "the model returned a sentence instead of a word translation"
             )
 
-        normalized_source = request.text
+        normalized_source = source_text
         translation = translated_text
         if word_analysis is not None:
             if word_analysis.pos in VERB_POS:
@@ -1418,7 +1768,7 @@ def translate(request: TranslationRequest) -> TranslationResult:
 
         return TranslationResult(
             detected_language=request.source_language,
-            is_word=is_word,
+            is_word=is_term,
             normalized_source=normalized_source,
             translation=translation,
         )
