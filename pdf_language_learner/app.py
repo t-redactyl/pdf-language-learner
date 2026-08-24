@@ -73,6 +73,7 @@ STANZA_LANGUAGES = {
 NOUN_POS = {"NOUN"}
 VERB_POS = {"VERB", "AUX"}
 STANZA_PIPELINE_LOCK = threading.Lock()
+RUNTIME_CACHE_SIZE = 512
 
 
 @lru_cache(maxsize=1)
@@ -967,6 +968,7 @@ def verb_analysis_with_dependents(
     )
 
 
+@lru_cache(maxsize=RUNTIME_CACHE_SIZE)
 def analyze_word_in_context(
     text: str,
     source_language: str,
@@ -1862,6 +1864,79 @@ def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResu
     )
 
 
+@lru_cache(maxsize=RUNTIME_CACHE_SIZE)
+def cached_verb_lemma_decision(
+    model: str,
+    analysis: WordAnalysis,
+    source_language: str,
+    context: str,
+) -> VerbLemmaDecision:
+    response = timed_ollama_chat(
+        ollama_client(),
+        "verb lemma classification",
+        model=model,
+        messages=verb_lemma_messages(analysis, source_language, context),
+        format=VerbLemmaDecision.model_json_schema(),
+        keep_alive=ollama_keep_alive(),
+        options={"temperature": 0, "num_ctx": 1024, "num_predict": 96},
+    )
+    return VerbLemmaDecision.model_validate_json(response.message.content)
+
+
+@lru_cache(maxsize=RUNTIME_CACHE_SIZE)
+def cached_source_noun_grammar(
+    model: str,
+    lemma: str,
+    source_language: str,
+) -> SourceNounGrammar:
+    response = timed_ollama_chat(
+        ollama_client(),
+        "source noun grammar",
+        model=model,
+        messages=source_article_messages(lemma, source_language),
+        format=source_article_schema(source_language),
+        keep_alive=ollama_keep_alive(),
+        options={"temperature": 0, "num_ctx": 256, "num_predict": 32},
+    )
+    return SourceNounGrammar.model_validate_json(response.message.content)
+
+
+@lru_cache(maxsize=RUNTIME_CACHE_SIZE)
+def cached_model_translation(
+    model: str,
+    source: str,
+    source_language: str,
+    target_language: str,
+    context: str,
+    is_word: bool,
+    word_analysis: WordAnalysis | None,
+) -> TranslatedText | NounTranslation:
+    is_noun = word_analysis is not None and word_analysis.pos in NOUN_POS
+    response_model = NounTranslation if is_noun else TranslatedText
+    response_schema = (
+        noun_translation_schema(target_language)
+        if is_noun
+        else response_model.model_json_schema()
+    )
+    response = timed_ollama_chat(
+        ollama_client(),
+        "translation",
+        model=model,
+        messages=translation_messages(
+            source=source,
+            source_language=source_language,
+            target_language=target_language,
+            context=context,
+            is_word=is_word,
+            word_analysis=word_analysis,
+        ),
+        format=response_schema,
+        keep_alive=ollama_keep_alive(),
+        options={"temperature": 0, "num_ctx": 1024, "num_predict": 128},
+    )
+    return response_model.model_validate_json(response.message.content)
+
+
 @app.post("/api/detect-language", response_model=LanguageDetectionResult)
 def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResult:
     try:
@@ -1882,7 +1957,6 @@ def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResul
 )
 def translate(request: TranslationRequest) -> TranslationResult:
     try:
-        client = ollama_client()
         model = translation_model()
         multi_word_term = multi_word_term_in_context(
             request.text,
@@ -1913,49 +1987,22 @@ def translate(request: TranslationRequest) -> TranslationResult:
                     word_analysis, lemma=word_analysis.confident_verb_lemma
                 )
             else:
-                lemma_response = timed_ollama_chat(
-                    client,
-                    "verb lemma classification",
-                    model=model,
-                    messages=verb_lemma_messages(
+                word_analysis = apply_verb_lemma_decision(
+                    word_analysis,
+                    cached_verb_lemma_decision(
+                        model,
                         word_analysis,
                         request.source_language,
                         request.context,
-                    ),
-                    format=VerbLemmaDecision.model_json_schema(),
-                    keep_alive=ollama_keep_alive(),
-                    options={
-                        "temperature": 0,
-                        "num_ctx": 1024,
-                        "num_predict": 96,
-                    },
-                )
-                word_analysis = apply_verb_lemma_decision(
-                    word_analysis,
-                    VerbLemmaDecision.model_validate_json(
-                        lemma_response.message.content
                     ),
                 )
         source_article = ""
         noun_gender = None
         if word_analysis is not None and word_analysis.pos in NOUN_POS:
-            article_response = timed_ollama_chat(
-                client,
-                "source noun grammar",
-                model=model,
-                messages=source_article_messages(
-                    word_analysis.lemma, request.source_language
-                ),
-                format=source_article_schema(request.source_language),
-                keep_alive=ollama_keep_alive(),
-                options={
-                    "temperature": 0,
-                    "num_ctx": 256,
-                    "num_predict": 32,
-                },
-            )
-            noun_grammar = SourceNounGrammar.model_validate_json(
-                article_response.message.content
+            noun_grammar = cached_source_noun_grammar(
+                model,
+                word_analysis.lemma,
+                request.source_language,
             )
             source_article = normalized_article(
                 noun_grammar.article, request.source_language
@@ -1966,30 +2013,15 @@ def translate(request: TranslationRequest) -> TranslationResult:
         def request_translation(
             context: str,
         ) -> TranslatedText | NounTranslation:
-            is_noun = word_analysis is not None and word_analysis.pos in NOUN_POS
-            response_model = NounTranslation if is_noun else TranslatedText
-            response_schema = (
-                noun_translation_schema(request.target_language)
-                if is_noun
-                else response_model.model_json_schema()
+            return cached_model_translation(
+                model,
+                source_text,
+                request.source_language,
+                request.target_language,
+                context,
+                is_single_word,
+                word_analysis,
             )
-            response = timed_ollama_chat(
-                client,
-                "translation",
-                model=model,
-                messages=translation_messages(
-                    source=source_text,
-                    source_language=request.source_language,
-                    target_language=request.target_language,
-                    context=context,
-                    is_word=is_single_word,
-                    word_analysis=word_analysis,
-                ),
-                format=response_schema,
-                keep_alive=ollama_keep_alive(),
-                options={"temperature": 0, "num_ctx": 1024, "num_predict": 128},
-            )
-            return response_model.model_validate_json(response.message.content)
 
         translated = request_translation(request.context)
         translated_text = (

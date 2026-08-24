@@ -23,7 +23,9 @@ model.
 At startup the server warms the Ollama translation model in the background and
 keeps it loaded by default. Set `OLLAMA_WARMUP=false` to disable that request or
 `OLLAMA_KEEP_ALIVE` to change the default indefinite (`-1`) retention. Ollama and
-Stanza initialization/inference timings are written to the server log.
+Stanza initialization/inference timings are written to the server log. Repeated
+word analyses, grammatical classifications, and exact translation requests are
+held in bounded in-memory caches for the lifetime of the server process.
 
 ## Design choices
 

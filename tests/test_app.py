@@ -11,6 +11,9 @@ from pdf_language_learner.app import (
     WordAnalysis,
     analyze_word_in_context,
     app,
+    cached_model_translation,
+    cached_source_noun_grammar,
+    cached_verb_lemma_decision,
     multi_word_term_in_context,
     ollama_client,
     ollama_keep_alive,
@@ -21,12 +24,26 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def clear_ollama_client_cache():
-    # Tests replace Client with purpose-built fakes. Ensure the process-wide
-    # connection cache cannot leak one fake into the next test.
-    ollama_client.cache_clear()
+def clear_runtime_caches():
+    # Tests replace model and NLP dependencies with purpose-built fakes. Ensure
+    # cached results and clients cannot leak from one test into the next.
+    for cached_function in (
+        ollama_client,
+        analyze_word_in_context,
+        cached_verb_lemma_decision,
+        cached_source_noun_grammar,
+        cached_model_translation,
+    ):
+        cached_function.cache_clear()
     yield
-    ollama_client.cache_clear()
+    for cached_function in (
+        ollama_client,
+        analyze_word_in_context,
+        cached_verb_lemma_decision,
+        cached_source_noun_grammar,
+        cached_model_translation,
+    ):
+        cached_function.cache_clear()
 
 
 def test_health() -> None:
@@ -115,6 +132,38 @@ def test_translation_model_warmup_failure_is_non_fatal(monkeypatch, caplog) -> N
 
     assert "Ollama warm-up" in caplog.text
     assert "Ollama is unavailable" in caplog.text
+
+
+def test_identical_translation_requests_reuse_cached_model_result(monkeypatch) -> None:
+    calls = []
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps({"translation": "How are you?"})
+                )
+            )
+
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    payload = {
+        "text": "Wie geht es dir?",
+        "source_language": "German",
+        "target_language": "English",
+        "context": "Wie geht es dir? Lange nicht gesehen.",
+    }
+
+    first = client.post("/api/translate", json=payload)
+    second = client.post("/api/translate", json=payload)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert len(calls) == 1
+    assert cached_model_translation.cache_info().hits == 1
 
 
 @pytest.mark.parametrize(
@@ -328,6 +377,59 @@ def test_translate_uses_contextual_pos_to_normalize_words(
     if model_response.get("source_gender") not in {None, "none"}:
         expected["noun_gender"] = model_response["source_gender"]
     assert response.json() == expected
+
+
+def test_source_noun_grammar_is_cached_across_target_languages(monkeypatch) -> None:
+    grammar_calls = 0
+    translation_calls = 0
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            nonlocal grammar_calls, translation_calls
+            required = set(kwargs["format"]["required"])
+            if required == {"article", "gender"}:
+                grammar_calls += 1
+                data = {"article": "das", "gender": "neutral"}
+            else:
+                translation_calls += 1
+                prompt = kwargs["messages"][1]["content"]
+                data = (
+                    {"target_lemma": "house", "target_definite_article": "the"}
+                    if "Target language: English" in prompt
+                    else {"target_lemma": "maison", "target_definite_article": "la"}
+                )
+            return SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(data))
+            )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: WordAnalysis("Häuser", "Haus", "NOUN"),
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    payload = {
+        "text": "Häuser",
+        "source_language": "German",
+        "context": "Viele Häuser stehen an dieser Straße.",
+        "context_offset": 6,
+    }
+
+    english = client.post(
+        "/api/translate", json={**payload, "target_language": "English"}
+    )
+    french = client.post(
+        "/api/translate", json={**payload, "target_language": "French"}
+    )
+
+    assert english.status_code == french.status_code == 200
+    assert english.json()["normalized_source"] == "das Haus"
+    assert french.json()["normalized_source"] == "das Haus"
+    assert grammar_calls == 1
+    assert translation_calls == 2
+    assert cached_source_noun_grammar.cache_info().hits == 1
 
 
 @pytest.mark.parametrize(
@@ -1149,22 +1251,31 @@ def test_spanish_verb_analysis_detects_clitics_inside_surface_token(
     mañana_token = SimpleNamespace(
         text="mañana", start_char=7, end_char=13, words=words[3:]
     )
-    pipeline = lambda text: SimpleNamespace(
-        sentences=[
-            SimpleNamespace(
-                words=words, tokens=[surface_token, mañana_token]
-            )
-        ]
-    )
+    pipeline_calls = 0
+
+    def pipeline(text):
+        nonlocal pipeline_calls
+        pipeline_calls += 1
+        return SimpleNamespace(
+            sentences=[
+                SimpleNamespace(
+                    words=words, tokens=[surface_token, mañana_token]
+                )
+            ]
+        )
+
     monkeypatch.setattr("pdf_language_learner.app.stanza_pipeline", lambda _: pipeline)
 
-    analysis = analyze_word_in_context(
-        "Dámelo", "Spanish", "Dámelo mañana.", 0
-    )
+    args = ("Dámelo", "Spanish", "Dámelo mañana.", 0)
+    analysis = analyze_word_in_context(*args)
+    repeated = analyze_word_in_context(*args)
 
     assert analysis == WordAnalysis(
         "Da me lo", "dar", "VERB", ("me", "lo")
     )
+    assert repeated is analysis
+    assert pipeline_calls == 1
+    assert analyze_word_in_context.cache_info().hits == 1
 
 
 def test_translate_rejects_blank_text() -> None:
