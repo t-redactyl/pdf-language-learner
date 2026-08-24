@@ -1,4 +1,5 @@
 import json
+import logging
 import sqlite3
 from types import SimpleNamespace
 
@@ -11,9 +12,21 @@ from pdf_language_learner.app import (
     analyze_word_in_context,
     app,
     multi_word_term_in_context,
+    ollama_client,
+    ollama_keep_alive,
+    warm_translation_model,
 )
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def clear_ollama_client_cache():
+    # Tests replace Client with purpose-built fakes. Ensure the process-wide
+    # connection cache cannot leak one fake into the next test.
+    ollama_client.cache_clear()
+    yield
+    ollama_client.cache_clear()
 
 
 def test_health() -> None:
@@ -38,6 +51,72 @@ def test_spanish_interface_catalog_is_served() -> None:
     assert 'localStorage.setItem(STORAGE_KEY, locale)' in response.text
 
 
+def test_ollama_client_is_reused(monkeypatch) -> None:
+    created = []
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+            created.append(self)
+
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+
+    assert ollama_client() is ollama_client()
+    assert len(created) == 1
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("-1", -1.0), ("0", 0.0), ("90", 90.0), ("30m", "30m"), ("2h", "2h")],
+)
+def test_ollama_keep_alive_preserves_duration_semantics(
+    monkeypatch, configured, expected
+) -> None:
+    monkeypatch.setenv("OLLAMA_KEEP_ALIVE", configured)
+
+    assert ollama_keep_alive() == expected
+
+
+def test_translation_model_warmup_uses_configured_lifecycle(
+    monkeypatch, caplog
+) -> None:
+    calls = []
+
+    class FakeClient:
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                total_duration=20_000_000,
+                load_duration=12_000_000,
+            )
+
+    monkeypatch.setenv("OLLAMA_MODEL", "example:1b")
+    monkeypatch.setenv("OLLAMA_KEEP_ALIVE", "2h")
+    monkeypatch.setattr("pdf_language_learner.app.ollama_client", FakeClient)
+    caplog.set_level(logging.INFO, logger="uvicorn.error.margin")
+
+    warm_translation_model()
+
+    assert calls == [
+        {"model": "example:1b", "prompt": "", "keep_alive": "2h"}
+    ]
+    assert "Ollama warm-up (example:1b) completed" in caplog.text
+    assert "load=12.0ms" in caplog.text
+
+
+def test_translation_model_warmup_failure_is_non_fatal(monkeypatch, caplog) -> None:
+    class FakeClient:
+        def generate(self, **kwargs):
+            raise ConnectionError("Ollama is unavailable")
+
+    monkeypatch.setattr("pdf_language_learner.app.ollama_client", FakeClient)
+
+    warm_translation_model()
+
+    assert "Ollama warm-up" in caplog.text
+    assert "Ollama is unavailable" in caplog.text
+
+
 def test_detect_language_uses_document_sample(monkeypatch) -> None:
     sample = "Dies ist ein ausreichend langer deutscher Text aus dem geöffneten Dokument."
 
@@ -47,12 +126,14 @@ def test_detect_language_uses_document_sample(monkeypatch) -> None:
 
         def chat(self, **kwargs):
             assert kwargs["messages"][1]["content"] == sample
+            assert kwargs["keep_alive"] == "90m"
             return SimpleNamespace(
                 message=SimpleNamespace(
                     content=json.dumps({"detected_language": "German"})
                 )
             )
 
+    monkeypatch.setenv("OLLAMA_KEEP_ALIVE", "90m")
     monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
     response = client.post("/api/detect-language", json={"text": sample})
 

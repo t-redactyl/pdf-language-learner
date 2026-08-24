@@ -20,6 +20,11 @@ POS and lemmatization models. Later lookups reuse the local models. The selected
 word is tagged inside its sentence before it is sent to the local translation
 model.
 
+At startup the server warms the Ollama translation model in the background and
+keeps it loaded by default. Set `OLLAMA_WARMUP=false` to disable that request or
+`OLLAMA_KEEP_ALIVE` to change the default indefinite (`-1`) retention. Ollama and
+Stanza initialization/inference timings are written to the server log.
+
 ## Design choices
 
 - PDF.js renders pages and supplies an accurate selectable text layer.

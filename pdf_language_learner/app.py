@@ -1,16 +1,18 @@
+import logging
 import os
 import random
 import re
 import sqlite3
 import threading
+import time
 import unicodedata
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import Any, Iterator, Literal
 
 import simplemma
 import stanza
@@ -31,6 +33,10 @@ from pdf_language_learner.revision import (
     schedule_review,
 )
 from pdf_language_learner.web_import import WebImportError, fetch_web_document
+
+# Attach application diagnostics to Uvicorn's configured server logger so INFO
+# timings are visible both through the development entry point and `uvicorn` CLI.
+logger = logging.getLogger("uvicorn.error").getChild("margin")
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -59,6 +65,121 @@ STANZA_LANGUAGES = {
 NOUN_POS = {"NOUN"}
 VERB_POS = {"VERB", "AUX"}
 STANZA_PIPELINE_LOCK = threading.Lock()
+
+
+def ollama_host() -> str:
+    return os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+
+def translation_model() -> str:
+    return os.getenv("OLLAMA_MODEL", "translategemma:4b")
+
+
+def detection_model() -> str:
+    return os.getenv("OLLAMA_DETECTION_MODEL", translation_model())
+
+
+def ollama_keep_alive() -> str | float:
+    value = os.getenv("OLLAMA_KEEP_ALIVE", "-1").strip()
+    try:
+        # Ollama interprets numeric values as seconds, including the special
+        # negative value that keeps a model loaded indefinitely. Duration
+        # strings such as "30m" or "2h" must retain their units.
+        return float(value)
+    except ValueError:
+        return value
+
+
+@lru_cache(maxsize=1)
+def ollama_client() -> Client:
+    """Return one process-wide client so HTTP connections can be reused."""
+
+    return Client(host=ollama_host())
+
+
+def _duration_ms(response: Any, field: str) -> float | None:
+    value = getattr(response, field, None)
+    if value is None and isinstance(response, dict):
+        value = response.get(field)
+    if not isinstance(value, (int, float)):
+        return None
+    # Ollama reports durations in nanoseconds.
+    return value / 1_000_000
+
+
+def _log_ollama_timing(operation: str, response: Any, elapsed_ms: float) -> None:
+    metrics = [f"wall={elapsed_ms:.1f}ms"]
+    for field in (
+        "total_duration",
+        "load_duration",
+        "prompt_eval_duration",
+        "eval_duration",
+    ):
+        value = _duration_ms(response, field)
+        if value is not None:
+            metrics.append(f"{field.removesuffix('_duration')}={value:.1f}ms")
+    logger.info("Ollama %s completed: %s", operation, " ".join(metrics))
+
+
+def timed_ollama_chat(client: Client, operation: str, **kwargs):
+    started = time.perf_counter()
+    try:
+        response = client.chat(**kwargs)
+    except Exception:
+        logger.warning(
+            "Ollama %s failed after %.1fms",
+            operation,
+            (time.perf_counter() - started) * 1_000,
+        )
+        raise
+    _log_ollama_timing(
+        operation, response, (time.perf_counter() - started) * 1_000
+    )
+    return response
+
+
+def warm_translation_model() -> None:
+    """Load the translation model without making application startup depend on it."""
+
+    if os.getenv("OLLAMA_WARMUP", "true").casefold() in {"0", "false", "no", "off"}:
+        logger.info("Ollama background warm-up is disabled")
+        return
+    model = translation_model()
+    started = time.perf_counter()
+    try:
+        response = ollama_client().generate(
+            model=model,
+            prompt="",
+            keep_alive=ollama_keep_alive(),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Ollama warm-up for %s failed after %.1fms: %s",
+            model,
+            (time.perf_counter() - started) * 1_000,
+            exc,
+        )
+        return
+    _log_ollama_timing(
+        f"warm-up ({model})",
+        response,
+        (time.perf_counter() - started) * 1_000,
+    )
+
+
+def start_model_warmup() -> None:
+    threading.Thread(
+        target=warm_translation_model,
+        name="ollama-model-warmup",
+        daemon=True,
+    ).start()
+
+
+@asynccontextmanager
+async def application_lifespan(_app: FastAPI):
+    start_model_warmup()
+    yield
+
 
 VERB_CLITICS = {
     # German does not have Romance-style clitics, but these are the forms that
@@ -599,6 +720,7 @@ class WordAnalysis:
 
 @lru_cache(maxsize=len(STANZA_LANGUAGES))
 def stanza_pipeline(source_language: str):
+    started = time.perf_counter()
     normalized_language = source_language.casefold()
     language = STANZA_LANGUAGES.get(normalized_language)
     if language is None:
@@ -606,13 +728,27 @@ def stanza_pipeline(source_language: str):
     processors = "tokenize,pos,lemma"
     if normalized_language in VERB_CLITICS:
         processors += ",depparse"
-    return stanza.Pipeline(
-        lang=language,
-        processors=processors,
-        download_method=stanza.DownloadMethod.REUSE_RESOURCES,
-        use_gpu=False,
-        verbose=False,
+    try:
+        pipeline = stanza.Pipeline(
+            lang=language,
+            processors=processors,
+            download_method=stanza.DownloadMethod.REUSE_RESOURCES,
+            use_gpu=False,
+            verbose=False,
+        )
+    except Exception:
+        logger.warning(
+            "Stanza pipeline initialization failed for %s after %.1fms",
+            source_language,
+            (time.perf_counter() - started) * 1_000,
+        )
+        raise
+    logger.info(
+        "Stanza pipeline initialized for %s in %.1fms",
+        source_language,
+        (time.perf_counter() - started) * 1_000,
     )
+    return pipeline
 
 
 def normalize_source(text: str, source_language: str) -> str:
@@ -807,8 +943,18 @@ def analyze_word_in_context(
     selected_end = selected_start + len(text)
 
     pipeline = stanza_pipeline(source_language)
+    lock_started = time.perf_counter()
     with STANZA_PIPELINE_LOCK:
+        lock_wait_ms = (time.perf_counter() - lock_started) * 1_000
+        inference_started = time.perf_counter()
         document = pipeline(context_text)
+        inference_ms = (time.perf_counter() - inference_started) * 1_000
+    logger.info(
+        "Stanza inference for %s completed: inference=%.1fms lock_wait=%.1fms",
+        source_language,
+        inference_ms,
+        lock_wait_ms,
+    )
     located_words = []
     for sentence in document.sentences:
         tokens = getattr(sentence, "tokens", None)
@@ -1465,7 +1611,7 @@ def revision_card(
     )
 
 
-app = FastAPI(title="PDF Language Learner")
+app = FastAPI(title="PDF Language Learner", lifespan=application_lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -1681,11 +1827,10 @@ def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResu
 @app.post("/api/detect-language", response_model=LanguageDetectionResult)
 def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResult:
     try:
-        client = Client(host=os.getenv("OLLAMA_HOST", "http://localhost:11434"))
-        translation_model = os.getenv("OLLAMA_MODEL", "translategemma:4b")
-        detection_model = os.getenv("OLLAMA_DETECTION_MODEL", translation_model)
-        response = client.chat(
-            model=detection_model,
+        response = timed_ollama_chat(
+            ollama_client(),
+            "language detection",
+            model=detection_model(),
             messages=[
                 {
                     "role": "system",
@@ -1698,7 +1843,7 @@ def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResul
                 {"role": "user", "content": request.text},
             ],
             format=LanguageDetectionResult.model_json_schema(),
-            keep_alive="30m",
+            keep_alive=ollama_keep_alive(),
             options={"temperature": 0, "num_ctx": 4096, "num_predict": 64},
         )
         return LanguageDetectionResult.model_validate_json(response.message.content)
@@ -1716,10 +1861,8 @@ def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResul
 )
 def translate(request: TranslationRequest) -> TranslationResult:
     try:
-        client = Client(
-            host=os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        )
-        translation_model = os.getenv("OLLAMA_MODEL", "translategemma:4b")
+        client = ollama_client()
+        model = translation_model()
         multi_word_term = multi_word_term_in_context(
             request.text,
             request.source_language,
@@ -1749,15 +1892,17 @@ def translate(request: TranslationRequest) -> TranslationResult:
                     word_analysis, lemma=word_analysis.confident_verb_lemma
                 )
             else:
-                lemma_response = client.chat(
-                    model=translation_model,
+                lemma_response = timed_ollama_chat(
+                    client,
+                    "verb lemma classification",
+                    model=model,
                     messages=verb_lemma_messages(
                         word_analysis,
                         request.source_language,
                         request.context,
                     ),
                     format=VerbLemmaDecision.model_json_schema(),
-                    keep_alive="30m",
+                    keep_alive=ollama_keep_alive(),
                     options={
                         "temperature": 0,
                         "num_ctx": 1024,
@@ -1773,13 +1918,15 @@ def translate(request: TranslationRequest) -> TranslationResult:
         source_article = ""
         noun_gender = None
         if word_analysis is not None and word_analysis.pos in NOUN_POS:
-            article_response = client.chat(
-                model=translation_model,
+            article_response = timed_ollama_chat(
+                client,
+                "source noun grammar",
+                model=model,
                 messages=source_article_messages(
                     word_analysis.lemma, request.source_language
                 ),
                 format=source_article_schema(request.source_language),
-                keep_alive="30m",
+                keep_alive=ollama_keep_alive(),
                 options={
                     "temperature": 0,
                     "num_ctx": 256,
@@ -1805,8 +1952,10 @@ def translate(request: TranslationRequest) -> TranslationResult:
                 if is_noun
                 else response_model.model_json_schema()
             )
-            response = client.chat(
-                model=translation_model,
+            response = timed_ollama_chat(
+                client,
+                "translation",
+                model=model,
                 messages=translation_messages(
                     source=source_text,
                     source_language=request.source_language,
@@ -1816,7 +1965,7 @@ def translate(request: TranslationRequest) -> TranslationResult:
                     word_analysis=word_analysis,
                 ),
                 format=response_schema,
-                keep_alive="30m",
+                keep_alive=ollama_keep_alive(),
                 options={"temperature": 0, "num_ctx": 1024, "num_predict": 128},
             )
             return response_model.model_validate_json(response.message.content)
