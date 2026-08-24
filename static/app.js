@@ -756,7 +756,14 @@ async function requestVocabulary(translation) {
   return vocabularyFromApi(data.item);
 }
 
-async function loadSavedVocabulary(language = "") {
+async function loadSavedVocabulary(language = effectiveSourceLanguage()) {
+  const documentKey = activeDocumentKey;
+  if (!language) {
+    savedVocabulary = [];
+    renderTranslationHistory();
+    renderSavedVocabulary();
+    return;
+  }
   const legacyVocabulary = readLegacySavedVocabulary();
   let migrationComplete = legacyVocabulary.length > 0;
   for (const entry of legacyVocabulary) {
@@ -772,6 +779,7 @@ async function loadSavedVocabulary(language = "") {
   const response = await fetch(`/api/vocabulary${query}`);
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || "Saved vocabulary could not be loaded");
+  if (activeDocumentKey !== documentKey || effectiveSourceLanguage() !== language) return;
   savedVocabulary = data.map(vocabularyFromApi);
   renderTranslationHistory();
   renderSavedVocabulary();
@@ -790,7 +798,7 @@ async function toggleSavedVocabulary(translation) {
   } else {
     await requestVocabulary(translation);
   }
-  await loadSavedVocabulary();
+  await loadSavedVocabulary(effectiveSourceLanguage());
 }
 
 function createTranslationListItem(translation, index, collection) {
