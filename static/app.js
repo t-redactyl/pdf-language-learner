@@ -541,9 +541,55 @@ $("#source-language").addEventListener("change", async event => {
   if (!sourceLanguageOverride && !detectedSourceLanguage) detectDocumentLanguage();
 });
 
-function showNormalizedResult(source, isWord) {
+const NOUN_GENDERS = new Set(["masculine", "feminine", "neutral"]);
+const ARTICLE_GENDERS = {
+  german: { der: "masculine", die: "feminine", das: "neutral" },
+  spanish: { el: "masculine", la: "feminine" },
+  portuguese: { o: "masculine", a: "feminine" },
+  italian: { il: "masculine", lo: "masculine", la: "feminine" },
+  french: { le: "masculine", la: "feminine" },
+  dutch: { het: "neutral" },
+};
+
+function nounGenderFor(translation) {
+  const supplied = translation.nounGender
+    || translation.noun_gender
+    || translation.grammatical_gender
+    || translation.gender;
+  if (NOUN_GENDERS.has(supplied)) return supplied;
+
+  // Older API responses and saved history entries predate noun_gender, but
+  // normalized nouns already include their singular definite article.
+  const language = String(
+    translation.sourceLanguage
+    || translation.source_language
+    || translation.detectedLanguage
+    || translation.detected_language
+    || ""
+  ).toLocaleLowerCase();
+  const source = String(
+    translation.normalizedSource
+    || translation.normalized_source
+    || translation.source
+    || ""
+  ).trim().toLocaleLowerCase();
+  const article = source.match(/^[\p{L}]+/u)?.[0];
+  return ARTICLE_GENDERS[language]?.[article] || null;
+}
+
+function setNounGender(element, gender) {
+  element.classList.remove("noun-masculine", "noun-feminine", "noun-neutral");
+  element.removeAttribute("title");
+  if (!NOUN_GENDERS.has(gender)) return;
+  element.classList.add(`noun-${gender}`);
+  element.title = `${gender[0].toUpperCase()}${gender.slice(1)} noun`;
+}
+
+function showNormalizedResult(source, isWord, nounGender = null) {
   $("#normalized-result").hidden = !isWord;
-  $("#normalized-text").textContent = source;
+  const normalizedText = $("#normalized-text");
+  normalizedText.textContent = source;
+  setNounGender(normalizedText, nounGender);
 }
 
 $("#translate-button").addEventListener("click", async () => {
@@ -566,7 +612,8 @@ $("#translate-button").addEventListener("click", async () => {
     $("#detected-language").textContent = `Source ${data.detected_language}`;
     // The API can resolve a one-word selection to a known multi-word term.
     const isWord = data.is_word === true;
-    showNormalizedResult(data.normalized_source, isWord);
+    const nounGender = nounGenderFor({ ...data, sourceLanguage });
+    showNormalizedResult(data.normalized_source, isWord, nounGender);
     $("#translated-text").textContent = data.translation;
     $("#result").hidden = false;
     showCurrentHighlight(pendingHighlight);
@@ -583,6 +630,7 @@ $("#translate-button").addEventListener("click", async () => {
       documentKey: activeDocumentKey,
       createdAt: new Date().toISOString(),
       isWord,
+      nounGender,
     });
   } catch (error) { $("#error").textContent = error.message; }
   finally { button.textContent = "Translate selection"; renderSourceLanguageState(); }
@@ -661,6 +709,7 @@ function vocabularyRequest(translation) {
     targetLanguage: translation.targetLanguage,
     context: translation.context || "",
     documentKey: translation.documentKey || activeDocumentKey,
+    nounGender: nounGenderFor(translation),
   };
 }
 
@@ -674,6 +723,7 @@ function vocabularyApiPayload(translation) {
     target_language: item.targetLanguage,
     context: item.context,
     document_key: item.documentKey,
+    noun_gender: item.nounGender,
   };
 }
 
@@ -689,6 +739,7 @@ function vocabularyFromApi(item) {
     targetLanguage: item.target_language,
     context: item.context,
     documentKey: item.document_key,
+    nounGender: nounGenderFor(item),
     savedAt: item.saved_at,
     review: item.review,
   };
@@ -755,6 +806,7 @@ function createTranslationListItem(translation, index, collection) {
   const source = document.createElement("span");
   source.className = "history-source";
   source.textContent = translation.normalizedSource || translation.source;
+  setNounGender(source, nounGenderFor(translation));
   const translated = document.createElement("span");
   translated.className = "history-translation";
   translated.textContent = translation.translation;
@@ -827,7 +879,7 @@ function showTranslation(translation) {
   $("#detected-language").textContent = `Source ${sourceLanguage}`;
   const isWord = translation.isWord
     ?? String(translation.originalSource || source).trim().split(/\s+/).length === 1;
-  showNormalizedResult(source, isWord);
+  showNormalizedResult(source, isWord, nounGenderFor(translation));
   $("#translated-text").textContent = translation.translation;
   $("#selection-hint").hidden = true;
   $("#translation-content").hidden = false;

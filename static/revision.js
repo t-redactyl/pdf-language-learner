@@ -12,6 +12,29 @@ let answered = 0;
 let correctAnswers = 0;
 let removed = 0;
 let documentLanguage = "";
+const NOUN_GENDERS = new Set(["masculine", "feminine", "neutral"]);
+const ARTICLE_GENDERS = {
+  german: { der: "masculine", die: "feminine", das: "neutral" },
+  spanish: { el: "masculine", la: "feminine" },
+  portuguese: { o: "masculine", a: "feminine" },
+  italian: { il: "masculine", lo: "masculine", la: "feminine" },
+  french: { le: "masculine", la: "feminine" },
+  dutch: { het: "neutral" },
+};
+
+function nounGender(source, language, supplied = null) {
+  if (NOUN_GENDERS.has(supplied)) return supplied;
+  const article = String(source).trim().toLocaleLowerCase().match(/^[\p{L}]+/u)?.[0];
+  return ARTICLE_GENDERS[String(language).toLocaleLowerCase()]?.[article] || null;
+}
+
+function setNounGender(element, gender, showTitle = true) {
+  element.classList.remove("noun-masculine", "noun-feminine", "noun-neutral");
+  element.removeAttribute("title");
+  if (!NOUN_GENDERS.has(gender)) return;
+  element.classList.add(`noun-${gender}`);
+  if (showTitle) element.title = `${gender[0].toUpperCase()}${gender.slice(1)} noun`;
+}
 
 $("#open-revision")?.addEventListener("click", openRevision);
 $("#close-revision")?.addEventListener("click", closeRevision);
@@ -145,10 +168,16 @@ function renderNextCard() {
   currentCard = queue.shift();
   const sourceFirst = currentCard.direction === "source_to_translation";
   const category = currentCard.category.replaceAll("_", " ");
+  const promptGender = sourceFirst
+    ? nounGender(currentCard.prompt, currentCard.source_language, currentCard.noun_gender)
+    : null;
+  setNounGender(document.querySelector(".revision-card"), promptGender, false);
   $("#revision-direction").textContent = sourceFirst
     ? `${currentCard.source_language} → ${currentCard.target_language} · ${category}`
     : `${currentCard.target_language} → ${currentCard.source_language} · ${category}`;
-  $("#revision-prompt").textContent = currentCard.prompt;
+  const prompt = $("#revision-prompt");
+  prompt.textContent = currentCard.prompt;
+  setNounGender(prompt, null);
   const removeButton = $("#revision-remove");
   removeButton.dataset.itemId = currentCard.item_id;
   removeButton.dataset.prompt = currentCard.prompt;
@@ -172,6 +201,16 @@ function renderNextCard() {
     button.type = "button";
     button.className = "revision-choice";
     button.textContent = choice;
+    setNounGender(
+      button,
+      sourceFirst
+        ? null
+        : nounGender(
+            choice,
+            currentCard.source_language,
+            currentCard.choice_genders?.[choice],
+          ),
+    );
     button.addEventListener("click", () => submitAnswer(choice));
     choices.append(button);
   });

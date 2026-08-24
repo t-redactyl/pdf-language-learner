@@ -65,6 +65,7 @@ def test_detect_language_uses_document_sample(monkeypatch) -> None:
             "Wörter", "German", "English", WordAnalysis("Wörter", "Wort", "NOUN"),
             {
                 "source_definite_article": "das",
+                "source_gender": "neutral",
                 "target_lemma": "word",
                 "target_definite_article": "the",
             },
@@ -78,6 +79,7 @@ def test_detect_language_uses_document_sample(monkeypatch) -> None:
             "Häuser", "German", "English", WordAnalysis("Häuser", "Haus", "NOUN"),
             {
                 "source_definite_article": "das",
+                "source_gender": "neutral",
                 "target_lemma": "house",
                 "target_definite_article": "the",
             },
@@ -99,6 +101,7 @@ def test_detect_language_uses_document_sample(monkeypatch) -> None:
             "gatti", "Italian", "English", WordAnalysis("gatti", "gatto", "NOUN"),
             {
                 "source_definite_article": "il",
+                "source_gender": "masculine",
                 "target_lemma": "cat",
                 "target_definite_article": "the",
             },
@@ -112,6 +115,7 @@ def test_detect_language_uses_document_sample(monkeypatch) -> None:
             "houses", "English", "Spanish", WordAnalysis("houses", "house", "NOUN"),
             {
                 "source_definite_article": "the",
+                "source_gender": "none",
                 "target_lemma": "casa",
                 "target_definite_article": "la",
             },
@@ -121,6 +125,7 @@ def test_detect_language_uses_document_sample(monkeypatch) -> None:
             "Augen", "German", "English", WordAnalysis("Augen", "Auge", "NOUN"),
             {
                 "source_definite_article": "das",
+                "source_gender": "neutral",
                 "target_lemma": "eyes",
                 "target_definite_article": "the",
             },
@@ -131,6 +136,7 @@ def test_detect_language_uses_document_sample(monkeypatch) -> None:
             WordAnalysis("profesora", "profesor", "NOUN"),
             {
                 "source_definite_article": "el",
+                "source_gender": "masculine",
                 "target_lemma": "teacher",
                 "target_definite_article": "the",
             },
@@ -160,7 +166,7 @@ def test_translate_uses_contextual_pos_to_normalize_words(
 
         def chat(self, **kwargs):
             required = set(kwargs["format"]["required"])
-            if required == {"article"}:
+            if required == {"article", "gender"}:
                 prompt = kwargs["messages"][1]["content"]
                 assert f"Normalized dictionary lemma: {analysis.lemma}" in prompt
                 assert "Selected token:" not in prompt
@@ -177,7 +183,8 @@ def test_translate_uses_contextual_pos_to_normalize_words(
                 }[source_language])
                 return SimpleNamespace(
                     message=SimpleNamespace(content=json.dumps({
-                        "article": model_response["source_definite_article"]
+                        "article": model_response["source_definite_article"],
+                        "gender": model_response["source_gender"],
                     }))
                 )
             if analysis.pos == "NOUN":
@@ -196,6 +203,7 @@ def test_translate_uses_contextual_pos_to_normalize_words(
             )
             response_data = dict(model_response)
             response_data.pop("source_definite_article", None)
+            response_data.pop("source_gender", None)
             return SimpleNamespace(
                 message=SimpleNamespace(content=json.dumps(response_data))
             )
@@ -216,12 +224,15 @@ def test_translate_uses_contextual_pos_to_normalize_words(
     )
 
     assert response.status_code == 200
-    assert response.json() == {
+    expected = {
         "detected_language": source_language,
         "is_word": True,
         "normalized_source": normalized_source,
         "translation": translation,
     }
+    if model_response.get("source_gender") not in {None, "none"}:
+        expected["noun_gender"] = model_response["source_gender"]
+    assert response.json() == expected
 
 
 @pytest.mark.parametrize(
@@ -1098,6 +1109,7 @@ def vocabulary_payload(**overrides) -> dict[str, str]:
         "target_language": "English",
         "context": "Viele Wörter ergeben einen Satz.",
         "document_key": "margin:example.pdf:123:456",
+        "noun_gender": "neutral",
     }
     payload.update(overrides)
     return payload
@@ -1111,6 +1123,7 @@ def test_vocabulary_is_persisted(vocabulary_database) -> None:
     items = client.get("/api/vocabulary").json()
     assert len(items) == 1
     assert items[0]["normalized_source"] == "Wort"
+    assert items[0]["noun_gender"] == "neutral"
     assert items[0]["review"] == {
         "last_reviewed_at": None,
         "next_review_at": None,
@@ -1289,6 +1302,14 @@ def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:
     assert all(2 <= len(card["choices"]) <= 4 for card in session["cards"])
     assert all(card["exercise"] == "multiple_choice" for card in session["cards"])
     assert all(card["category"] == "new" for card in session["cards"])
+    assert all(card["noun_gender"] == "neutral" for card in session["cards"])
+    for card in session["cards"]:
+        if card["direction"] == "translation_to_source":
+            assert card["choice_genders"] == {
+                choice: "neutral" for choice in card["choices"]
+            }
+        else:
+            assert card["choice_genders"] == {}
 
 
 def test_revision_session_only_uses_selected_language(vocabulary_database) -> None:

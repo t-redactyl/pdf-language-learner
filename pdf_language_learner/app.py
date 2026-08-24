@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Literal
 
 import simplemma
 import stanza
@@ -448,6 +448,10 @@ class TranslationResult(BaseModel):
     translation: str = Field(
         description="A natural translation of the normalized source in the requested language"
     )
+    noun_gender: Literal["masculine", "feminine", "neutral"] | None = Field(
+        default=None,
+        description="The grammatical gender of a noun, when the source language assigns one",
+    )
 
 
 class TranslatedText(BaseModel):
@@ -475,9 +479,15 @@ class NounTranslation(BaseModel):
     )
 
 
-class SourceArticle(BaseModel):
+class SourceNounGrammar(BaseModel):
     article: str = Field(
         description="The definite article for the supplied normalized source lemma",
+    )
+    gender: Literal["masculine", "feminine", "neutral", "none"] = Field(
+        description=(
+            "The noun's grammatical gender, or none when the language does not "
+            "assign grammatical gender to nouns"
+        ),
     )
 
 
@@ -489,6 +499,7 @@ class VocabularyCreate(BaseModel):
     target_language: str = Field(min_length=2, max_length=60)
     context: str = Field(default="", max_length=2_000)
     document_key: str = Field(default="", max_length=1_000)
+    noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
 
     @field_validator(
         "original_source",
@@ -527,6 +538,7 @@ class VocabularyItem(BaseModel):
     target_language: str
     context: str
     document_key: str
+    noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
     saved_at: str
     review: ReviewState
 
@@ -542,9 +554,13 @@ class RevisionCard(BaseModel):
     direction: RevisionDirection
     exercise: RevisionExercise
     choices: list[str]
+    choice_genders: dict[
+        str, Literal["masculine", "feminine", "neutral"]
+    ] = Field(default_factory=dict)
     category: RevisionCategory
     source_language: str
     target_language: str
+    noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
 
 
 class RevisionSession(BaseModel):
@@ -924,7 +940,7 @@ def noun_translation_schema(
 
 
 def source_article_schema(source_language: str) -> dict:
-    schema = SourceArticle.model_json_schema()
+    schema = SourceNounGrammar.model_json_schema()
     schema["properties"]["article"]["enum"] = list(
         definite_articles(source_language)
     )
@@ -938,11 +954,13 @@ def source_article_messages(
         {
             "role": "system",
             "content": (
-                "Choose the definite article that grammatically agrees with the "
-                "exact normalized dictionary lemma supplied. Base the choice only "
+                "Identify the grammatical gender and choose the definite article "
+                "that agrees with the exact normalized dictionary lemma supplied. "
+                "Use neutral for the neuter grammatical gender and none when this "
+                "language does not assign grammatical gender to nouns. Base both only "
                 "on that lemma and its language. Do not infer gender from an "
                 "original inflected form, a person, or sentence context. Return "
-                "only the article field."
+                "only the requested fields."
             ),
         },
         {
@@ -1134,6 +1152,7 @@ def create_vocabulary_table(connection: sqlite3.Connection, table_name: str) -> 
             target_language TEXT NOT NULL,
             context TEXT NOT NULL DEFAULT '',
             document_key TEXT NOT NULL DEFAULT '',
+            noun_gender TEXT,
             saved_at TEXT NOT NULL,
             last_reviewed_at TEXT,
             next_review_at TEXT,
@@ -1199,6 +1218,17 @@ def registered_language_tables(
     ).fetchall()
 
 
+def migrate_vocabulary_gender(connection: sqlite3.Connection) -> None:
+    for registered in registered_language_tables(connection):
+        table_name = registered["table_name"]
+        columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if "noun_gender" not in columns:
+            connection.execute(f"ALTER TABLE {table_name} ADD COLUMN noun_gender TEXT")
+
+
 def migrate_legacy_vocabulary(connection: sqlite3.Connection) -> None:
     legacy_exists = connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vocabulary'"
@@ -1251,6 +1281,7 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
             """
         )
         migrate_legacy_vocabulary(connection)
+        migrate_vocabulary_gender(connection)
         yield connection
         connection.commit()
     finally:
@@ -1268,6 +1299,7 @@ def vocabulary_item(row: sqlite3.Row) -> VocabularyItem:
         target_language=row["target_language"],
         context=row["context"],
         document_key=row["document_key"],
+        noun_gender=row["noun_gender"],
         saved_at=row["saved_at"],
         review=ReviewState(
             last_reviewed_at=row["last_reviewed_at"],
@@ -1402,19 +1434,34 @@ def revision_card(
         if direction is RevisionDirection.SOURCE_TO_TRANSLATION
         else "translation"
     )
+    choices = (
+        revision_choices(row, rows, direction)
+        if exercise is RevisionExercise.MULTIPLE_CHOICE
+        else []
+    )
+    choice_genders = {}
+    if direction is RevisionDirection.TRANSLATION_TO_SOURCE:
+        genders_by_source = {
+            candidate["normalized_source"]: candidate["noun_gender"]
+            for candidate in rows
+            if candidate["noun_gender"] is not None
+        }
+        choice_genders = {
+            choice: genders_by_source[choice]
+            for choice in choices
+            if choice in genders_by_source
+        }
     return RevisionCard(
         item_id=row["id"],
         prompt=row[prompt_field],
         direction=direction,
         exercise=exercise,
-        choices=(
-            revision_choices(row, rows, direction)
-            if exercise is RevisionExercise.MULTIPLE_CHOICE
-            else []
-        ),
+        choices=choices,
+        choice_genders=choice_genders,
         category=category,
         source_language=row["source_language"],
         target_language=row["target_language"],
+        noun_gender=row["noun_gender"],
     )
 
 
@@ -1491,8 +1538,8 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
             INSERT OR IGNORE INTO {table_name} (
                 id, original_source, normalized_source, canonical_source,
                 translation, source_language, canonical_source_language,
-                target_language, context, document_key, saved_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                target_language, context, document_key, noun_gender, saved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item_id,
@@ -1505,10 +1552,16 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
                 request.target_language,
                 request.context,
                 request.document_key,
+                request.noun_gender,
                 saved_at,
             ),
         )
         created = cursor.rowcount == 1
+        if request.noun_gender is not None:
+            connection.execute(
+                f"UPDATE {table_name} SET noun_gender = ? WHERE canonical_source = ?",
+                (request.noun_gender, canonical_source),
+            )
         row = connection.execute(
             f"""
             SELECT *
@@ -1656,7 +1709,11 @@ def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResul
         ) from exc
 
 
-@app.post("/api/translate", response_model=TranslationResult)
+@app.post(
+    "/api/translate",
+    response_model=TranslationResult,
+    response_model_exclude_none=True,
+)
 def translate(request: TranslationRequest) -> TranslationResult:
     try:
         client = Client(
@@ -1714,28 +1771,29 @@ def translate(request: TranslationRequest) -> TranslationResult:
                     ),
                 )
         source_article = ""
+        noun_gender = None
         if word_analysis is not None and word_analysis.pos in NOUN_POS:
-            allowed_articles = definite_articles(request.source_language)
-            if allowed_articles != ("",):
-                article_response = client.chat(
-                    model=translation_model,
-                    messages=source_article_messages(
-                        word_analysis.lemma, request.source_language
-                    ),
-                    format=source_article_schema(request.source_language),
-                    keep_alive="30m",
-                    options={
-                        "temperature": 0,
-                        "num_ctx": 256,
-                        "num_predict": 16,
-                    },
-                )
-                source_article = normalized_article(
-                    SourceArticle.model_validate_json(
-                        article_response.message.content
-                    ).article,
-                    request.source_language,
-                )
+            article_response = client.chat(
+                model=translation_model,
+                messages=source_article_messages(
+                    word_analysis.lemma, request.source_language
+                ),
+                format=source_article_schema(request.source_language),
+                keep_alive="30m",
+                options={
+                    "temperature": 0,
+                    "num_ctx": 256,
+                    "num_predict": 32,
+                },
+            )
+            noun_grammar = SourceNounGrammar.model_validate_json(
+                article_response.message.content
+            )
+            source_article = normalized_article(
+                noun_grammar.article, request.source_language
+            )
+            if noun_grammar.gender != "none":
+                noun_gender = noun_grammar.gender
 
         def request_translation(
             context: str,
@@ -1817,6 +1875,7 @@ def translate(request: TranslationRequest) -> TranslationResult:
             is_word=is_term,
             normalized_source=normalized_source,
             translation=translation,
+            noun_gender=noun_gender,
         )
 
     except Exception as exc:
