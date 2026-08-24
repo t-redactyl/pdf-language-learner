@@ -117,28 +117,32 @@ def test_translation_model_warmup_failure_is_non_fatal(monkeypatch, caplog) -> N
     assert "Ollama is unavailable" in caplog.text
 
 
-def test_detect_language_uses_document_sample(monkeypatch) -> None:
-    sample = "Dies ist ein ausreichend langer deutscher Text aus dem geöffneten Dokument."
-
-    class FakeClient:
+@pytest.mark.parametrize(
+    ("sample", "expected"),
+    [
+        ("Dit is een Nederlandse tekst over het leren van nieuwe talen.", "Dutch"),
+        ("This is an English text about learning and reading new languages.", "English"),
+        ("Ceci est un texte français consacré à la lecture et aux langues.", "French"),
+        ("Dies ist ein deutscher Text über das Lesen und das Lernen von Sprachen.", "German"),
+        ("Questo è un testo italiano sulla lettura e sullo studio delle lingue.", "Italian"),
+        ("To jest polski tekst o czytaniu książek i nauce nowych języków.", "Polish"),
+        ("Este é um texto português sobre leitura e aprendizagem de línguas.", "Portuguese"),
+        ("Este es un texto español sobre la lectura y el aprendizaje de idiomas.", "Spanish"),
+        ("这是一个关于阅读和学习语言的中文文本，用于测试语言检测功能。", "Chinese (Simplified)"),
+        ("これは読書と言語学習についての日本語の文章です。", "Japanese"),
+        ("이것은 독서와 언어 학습에 관한 한국어 문장입니다.", "Korean"),
+    ],
+)
+def test_detect_language_uses_local_detector(monkeypatch, sample, expected) -> None:
+    class UnexpectedClient:
         def __init__(self, host: str) -> None:
-            self.host = host
+            raise AssertionError("language detection must not contact Ollama")
 
-        def chat(self, **kwargs):
-            assert kwargs["messages"][1]["content"] == sample
-            assert kwargs["keep_alive"] == "90m"
-            return SimpleNamespace(
-                message=SimpleNamespace(
-                    content=json.dumps({"detected_language": "German"})
-                )
-            )
-
-    monkeypatch.setenv("OLLAMA_KEEP_ALIVE", "90m")
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
     response = client.post("/api/detect-language", json={"text": sample})
 
     assert response.status_code == 200
-    assert response.json() == {"detected_language": "German"}
+    assert response.json() == {"detected_language": expected}
 
 
 @pytest.mark.parametrize(

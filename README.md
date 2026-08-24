@@ -29,6 +29,7 @@ Stanza initialization/inference timings are written to the server log.
 
 - PDF.js renders pages and supplies an accurate selectable text layer.
 - Stanza performs contextual POS tagging and lemmatization for single words.
-- Structured Ollama calls perform language detection and translation locally.
+- Simplemma and Unicode script detection identify the document language locally;
+  structured Ollama calls perform translation.
 - PDFs remain local; no upload endpoint exists. For URL imports, the server fetches only public HTTP(S) pages and rejects local/private network destinations.
 - SQLite stores saved vocabulary on the backend. A unique normalized-form and source-language index prevents duplicate words or phrases.

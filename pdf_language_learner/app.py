@@ -55,6 +55,14 @@ LEMMATIZER_LANGUAGES = {
     "spanish": "es",
 }
 
+LANGUAGE_NAMES_BY_CODE = {
+    language_code: display_name.title()
+    for display_name, language_code in LEMMATIZER_LANGUAGES.items()
+}
+JAPANESE_SCRIPT = re.compile(r"[\u3040-\u30ff]")
+KOREAN_SCRIPT = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
+CHINESE_SCRIPT = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+
 STANZA_LANGUAGES = {
     **LEMMATIZER_LANGUAGES,
     "chinese (simplified)": "zh-hans",
@@ -67,16 +75,46 @@ VERB_POS = {"VERB", "AUX"}
 STANZA_PIPELINE_LOCK = threading.Lock()
 
 
+@lru_cache(maxsize=1)
+def language_detector() -> simplemma.LanguageDetector:
+    started = time.perf_counter()
+    detector = simplemma.LanguageDetector(tuple(LANGUAGE_NAMES_BY_CODE))
+    logger.info(
+        "Simplemma language detector initialized in %.1fms",
+        (time.perf_counter() - started) * 1_000,
+    )
+    return detector
+
+
+def detect_document_language(text: str) -> str:
+    started = time.perf_counter()
+    if JAPANESE_SCRIPT.search(text):
+        detected = "Japanese"
+    elif KOREAN_SCRIPT.search(text):
+        detected = "Korean"
+    elif CHINESE_SCRIPT.search(text):
+        # Simplified Chinese is the only Chinese option currently exposed by
+        # the reader. Script inspection intentionally runs after Japanese.
+        detected = "Chinese (Simplified)"
+    else:
+        language_code = language_detector().main_language(text)
+        detected = LANGUAGE_NAMES_BY_CODE.get(language_code)
+        if detected is None:
+            raise ValueError("the document language could not be identified")
+    logger.info(
+        "Local language detection selected %s in %.1fms",
+        detected,
+        (time.perf_counter() - started) * 1_000,
+    )
+    return detected
+
+
 def ollama_host() -> str:
     return os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 
 def translation_model() -> str:
     return os.getenv("OLLAMA_MODEL", "translategemma:4b")
-
-
-def detection_model() -> str:
-    return os.getenv("OLLAMA_DETECTION_MODEL", translation_model())
 
 
 def ollama_keep_alive() -> str | float:
@@ -1827,30 +1865,13 @@ def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResu
 @app.post("/api/detect-language", response_model=LanguageDetectionResult)
 def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResult:
     try:
-        response = timed_ollama_chat(
-            ollama_client(),
-            "language detection",
-            model=detection_model(),
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Identify the single predominant language of this document "
-                        "sample. Return its common English name. Ignore isolated names, "
-                        "quotations, page numbers, and foreign words."
-                    ),
-                },
-                {"role": "user", "content": request.text},
-            ],
-            format=LanguageDetectionResult.model_json_schema(),
-            keep_alive=ollama_keep_alive(),
-            options={"temperature": 0, "num_ctx": 4096, "num_predict": 64},
+        return LanguageDetectionResult(
+            detected_language=detect_document_language(request.text)
         )
-        return LanguageDetectionResult.model_validate_json(response.message.content)
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"Local language detection model failed: {exc}",
+            detail=f"Local language detection failed: {exc}",
         ) from exc
 
 
