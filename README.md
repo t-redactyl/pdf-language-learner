@@ -28,6 +28,8 @@ word analyses, grammatical classifications, and exact translation requests are
 held in bounded in-memory caches for the lifetime of the server process. Source
 noun grammar and target translation keep their separate prompts but are issued
 concurrently when Ollama has capacity to process parallel requests.
+When a document's source language becomes known, the browser also asks the server
+to prepare just that language's Stanza pipeline in the background.
 
 ## Design choices
 

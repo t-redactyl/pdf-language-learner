@@ -14,6 +14,7 @@ let sourceLanguageOverride = "";
 let documentLanguageSample = "";
 let languageDetectionPending = false;
 let languageDetectionError = "";
+const preparedSourceLanguages = new Set();
 let pendingHighlight = [];
 let pendingTranscriptRange = null;
 const textItemForSpan = new WeakMap();
@@ -573,6 +574,22 @@ function effectiveSourceLanguage() {
   return sourceLanguageOverride || detectedSourceLanguage;
 }
 
+function prepareSourceLanguage(language) {
+  const cacheKey = String(language || "").trim().toLocaleLowerCase();
+  if (!cacheKey || preparedSourceLanguages.has(cacheKey)) return;
+  preparedSourceLanguages.add(cacheKey);
+  fetch("/api/prepare-language", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source_language: language }),
+  }).then(response => {
+    if (!response.ok) throw new Error(`Language preparation failed (${response.status})`);
+  }).catch(() => {
+    // Preparation is an optimization only. Allow a later state render to retry.
+    preparedSourceLanguages.delete(cacheKey);
+  });
+}
+
 function renderSourceLanguageState(message = "") {
   const select = $("#source-language");
   const status = $("#source-language-status");
@@ -590,7 +607,9 @@ function renderSourceLanguageState(message = "") {
   } else {
     status.textContent = t("language.choose");
   }
-  $("#translate-button").disabled = !selectedText || !effectiveSourceLanguage();
+  const sourceLanguage = effectiveSourceLanguage();
+  prepareSourceLanguage(sourceLanguage);
+  $("#translate-button").disabled = !selectedText || !sourceLanguage;
   document.dispatchEvent(new CustomEvent("margin:document-language", {
     detail: { language: detectedSourceLanguage },
   }));

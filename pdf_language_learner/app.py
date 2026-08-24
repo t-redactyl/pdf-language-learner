@@ -74,6 +74,12 @@ STANZA_LANGUAGES = {
 NOUN_POS = {"NOUN"}
 VERB_POS = {"VERB", "AUX"}
 STANZA_PIPELINE_LOCK = threading.Lock()
+STANZA_PIPELINE_INIT_LOCKS = {
+    language: threading.Lock() for language in STANZA_LANGUAGES
+}
+STANZA_PIPELINES: dict[str, Any] = {}
+STANZA_PREPARATION_LOCK = threading.Lock()
+STANZA_PREPARING: set[str] = set()
 RUNTIME_CACHE_SIZE = 512
 MODEL_CALL_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
@@ -572,6 +578,22 @@ class LanguageDetectionRequest(BaseModel):
         return value
 
 
+class LanguagePreparationRequest(BaseModel):
+    source_language: str = Field(min_length=2, max_length=60)
+
+    @field_validator("source_language")
+    @classmethod
+    def strip_source_language(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+
+class LanguagePreparationResult(BaseModel):
+    status: Literal["ready", "preparing"]
+
+
 class WebImportRequest(BaseModel):
     url: str = Field(min_length=8, max_length=2_000)
 
@@ -762,37 +784,75 @@ class WordAnalysis:
     confident_verb_lemma: str | None = None
 
 
-@lru_cache(maxsize=len(STANZA_LANGUAGES))
 def stanza_pipeline(source_language: str):
-    started = time.perf_counter()
     normalized_language = source_language.casefold()
     language = STANZA_LANGUAGES.get(normalized_language)
     if language is None:
         raise ValueError(f"POS tagging is not supported for {source_language}")
-    processors = "tokenize,pos,lemma"
-    if normalized_language in VERB_CLITICS:
-        processors += ",depparse"
-    try:
-        pipeline = stanza.Pipeline(
-            lang=language,
-            processors=processors,
-            download_method=stanza.DownloadMethod.REUSE_RESOURCES,
-            use_gpu=False,
-            verbose=False,
-        )
-    except Exception:
-        logger.warning(
-            "Stanza pipeline initialization failed for %s after %.1fms",
+    with STANZA_PIPELINE_INIT_LOCKS[normalized_language]:
+        existing = STANZA_PIPELINES.get(normalized_language)
+        if existing is not None:
+            return existing
+        started = time.perf_counter()
+        processors = "tokenize,pos,lemma"
+        if normalized_language in VERB_CLITICS:
+            processors += ",depparse"
+        try:
+            pipeline = stanza.Pipeline(
+                lang=language,
+                processors=processors,
+                download_method=stanza.DownloadMethod.REUSE_RESOURCES,
+                use_gpu=False,
+                verbose=False,
+            )
+        except Exception:
+            logger.warning(
+                "Stanza pipeline initialization failed for %s after %.1fms",
+                source_language,
+                (time.perf_counter() - started) * 1_000,
+            )
+            raise
+        STANZA_PIPELINES[normalized_language] = pipeline
+        logger.info(
+            "Stanza pipeline initialized for %s in %.1fms",
             source_language,
             (time.perf_counter() - started) * 1_000,
         )
-        raise
-    logger.info(
-        "Stanza pipeline initialized for %s in %.1fms",
-        source_language,
-        (time.perf_counter() - started) * 1_000,
-    )
-    return pipeline
+        return pipeline
+
+
+def _prepare_stanza_language(source_language: str) -> None:
+    normalized_language = source_language.casefold()
+    try:
+        stanza_pipeline(source_language)
+    except Exception as exc:
+        logger.warning(
+            "Background Stanza preparation failed for %s: %s",
+            source_language,
+            exc,
+        )
+    finally:
+        with STANZA_PREPARATION_LOCK:
+            STANZA_PREPARING.discard(normalized_language)
+
+
+def start_stanza_preparation(source_language: str) -> Literal["ready", "preparing"]:
+    normalized_language = source_language.casefold()
+    if normalized_language not in STANZA_LANGUAGES:
+        raise ValueError(f"POS tagging is not supported for {source_language}")
+    with STANZA_PREPARATION_LOCK:
+        if normalized_language in STANZA_PIPELINES:
+            return "ready"
+        if normalized_language in STANZA_PREPARING:
+            return "preparing"
+        STANZA_PREPARING.add(normalized_language)
+    threading.Thread(
+        target=_prepare_stanza_language,
+        args=(source_language,),
+        name=f"stanza-{STANZA_LANGUAGES[normalized_language]}-warmup",
+        daemon=True,
+    ).start()
+    return "preparing"
 
 
 def normalize_source(text: str, source_language: str) -> str:
@@ -1953,6 +2013,21 @@ def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResul
             status_code=502,
             detail=f"Local language detection failed: {exc}",
         ) from exc
+
+
+@app.post(
+    "/api/prepare-language",
+    response_model=LanguagePreparationResult,
+    status_code=202,
+)
+def prepare_language(
+    request: LanguagePreparationRequest,
+) -> LanguagePreparationResult:
+    try:
+        status = start_stanza_preparation(request.source_language)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return LanguagePreparationResult(status=status)
 
 
 @app.post(

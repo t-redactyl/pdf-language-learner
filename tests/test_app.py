@@ -1,7 +1,8 @@
 import json
 import logging
 import sqlite3
-from threading import Barrier
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from pdf_language_learner.app import (
     MULTI_WORD_TERMS,
+    STANZA_PIPELINES,
     WordAnalysis,
     analyze_word_in_context,
     app,
@@ -18,6 +20,7 @@ from pdf_language_learner.app import (
     multi_word_term_in_context,
     ollama_client,
     ollama_keep_alive,
+    stanza_pipeline,
     warm_translation_model,
 )
 
@@ -59,6 +62,7 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-view"' in response.text
     assert 'id="interface-language"' in response.text
     assert 'data-i18n="hero.title"' in response.text
+    assert '/static/app.js?v=10' in response.text
 
 
 def test_spanish_interface_catalog_is_served() -> None:
@@ -193,6 +197,60 @@ def test_detect_language_uses_local_detector(monkeypatch, sample, expected) -> N
 
     assert response.status_code == 200
     assert response.json() == {"detected_language": expected}
+
+
+def test_prepare_language_starts_background_preparation(monkeypatch) -> None:
+    requested = []
+    monkeypatch.setattr(
+        "pdf_language_learner.app.start_stanza_preparation",
+        lambda language: requested.append(language) or "preparing",
+    )
+
+    response = client.post(
+        "/api/prepare-language", json={"source_language": " German "}
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {"status": "preparing"}
+    assert requested == ["German"]
+
+
+def test_prepare_language_rejects_unsupported_language() -> None:
+    response = client.post(
+        "/api/prepare-language", json={"source_language": "Klingon"}
+    )
+
+    assert response.status_code == 422
+    assert "not supported" in response.json()["detail"]
+
+
+def test_stanza_pipeline_initializes_each_language_once(monkeypatch) -> None:
+    initialization_started = Event()
+    allow_initialization_to_finish = Event()
+    pipeline = object()
+    calls = []
+
+    def fake_pipeline(**kwargs):
+        calls.append(kwargs)
+        initialization_started.set()
+        assert allow_initialization_to_finish.wait(timeout=2)
+        return pipeline
+
+    monkeypatch.setattr("pdf_language_learner.app.stanza.Pipeline", fake_pipeline)
+    STANZA_PIPELINES.pop("german", None)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(stanza_pipeline, "German")
+            assert initialization_started.wait(timeout=2)
+            second = executor.submit(stanza_pipeline, "german")
+            allow_initialization_to_finish.set()
+
+            assert first.result(timeout=2) is pipeline
+            assert second.result(timeout=2) is pipeline
+    finally:
+        STANZA_PIPELINES.pop("german", None)
+
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(
