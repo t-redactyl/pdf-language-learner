@@ -282,20 +282,79 @@ function showSelection({ text, rectangles, context = "", contextOffset = null })
 function readSelection(range, drag = null) {
   const transcriptSelection = readTranscriptSelection(range);
   if (transcriptSelection) return transcriptSelection;
-  const selected = selectionGeometry(range, drag);
+  const measuredRange = drag ? range : expandHyphenatedWordRange(range);
+  const selected = selectionGeometry(measuredRange, drag);
   if (selected.text && selected.rectangles.length) {
-    return { ...selected, ...selectionContext(range, selected.text) };
+    return { ...selected, ...selectionContext(measuredRange, selected.text) };
   }
   // Chrome sometimes reports a range whose text is not empty but whose client
   // rectangles are degenerate. Quoting that text would leave the panel showing a
   // phrase with nothing highlighted, so a selection is only accepted when it
   // comes with the geometry to highlight it; otherwise the previous one stands.
-  const text = range.toString().replace(/\s+/g, " ").trim();
+  const text = measuredRange.toString().replace(/\s+/g, " ").trim();
   if (!text) return null;
-  const rectangles = rangeRectangles(range);
+  const rectangles = rangeRectangles(measuredRange);
   return rectangles.length
-    ? { text, rectangles, ...selectionContext(range, text) }
+    ? { text, rectangles, ...selectionContext(measuredRange, text) }
     : null;
+}
+
+// PDF producers normally encode a word broken across lines as two ordinary
+// text runs with a visible hyphen between them. Native browser word selection
+// can only select one run, so expand a one-word selection to the run on the
+// other side of a line-ending hyphen. The range still yields two rectangles,
+// which is the correct visual representation of one logical word.
+function expandHyphenatedWordRange(range) {
+  if (range.startContainer.nodeType !== Node.TEXT_NODE || range.endContainer.nodeType !== Node.TEXT_NODE) return range;
+  const selected = range.toString().trim();
+  if (!/^\p{L}[\p{L}\p{M}]*$/u.test(selected)) return range;
+
+  const startSpan = range.startContainer.parentElement?.closest(".textLayer span");
+  const endSpan = range.endContainer.parentElement?.closest(".textLayer span");
+  const page = startSpan?.closest(".pdf-page");
+  if (!page || page !== endSpan?.closest(".pdf-page")) return range;
+
+  const spans = [...page.querySelectorAll(".textLayer span")];
+  const startIndex = spans.indexOf(startSpan);
+  const endIndex = spans.indexOf(endSpan);
+  const hyphen = "[-\\u00ad\\u2010]";
+  const continuation = /^\p{L}[\p{L}\p{M}]*/u;
+  const expanded = range.cloneRange();
+
+  const endText = range.endContainer.textContent;
+  if (startSpan === endSpan && new RegExp(`^${hyphen}\\s*$`, "u").test(endText.slice(range.endOffset))) {
+    const next = adjacentLineSpan(spans, endIndex, 1);
+    const match = next?.textContent.match(continuation);
+    const textNode = next?.firstChild;
+    if (match && textNode?.nodeType === Node.TEXT_NODE) {
+      expanded.setEnd(textNode, match[0].length);
+      return expanded;
+    }
+  }
+
+  const startText = range.startContainer.textContent;
+  if (startSpan === endSpan && /^\s*$/u.test(startText.slice(0, range.startOffset))) {
+    const previous = adjacentLineSpan(spans, startIndex, -1);
+    const match = previous?.textContent.match(new RegExp(`(\\p{L}[\\p{L}\\p{M}]*)${hyphen}\\s*$`, "u"));
+    const textNode = previous?.firstChild;
+    if (match && textNode?.nodeType === Node.TEXT_NODE) {
+      expanded.setStart(textNode, match.index);
+      return expanded;
+    }
+  }
+  return range;
+}
+
+function adjacentLineSpan(spans, index, direction) {
+  const origin = spans[index]?.getBoundingClientRect();
+  if (!origin) return null;
+  for (let candidateIndex = index + direction; candidateIndex >= 0 && candidateIndex < spans.length; candidateIndex += direction) {
+    const candidate = spans[candidateIndex];
+    if (!candidate.textContent.trim()) continue;
+    const rect = candidate.getBoundingClientRect();
+    return changedTextLine(rect, origin) ? candidate : null;
+  }
+  return null;
 }
 
 function readTranscriptSelection(range) {
@@ -345,11 +404,9 @@ function selectionContext(range, selectedText) {
   let previousRect = null;
   spans.forEach((span, index) => {
     const rect = span.getBoundingClientRect();
-    const separator = context ? separatorBefore(rect, previousRect) : "";
-    if (index === selectedStart) {
-      approximateOffset = context.length + separator.length + offsetWithinSpan;
-    }
-    context += separator + spanText(span);
+    const value = spanText(span);
+    context = appendPdfText(context, value, rect, previousRect);
+    if (index === selectedStart) approximateOffset = context.length - value.length + offsetWithinSpan;
     previousRect = rect;
   });
   const sentence = sentenceContext(context, selectedText, approximateOffset);
@@ -430,7 +487,7 @@ function selectionGeometry(range, drag) {
         width: (to - from) / pageBox.width,
         height: (bottom - top) / pageBox.height,
       });
-      text += (text ? separatorBefore(spanRect, previousRect) : "") + characters.slice(start, end);
+      text = appendPdfText(text, characters.slice(start, end), spanRect, previousRect);
       previousRect = spanRect;
     }
   }
@@ -442,10 +499,22 @@ function selectionGeometry(range, drag) {
 // where the layout implies a break: a new line, or a visible horizontal gap.
 function separatorBefore(spanRect, previousRect) {
   if (!previousRect) return "";
-  const centre = spanRect.top + spanRect.height / 2;
-  const previousCentre = previousRect.top + previousRect.height / 2;
-  const changedLine = Math.abs(centre - previousCentre) > spanRect.height / 2;
+  const changedLine = changedTextLine(spanRect, previousRect);
   return changedLine || spanRect.left - previousRect.right > spanRect.height * 0.2 ? " " : "";
+}
+
+function changedTextLine(rect, previousRect) {
+  const centre = rect.top + rect.height / 2;
+  const previousCentre = previousRect.top + previousRect.height / 2;
+  return Math.abs(centre - previousCentre) > Math.min(rect.height, previousRect.height) / 2;
+}
+
+function appendPdfText(text, value, rect, previousRect) {
+  const separator = text ? separatorBefore(rect, previousRect) : "";
+  if (separator && /[-\u00ad\u2010]$/u.test(text) && /^\p{L}/u.test(value)) {
+    return text.slice(0, -1) + value;
+  }
+  return text + separator + value;
 }
 
 // PDF.js stretches each span with scaleX so its rendered width matches the PDF's
