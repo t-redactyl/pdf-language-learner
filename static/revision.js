@@ -1,4 +1,5 @@
 import { renderHighlightedSentence, sentenceContaining } from "./text.js";
+import { languageName, t } from "./i18n.js?v=1";
 
 const $ = selector => document.querySelector(selector);
 
@@ -33,7 +34,7 @@ function setNounGender(element, gender, showTitle = true) {
   element.removeAttribute("title");
   if (!NOUN_GENDERS.has(gender)) return;
   element.classList.add(`noun-${gender}`);
-  if (showTitle) element.title = `${gender[0].toUpperCase()}${gender.slice(1)} noun`;
+  if (showTitle) element.title = t("gender.title", { gender: t(`gender.${gender}`) });
 }
 
 $("#open-revision")?.addEventListener("click", openRevision);
@@ -53,7 +54,7 @@ document.addEventListener("margin:document-language", event => {
   if (documentLanguage && !view.hidden) {
     const select = $("#revision-language");
     if (![...select.options].some(option => normalize(option.value) === normalize(documentLanguage))) {
-      select.add(new Option(documentLanguage, documentLanguage));
+      select.add(new Option(languageName(documentLanguage), documentLanguage));
     }
     select.value = documentLanguage;
     loadRevisionSession();
@@ -61,6 +62,14 @@ document.addEventListener("margin:document-language", event => {
 });
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !view.hidden) closeRevision();
+});
+document.addEventListener("margin:locale-changed", () => {
+  localizeRevisionLanguageOptions();
+  if (currentCard) renderCardDirection();
+  const prompt = $("#revision-prompt");
+  const gender = [...NOUN_GENDERS].find(value => prompt?.classList.contains(`noun-${value}`));
+  if (gender) setNounGender(prompt, gender);
+  updateProgress();
 });
 
 async function openRevision() {
@@ -78,15 +87,15 @@ async function openRevision() {
 async function populateLanguageSelector() {
   const response = await fetch("/api/vocabulary/languages");
   const languages = await response.json();
-  if (!response.ok) throw new Error(languages.detail || "Languages could not be loaded");
+  if (!response.ok) throw new Error(languages.detail || t("revision.languagesLoadError"));
   const select = $("#revision-language");
-  select.replaceChildren(new Option("Select language", ""));
+  select.replaceChildren(new Option(t("revision.selectLanguage"), ""));
   const choices = [...languages];
   if (documentLanguage && !choices.some(language => normalize(language) === normalize(documentLanguage))) {
     choices.push(documentLanguage);
   }
   choices.sort((left, right) => left.localeCompare(right));
-  choices.forEach(language => select.add(new Option(language, language)));
+  choices.forEach(language => select.add(new Option(languageName(language), language)));
   select.value = documentLanguage || "";
 }
 
@@ -104,8 +113,8 @@ async function loadRevisionSession() {
   if (!language) {
     loading.hidden = true;
     empty.hidden = false;
-    $("#revision-empty-title").textContent = "Select a language";
-    $("#revision-empty-copy").textContent = "Choose a saved vocabulary language to begin revising.";
+    $("#revision-empty-title").textContent = t("revision.chooseLanguage");
+    $("#revision-empty-copy").textContent = t("revision.chooseLanguageCopy");
     return;
   }
 
@@ -113,7 +122,7 @@ async function loadRevisionSession() {
     const params = new URLSearchParams({ language, limit: "40" });
     const response = await fetch(`/api/revision/session?${params}`);
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Revision could not be loaded");
+    if (!response.ok) throw new Error(data.detail || t("revision.loadError"));
     queue = data.cards.map(card => ({ ...card, retryCount: 0 }));
     loading.hidden = true;
     if (!queue.length) {
@@ -131,7 +140,7 @@ function showRevisionError(error) {
   loading.hidden = true;
   empty.hidden = false;
   session.hidden = true;
-  $("#revision-empty-title").textContent = "Revision could not be loaded";
+  $("#revision-empty-title").textContent = t("revision.loadError");
   $("#revision-empty-copy").textContent = error.message;
 }
 
@@ -143,16 +152,16 @@ function closeRevision() {
 function showEmptySession(finished = false) {
   session.hidden = true;
   empty.hidden = false;
-  $("#revision-empty-title").textContent = finished ? "Session complete" : "Nothing due right now";
+  $("#revision-empty-title").textContent = t(finished ? "revision.sessionComplete" : "revision.nothingDue");
   if (!finished) {
-    $("#revision-empty-copy").textContent = "You are caught up. Save vocabulary while reading to build future revision sessions.";
+    $("#revision-empty-copy").textContent = t("revision.caughtUp");
     return;
   }
   const answerSummary = answered
-    ? `${correctAnswers} of ${answered} answers were correct.`
-    : "No answers were recorded.";
+    ? t("revision.answers", { correct: correctAnswers, answered })
+    : t("revision.noAnswers");
   const removalSummary = removed
-    ? ` ${removed} ${removed === 1 ? "word" : "words"} removed from revision.`
+    ? t(`revision.removal.${removed === 1 ? "one" : "other"}`, { count: removed })
     : "";
   $("#revision-empty-copy").textContent = answerSummary + removalSummary;
 }
@@ -167,14 +176,12 @@ function renderNextCard() {
 
   currentCard = queue.shift();
   const sourceFirst = currentCard.direction === "source_to_translation";
-  const category = currentCard.category.replaceAll("_", " ");
+  const category = t(`revision.category.${currentCard.category}`);
   const promptGender = sourceFirst
     ? nounGender(currentCard.prompt, currentCard.source_language, currentCard.noun_gender)
     : null;
   setNounGender(document.querySelector(".revision-card"), promptGender, false);
-  $("#revision-direction").textContent = sourceFirst
-    ? `${currentCard.source_language} → ${currentCard.target_language} · ${category}`
-    : `${currentCard.target_language} → ${currentCard.source_language} · ${category}`;
+  renderCardDirection(category);
   const prompt = $("#revision-prompt");
   prompt.textContent = currentCard.prompt;
   setNounGender(prompt, null);
@@ -182,7 +189,7 @@ function renderNextCard() {
   removeButton.dataset.itemId = currentCard.item_id;
   removeButton.dataset.prompt = currentCard.prompt;
   removeButton.disabled = false;
-  removeButton.textContent = "Remove from revision";
+  removeButton.textContent = t("revision.remove");
   $("#revision-action-error").textContent = "";
   updateProgress();
 
@@ -221,8 +228,8 @@ async function removeCurrentCard() {
   const button = $("#revision-remove");
   const itemId = button.dataset.itemId;
   if (!itemId) return;
-  const prompt = button.dataset.prompt || "this word";
-  if (!window.confirm(`Remove “${prompt}” from saved vocabulary and revision?`)) return;
+  const prompt = button.dataset.prompt || t("revision.thisWord");
+  if (!window.confirm(t("revision.confirmRemove", { word: prompt }))) return;
 
   const choiceButtons = [...document.querySelectorAll(".revision-choice")];
   const recallAnswer = $("#revision-recall-answer");
@@ -238,7 +245,7 @@ async function removeCurrentCard() {
     });
     if (!response.ok) {
       const data = await response.json();
-      throw new Error(data.detail || "The word could not be removed");
+      throw new Error(data.detail || t("revision.removeError"));
     }
 
     queue = queue.filter(card => card.item_id !== itemId);
@@ -250,7 +257,7 @@ async function removeCurrentCard() {
       currentCard = null;
       renderNextCard();
     } else {
-      button.textContent = "Removed from revision";
+      button.textContent = t("revision.removed");
       updateProgress();
     }
   } catch (error) {
@@ -283,7 +290,7 @@ async function submitAnswer(selectedAnswer) {
       }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Answer could not be saved");
+    if (!response.ok) throw new Error(data.detail || t("revision.answerSaveError"));
 
     answered += 1;
     if (data.correct) correctAnswers += 1;
@@ -303,8 +310,8 @@ async function submitAnswer(selectedAnswer) {
       recallAnswer.classList.add(data.correct ? "is-correct" : "is-incorrect");
     }
     $("#revision-feedback-title").textContent = data.correct
-      ? "Correct"
-      : `Not quite — the answer is ${data.correct_answer}.`;
+      ? t("revision.correct")
+      : t("revision.incorrect", { answer: data.correct_answer });
     const context = sentenceContaining(
       data.item.context,
       data.item.original_source || data.item.normalized_source,
@@ -313,7 +320,7 @@ async function submitAnswer(selectedAnswer) {
       $("#revision-context"),
       context,
       [data.item.original_source, data.item.normalized_source],
-      "From the text: ",
+      t("revision.fromText"),
     );
     $("#revision-feedback").hidden = false;
     currentCard = null;
@@ -332,10 +339,29 @@ async function submitAnswer(selectedAnswer) {
 
 function updateProgress() {
   const remaining = queue.length + (currentCard ? 1 : 0);
-  $("#revision-progress-text").textContent = `${answered} answered · ${remaining} remaining`;
-  const score = answered ? `${correctAnswers} correct` : "";
-  const removals = removed ? `${removed} removed` : "";
+  $("#revision-progress-text").textContent = t("revision.progress", { answered, remaining });
+  const score = answered ? t("revision.score", { count: correctAnswers }) : "";
+  const removals = removed ? t("revision.removedCount", { count: removed }) : "";
   $("#revision-score").textContent = [score, removals].filter(Boolean).join(" · ");
+}
+
+function renderCardDirection(category = null) {
+  if (!currentCard) return;
+  const sourceFirst = currentCard.direction === "source_to_translation";
+  const label = category || t(`revision.category.${currentCard.category}`);
+  const source = languageName(currentCard.source_language);
+  const target = languageName(currentCard.target_language);
+  $("#revision-direction").textContent = sourceFirst
+    ? `${source} → ${target} · ${label}`
+    : `${target} → ${source} · ${label}`;
+}
+
+function localizeRevisionLanguageOptions() {
+  const select = $("#revision-language");
+  if (!select) return;
+  [...select.options].forEach(option => {
+    option.textContent = option.value ? languageName(option.value) : t("revision.selectLanguage");
+  });
 }
 
 function normalize(value) {

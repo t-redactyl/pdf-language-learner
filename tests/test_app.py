@@ -26,6 +26,16 @@ def test_home_serves_reader() -> None:
     assert "PDF language reader" in response.text
     assert 'id="saved-vocabulary-list"' in response.text
     assert 'id="revision-view"' in response.text
+    assert 'id="interface-language"' in response.text
+    assert 'data-i18n="hero.title"' in response.text
+
+
+def test_spanish_interface_catalog_is_served() -> None:
+    response = client.get("/static/i18n.js")
+
+    assert response.status_code == 200
+    assert "Convierte la lectura en otros idiomas" in response.text
+    assert 'localStorage.setItem(STORAGE_KEY, locale)' in response.text
 
 
 def test_detect_language_uses_document_sample(monkeypatch) -> None:

@@ -9,6 +9,7 @@ button,select,input { font:inherit; }
 .brand small { color:#74786f; }
 .file-button,.primary-button { display:inline-block; border:0; border-radius:2px; background:var(--ink); color:white; padding:11px 18px; cursor:pointer; text-decoration:none; }
 .topbar-actions { display:flex; align-items:center; gap:10px; }
+.language-switcher { padding:9px 28px 9px 10px; border:1px solid var(--line); border-radius:2px; background:var(--card); color:var(--ink); cursor:pointer; font-size:12px; font-weight:700; }
 .web-url-form { margin:0; }
 .topbar-url-form { display:flex; }
 .topbar-url-form input { width:min(25vw,290px); padding:9px 11px; border:1px solid var(--line); border-right:0; background:white; }
@@ -132,4 +133,4 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 [hidden] { display:none !important; }
 @media (max-width:1050px) { .reader { grid-template-columns:1fr minmax(220px,280px); } .reader-meta { display:none; } }
 @media (max-width:900px) { .topbar-url-form { display:none; } }
-@media (max-width:760px) { .reader { display:block; padding:0 12px; } .translation-panel { position:fixed; z-index:10; top:auto; bottom:0; left:0; right:0; max-height:52vh; overflow:auto; } .pages { padding-bottom:300px; } .brand small { display:none; } .topbar-actions { gap:6px; } .secondary-button,.file-button { padding:9px 11px; font-size:13px; } .revision-choices { grid-template-columns:1fr; } .revision-recall-controls { flex-direction:column; } .revision-shell { margin:24px auto; } .url-controls { flex-direction:column; } }
+@media (max-width:760px) { .topbar { padding:0 10px; } .reader { display:block; padding:0 12px; } .translation-panel { position:fixed; z-index:10; top:auto; bottom:0; left:0; right:0; max-height:52vh; overflow:auto; } .pages { padding-bottom:300px; } .brand small { display:none; } .topbar-actions { gap:4px; } .language-switcher { padding:9px 24px 9px 8px; } .secondary-button,.file-button { padding:9px 9px; font-size:12px; } .revision-choices { grid-template-columns:1fr; } .revision-recall-controls { flex-direction:column; } .revision-shell { margin:24px auto; } .url-controls { flex-direction:column; } }

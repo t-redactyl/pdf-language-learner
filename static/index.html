@@ -8,16 +8,21 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Margin home"><span>Margin</span><small>Language reader</small></a>
+    <a class="brand" href="/" aria-label="Margin home" data-i18n-aria-label="brand.home"><span>Margin</span><small data-i18n="brand.tagline">Language reader</small></a>
     <div class="topbar-actions">
       <form class="web-url-form topbar-url-form">
-        <label class="visually-hidden" for="topbar-web-url">Article or transcript URL</label>
-        <input id="topbar-web-url" name="url" type="url" inputmode="url" placeholder="Paste an article URL" required>
-        <button class="url-clear-button" type="button" aria-label="Clear URL" title="Clear URL">×</button>
-        <button class="secondary-button" type="submit">Open URL</button>
+        <label class="visually-hidden" for="topbar-web-url" data-i18n="url.label">Article or transcript URL</label>
+        <input id="topbar-web-url" name="url" type="url" inputmode="url" placeholder="Paste an article URL" data-i18n-placeholder="url.placeholder" required>
+        <button class="url-clear-button" type="button" aria-label="Clear URL" title="Clear URL" data-i18n-aria-label="url.clear" data-i18n-title="url.clear">×</button>
+        <button class="secondary-button" type="submit" data-i18n="url.open">Open URL</button>
       </form>
-      <button id="open-revision" class="secondary-button" type="button">Revise vocabulary</button>
-      <label class="file-button">Open PDF<input id="pdf-input" type="file" accept="application/pdf"></label>
+      <label class="visually-hidden" for="interface-language" data-i18n="locale.label">Interface language</label>
+      <select id="interface-language" class="language-switcher" aria-label="Interface language" data-i18n-aria-label="locale.label">
+        <option value="en">EN</option>
+        <option value="es">ES</option>
+      </select>
+      <button id="open-revision" class="secondary-button" type="button" data-i18n="revision.open">Revise vocabulary</button>
+      <label class="file-button"><span data-i18n="pdf.open">Open PDF</span><input id="pdf-input" type="file" accept="application/pdf"></label>
     </div>
   </header>
   <main>
@@ -25,19 +30,19 @@
       <div class="revision-shell">
         <div class="revision-heading">
           <div>
-            <p class="eyebrow">Spaced repetition</p>
-            <h2 id="revision-title">Vocabulary revision</h2>
-            <label class="revision-language-label" for="revision-language">Language</label>
-            <select id="revision-language" aria-label="Vocabulary language">
-              <option value="">Select language</option>
+            <p class="eyebrow" data-i18n="revision.eyebrow">Spaced repetition</p>
+            <h2 id="revision-title" data-i18n="revision.title">Vocabulary revision</h2>
+            <label class="revision-language-label" for="revision-language" data-i18n="revision.language">Language</label>
+            <select id="revision-language" aria-label="Vocabulary language" data-i18n-aria-label="revision.languageAria">
+              <option value="" data-i18n="revision.selectLanguage">Select language</option>
             </select>
           </div>
-          <button id="close-revision" class="text-button" type="button">Close</button>
+          <button id="close-revision" class="text-button" type="button" data-i18n="revision.close">Close</button>
         </div>
-        <p id="revision-loading" class="revision-message">Preparing your due words…</p>
+        <p id="revision-loading" class="revision-message" data-i18n="revision.preparing">Preparing your due words…</p>
         <div id="revision-empty" class="revision-message" hidden>
-          <h3 id="revision-empty-title">Nothing due right now</h3>
-          <p id="revision-empty-copy">Save vocabulary while reading to build future revision sessions.</p>
+          <h3 id="revision-empty-title" data-i18n="revision.nothingDue">Nothing due right now</h3>
+          <p id="revision-empty-copy" data-i18n="revision.savePrompt">Save vocabulary while reading to build future revision sessions.</p>
         </div>
         <div id="revision-session" hidden>
           <div class="revision-progress">
@@ -48,21 +53,21 @@
             <p id="revision-direction" class="eyebrow"></p>
             <h3 id="revision-prompt"></h3>
             <div class="revision-card-actions">
-              <button id="revision-remove" class="text-button" type="button">Remove from revision</button>
+              <button id="revision-remove" class="text-button" type="button" data-i18n="revision.remove">Remove from revision</button>
               <p id="revision-action-error" role="alert"></p>
             </div>
             <div id="revision-choices" class="revision-choices"></div>
             <form id="revision-recall" class="revision-recall" hidden>
-              <label for="revision-recall-answer">Type your answer</label>
+              <label for="revision-recall-answer" data-i18n="revision.typeAnswer">Type your answer</label>
               <div class="revision-recall-controls">
                 <input id="revision-recall-answer" type="text" required maxlength="2000" autocomplete="off" autocapitalize="off" spellcheck="false">
-                <button class="primary-button" type="submit">Check answer</button>
+                <button class="primary-button" type="submit" data-i18n="revision.check">Check answer</button>
               </div>
             </form>
             <div id="revision-feedback" class="revision-feedback" aria-live="polite" hidden>
               <p id="revision-feedback-title"></p>
               <p id="revision-context" class="revision-context"></p>
-              <button id="revision-continue" class="primary-button" type="button">Continue</button>
+              <button id="revision-continue" class="primary-button" type="button" data-i18n="revision.continue">Continue</button>
             </div>
           </article>
         </div>
@@ -70,16 +75,16 @@
     </section>
     <section id="empty-state" class="empty-state">
       <div class="empty-mark">M</div>
-      <h1>Turn foreign-language reading into lasting knowledge.</h1>
-      <p class="intro">Open a PDF or import an audio article with a transcript. Select any word or phrase and translate it without leaving the page.</p>
-      <label class="primary-button">Choose a PDF<input type="file" accept="application/pdf"></label>
-      <span class="source-divider">or</span>
+      <h1 data-i18n="hero.title">Turn foreign-language reading into lasting knowledge.</h1>
+      <p class="intro" data-i18n="hero.intro">Open a PDF or import an audio article with a transcript. Select any word or phrase and translate it without leaving the page.</p>
+      <label class="primary-button"><span data-i18n="pdf.choose">Choose a PDF</span><input type="file" accept="application/pdf"></label>
+      <span class="source-divider" data-i18n="common.or">or</span>
       <form class="web-url-form empty-url-form">
-        <label for="empty-web-url">Article or transcript URL</label>
+        <label for="empty-web-url" data-i18n="url.emptyLabel">Article or transcript URL</label>
         <div class="url-controls">
           <input id="empty-web-url" name="url" type="url" inputmode="url" placeholder="https://…" required>
-          <button class="secondary-button url-clear-button" type="button">Clear</button>
-          <button class="primary-button" type="submit">Import page</button>
+          <button class="secondary-button url-clear-button" type="button" data-i18n="common.clear">Clear</button>
+          <button class="primary-button" type="submit" data-i18n="url.import">Import page</button>
         </div>
         <p class="web-import-status error" role="alert"></p>
       </form>
@@ -88,50 +93,50 @@
       <aside class="reader-meta">
         <section class="saved-vocabulary" aria-labelledby="saved-vocabulary-title">
           <div class="history-heading">
-            <p id="saved-vocabulary-title" class="eyebrow">Saved vocabulary</p>
+            <p id="saved-vocabulary-title" class="eyebrow" data-i18n="vocabulary.saved">Saved vocabulary</p>
             <span id="saved-vocabulary-count" class="vocabulary-count" aria-live="polite"></span>
           </div>
-          <p id="saved-vocabulary-empty" class="history-empty">Save translated words for later revision.</p>
+          <p id="saved-vocabulary-empty" class="history-empty" data-i18n="vocabulary.empty">Save translated words for later revision.</p>
           <ol id="saved-vocabulary-list"></ol>
         </section>
         <section class="translation-history" aria-labelledby="translation-history-title">
           <div class="history-heading">
-            <p id="translation-history-title" class="eyebrow">Translation history</p>
-            <button id="clear-translations" class="text-button history-clear" type="button" hidden>Clear</button>
+            <p id="translation-history-title" class="eyebrow" data-i18n="history.title">Translation history</p>
+            <button id="clear-translations" class="text-button history-clear" type="button" data-i18n="history.clear" hidden>Clear</button>
           </div>
-          <p id="translation-history-empty" class="history-empty">Translations you create will appear here.</p>
+          <p id="translation-history-empty" class="history-empty" data-i18n="history.empty">Translations you create will appear here.</p>
           <ol id="translation-history-list"></ol>
         </section>
       </aside>
-      <div id="pages" class="pages" aria-label="Document content"></div>
+      <div id="pages" class="pages" aria-label="Document content" data-i18n-aria-label="document.content"></div>
       <aside class="translation-panel">
-        <p class="eyebrow">Translation</p>
-        <p id="selection-hint">Select text in the document to begin.</p>
+        <p class="eyebrow" data-i18n="translation.title">Translation</p>
+        <p id="selection-hint" data-i18n="translation.hint">Select text in the document to begin.</p>
         <div id="translation-content" hidden>
-          <p class="form-label">Original</p>
+          <p class="form-label" data-i18n="translation.original">Original</p>
           <blockquote id="selected-text"></blockquote>
-          <label for="source-language">Source language</label>
+          <label for="source-language" data-i18n="translation.sourceLanguage">Source language</label>
           <select id="source-language">
-            <option value="auto">Auto-detect</option>
-            <option>English</option><option>German</option><option>Spanish</option><option>French</option>
-            <option>Italian</option><option>Portuguese</option><option>Dutch</option><option>Polish</option>
-            <option>Japanese</option><option>Korean</option><option>Chinese (Simplified)</option>
+            <option value="auto" data-i18n="translation.autoDetect">Auto-detect</option>
+            <option value="English">English</option><option value="German">German</option><option value="Spanish">Spanish</option><option value="French">French</option>
+            <option value="Italian">Italian</option><option value="Portuguese">Portuguese</option><option value="Dutch">Dutch</option><option value="Polish">Polish</option>
+            <option value="Japanese">Japanese</option><option value="Korean">Korean</option><option value="Chinese (Simplified)">Chinese (Simplified)</option>
           </select>
           <p id="source-language-status" class="language-status" aria-live="polite"></p>
-          <label for="target-language">Translate to</label>
+          <label for="target-language" data-i18n="translation.targetLanguage">Translate to</label>
           <select id="target-language">
-            <option>English</option><option>German</option><option>Spanish</option><option>French</option>
-            <option>Italian</option><option>Portuguese</option><option>Dutch</option><option>Polish</option>
-            <option>Japanese</option><option>Korean</option><option>Chinese (Simplified)</option>
+            <option value="English">English</option><option value="German">German</option><option value="Spanish">Spanish</option><option value="French">French</option>
+            <option value="Italian">Italian</option><option value="Portuguese">Portuguese</option><option value="Dutch">Dutch</option><option value="Polish">Polish</option>
+            <option value="Japanese">Japanese</option><option value="Korean">Korean</option><option value="Chinese (Simplified)">Chinese (Simplified)</option>
           </select>
-          <button id="translate-button" class="primary-button" type="button" disabled>Translate selection</button>
+          <button id="translate-button" class="primary-button" type="button" data-i18n="translation.button" disabled>Translate selection</button>
           <div id="result" class="result" hidden>
             <span id="detected-language"></span>
             <div id="normalized-result">
-              <p class="result-label">Normalized</p>
+              <p class="result-label" data-i18n="translation.normalized">Normalized</p>
               <p id="normalized-text"></p>
             </div>
-            <p class="result-label">Translation</p>
+            <p class="result-label" data-i18n="translation.result">Translation</p>
             <p id="translated-text"></p>
           </div>
           <p id="error" class="error" role="alert"></p>
@@ -139,7 +144,7 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="/static/revision.js?v=6"></script>
-  <script type="module" src="/static/app.js?v=8"></script>
+  <script type="module" src="/static/revision.js?v=7"></script>
+  <script type="module" src="/static/app.js?v=9"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=2";
+import { initI18n, languageName, t } from "./i18n.js?v=1";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -22,6 +23,26 @@ let selectionDragStart = null;
 let translations = [];
 const LEGACY_SAVED_VOCABULARY_STORAGE_KEY = "margin:saved-vocabulary:v1";
 let savedVocabulary = [];
+
+initI18n();
+localizeLanguageOptions();
+
+document.addEventListener("margin:locale-changed", () => {
+  localizeLanguageOptions();
+  if (languageDetectionError) languageDetectionError = t("language.detectionFailed");
+  renderSourceLanguageState();
+  renderTranslationHistory();
+  renderSavedVocabulary();
+  refreshNounGenderTitles();
+  const shownSource = $("#result").hidden ? "" : $("#detected-language").dataset.language;
+  if (shownSource) $("#detected-language").textContent = t("translation.source", { language: languageName(shownSource) });
+});
+
+function localizeLanguageOptions() {
+  document.querySelectorAll("#source-language option:not([value=auto]), #target-language option").forEach(option => {
+    option.textContent = languageName(option.value);
+  });
+}
 
 document.querySelectorAll("input[type=file]").forEach((input) => input.addEventListener("change", (event) => openPdf(event.target.files[0])));
 
@@ -74,8 +95,7 @@ document.querySelectorAll(".web-url-form").forEach(form => form.addEventListener
   const url = input.value.trim();
   if (!url) return;
   button.disabled = true;
-  const originalLabel = button.textContent;
-  button.textContent = "Importing…";
+  button.textContent = t("web.importing");
   setWebImportStatus("");
   try {
     const response = await fetch("/api/import-web", {
@@ -84,14 +104,14 @@ document.querySelectorAll(".web-url-form").forEach(form => form.addEventListener
       body: JSON.stringify({ url }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || `Page import failed (${response.status})`);
+    if (!response.ok) throw new Error(data.detail || t("error.import", { status: response.status }));
     openWebDocument(data);
     document.querySelectorAll(".web-url-form input[name=url]").forEach(other => { other.value = data.url; });
   } catch (error) {
     setWebImportStatus(error.message);
   } finally {
     button.disabled = false;
-    button.textContent = originalLabel;
+    button.textContent = t(form.classList.contains("topbar-url-form") ? "url.open" : "url.import");
   }
 }));
 
@@ -115,7 +135,8 @@ function openWebDocument(data) {
   header.className = "web-document-header";
   const eyebrow = document.createElement("p");
   eyebrow.className = "eyebrow";
-  eyebrow.textContent = "Audio transcript";
+  eyebrow.dataset.i18n = "web.audioTranscript";
+  eyebrow.textContent = t("web.audioTranscript");
   const title = document.createElement("h1");
   title.textContent = data.title;
   const source = document.createElement("a");
@@ -135,15 +156,20 @@ function openWebDocument(data) {
   } else {
     const audioNotice = document.createElement("p");
     audioNotice.className = "audio-notice";
-    audioNotice.append("This site does not expose a direct audio file. ");
+    const noticeText = document.createElement("span");
+    noticeText.dataset.i18n = "web.noDirectAudio";
+    noticeText.textContent = t("web.noDirectAudio");
+    audioNotice.append(noticeText);
     const listenLink = source.cloneNode(true);
-    listenLink.textContent = "Listen on the original page";
+    listenLink.dataset.i18n = "web.listenOriginal";
+    listenLink.textContent = t("web.listenOriginal");
     audioNotice.append(listenLink);
     header.append(audioNotice);
   }
   const transcript = document.createElement("section");
   transcript.className = "web-transcript";
-  transcript.setAttribute("aria-label", "Transcript");
+  transcript.dataset.i18nAriaLabel = "web.transcript";
+  transcript.setAttribute("aria-label", t("web.transcript"));
   if (data.transcript.length) {
     data.transcript.forEach(value => {
       const paragraph = document.createElement("p");
@@ -153,7 +179,8 @@ function openWebDocument(data) {
   } else {
     const message = document.createElement("p");
     message.className = "transcript-empty";
-    message.textContent = "No transcript could be found on this page, but you can still play its audio.";
+    message.dataset.i18n = "web.noTranscript";
+    message.textContent = t("web.noTranscript");
     transcript.append(message);
   }
   article.append(header, transcript);
@@ -484,15 +511,15 @@ function renderSourceLanguageState(message = "") {
   if (message) {
     status.textContent = message;
   } else if (sourceLanguageOverride) {
-    status.textContent = `Using ${sourceLanguageOverride} (manual override)`;
+    status.textContent = t("language.usingOverride", { language: languageName(sourceLanguageOverride) });
   } else if (detectedSourceLanguage) {
-    status.textContent = `Detected ${detectedSourceLanguage} for this document`;
+    status.textContent = t("language.detected", { language: languageName(detectedSourceLanguage) });
   } else if (languageDetectionPending) {
-    status.textContent = "Detecting document language…";
+    status.textContent = t("language.detecting");
   } else if (languageDetectionError) {
     status.textContent = languageDetectionError;
   } else {
-    status.textContent = "Choose a language to translate";
+    status.textContent = t("language.choose");
   }
   $("#translate-button").disabled = !selectedText || !effectiveSourceLanguage();
   document.dispatchEvent(new CustomEvent("margin:document-language", {
@@ -516,14 +543,14 @@ async function detectDocumentLanguage() {
       body: JSON.stringify({ text: documentLanguageSample }),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || `Language detection failed (${response.status})`);
+    if (!response.ok) throw new Error(data.detail || t("error.detection", { status: response.status }));
     if (activeDocumentKey !== documentKey) return;
     detectedSourceLanguage = data.detected_language;
     saveDocumentLanguageState();
     loadSavedVocabulary(effectiveSourceLanguage()).catch(() => {});
   } catch (error) {
     if (activeDocumentKey === documentKey) {
-      languageDetectionError = "Automatic detection failed; choose the source language";
+      languageDetectionError = t("language.detectionFailed");
     }
   } finally {
     if (activeDocumentKey === documentKey) {
@@ -582,7 +609,14 @@ function setNounGender(element, gender) {
   element.removeAttribute("title");
   if (!NOUN_GENDERS.has(gender)) return;
   element.classList.add(`noun-${gender}`);
-  element.title = `${gender[0].toUpperCase()}${gender.slice(1)} noun`;
+  element.title = t("gender.title", { gender: t(`gender.${gender}`) });
+}
+
+function refreshNounGenderTitles() {
+  document.querySelectorAll("#normalized-text, .reader-meta .history-source").forEach(element => {
+    const gender = [...NOUN_GENDERS].find(value => element.classList.contains(`noun-${value}`));
+    if (gender) setNounGender(element, gender);
+  });
 }
 
 function showNormalizedResult(source, isWord, nounGender = null) {
@@ -594,10 +628,10 @@ function showNormalizedResult(source, isWord, nounGender = null) {
 
 $("#translate-button").addEventListener("click", async () => {
   const button = $("#translate-button");
-  button.disabled = true; button.textContent = "Translating…"; $("#error").textContent = "";
+  button.disabled = true; button.textContent = t("translation.translating"); $("#error").textContent = "";
   try {
     const sourceLanguage = effectiveSourceLanguage();
-    if (!sourceLanguage) throw new Error("Choose the document's source language first");
+    if (!sourceLanguage) throw new Error(t("translation.chooseSource"));
     const response = await fetch("/api/translate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ text:selectedText, source_language:sourceLanguage, target_language:$("#target-language").value, context:selectedContext, context_offset:selectedContextOffset }) });
     const contentType = response.headers.get("content-type") || "";
     const data = contentType.includes("application/json")
@@ -606,10 +640,11 @@ $("#translate-button").addEventListener("click", async () => {
 
     if (!response.ok) {
       throw new Error(
-        data.detail || `Translation failed (${response.status})`
+        data.detail || t("error.translation", { status: response.status })
       );
     }
-    $("#detected-language").textContent = `Source ${data.detected_language}`;
+    $("#detected-language").dataset.language = data.detected_language;
+    $("#detected-language").textContent = t("translation.source", { language: languageName(data.detected_language) });
     // The API can resolve a one-word selection to a known multi-word term.
     const isWord = data.is_word === true;
     const nounGender = nounGenderFor({ ...data, sourceLanguage });
@@ -633,7 +668,7 @@ $("#translate-button").addEventListener("click", async () => {
       nounGender,
     });
   } catch (error) { $("#error").textContent = error.message; }
-  finally { button.textContent = "Translate selection"; renderSourceLanguageState(); }
+  finally { button.textContent = t("translation.button"); renderSourceLanguageState(); }
 });
 
 function showCurrentHighlight(rectangles) {
@@ -752,7 +787,7 @@ async function requestVocabulary(translation) {
     body: JSON.stringify(vocabularyApiPayload(translation)),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || "Vocabulary could not be saved");
+  if (!response.ok) throw new Error(data.detail || t("error.vocabularySave"));
   return vocabularyFromApi(data.item);
 }
 
@@ -778,7 +813,7 @@ async function loadSavedVocabulary(language = effectiveSourceLanguage()) {
   const query = language ? `?${new URLSearchParams({ language })}` : "";
   const response = await fetch(`/api/vocabulary${query}`);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || "Saved vocabulary could not be loaded");
+  if (!response.ok) throw new Error(data.detail || t("error.vocabularyLoad"));
   if (activeDocumentKey !== documentKey || effectiveSourceLanguage() !== language) return;
   savedVocabulary = data.map(vocabularyFromApi);
   renderTranslationHistory();
@@ -793,7 +828,7 @@ async function toggleSavedVocabulary(translation) {
     });
     if (!response.ok) {
       const data = await response.json();
-      throw new Error(data.detail || "Saved vocabulary could not be removed");
+      throw new Error(data.detail || t("error.vocabularyRemove"));
     }
   } else {
     await requestVocabulary(translation);
@@ -829,8 +864,8 @@ function createTranslationListItem(translation, index, collection) {
   saveButton.dataset.translationIndex = index;
   saveButton.dataset.translationCollection = collection;
   saveButton.setAttribute("aria-pressed", String(isSaved));
-  saveButton.setAttribute("aria-label", isSaved ? `Remove ${source.textContent} from saved vocabulary` : `Save ${source.textContent} for revision`);
-  saveButton.title = isSaved ? "Remove from saved vocabulary" : "Save for revision";
+  saveButton.setAttribute("aria-label", t(isSaved ? "vocabulary.removeAria" : "vocabulary.saveAria", { word: source.textContent }));
+  saveButton.title = t(isSaved ? "vocabulary.removeTitle" : "vocabulary.saveTitle");
   saveButton.textContent = isSaved ? "★" : "☆";
 
   item.append(button);
@@ -884,7 +919,8 @@ function showTranslation(translation) {
   pendingHighlight = [];
   $("#selected-text").textContent = translation.originalSource || source;
   $("#target-language").value = translation.targetLanguage;
-  $("#detected-language").textContent = `Source ${sourceLanguage}`;
+  $("#detected-language").dataset.language = sourceLanguage;
+  $("#detected-language").textContent = t("translation.source", { language: languageName(sourceLanguage) });
   const isWord = translation.isWord
     ?? String(translation.originalSource || source).trim().split(/\s+/).length === 1;
   showNormalizedResult(source, isWord, nounGenderFor(translation));
