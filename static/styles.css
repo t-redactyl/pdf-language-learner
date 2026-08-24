@@ -17,10 +17,11 @@ button,select,input { font:inherit; }
 .topbar-url-form .url-clear-button:hover,.topbar-url-form .url-clear-button:focus-visible { color:var(--ink); background:white; }
 .secondary-button { padding:10px 16px; border:1px solid var(--ink); border-radius:2px; background:transparent; color:var(--ink); cursor:pointer; }
 input[type=file] { display:none; }
-.empty-state { max-width:760px; margin:15vh auto; padding:0 24px; text-align:center; }
+.empty-state { max-width:920px; margin:15vh auto; padding:0 24px; text-align:center; }
 .empty-mark { margin:auto auto 28px; width:52px; height:52px; display:grid; place-items:center; border:1px solid var(--ink); border-radius:50%; font:italic 27px Georgia,serif; }
 .eyebrow { text-transform:uppercase; letter-spacing:.16em; font-size:11px; font-weight:700; color:var(--sage); }
 h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; letter-spacing:-.045em; }
+.empty-state h1 { font-size:clamp(40px,6vw,68px); text-wrap:balance; }
 .intro { max-width:570px; margin:0 auto 32px; color:#5f645d; font-size:17px; }
 .source-divider { display:inline-block; margin:0 14px; color:#858980; }
 .empty-url-form { max-width:620px; margin:28px auto 0; text-align:left; }
