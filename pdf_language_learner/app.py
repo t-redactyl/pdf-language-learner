@@ -7,6 +7,7 @@ import threading
 import time
 import unicodedata
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -74,6 +75,10 @@ NOUN_POS = {"NOUN"}
 VERB_POS = {"VERB", "AUX"}
 STANZA_PIPELINE_LOCK = threading.Lock()
 RUNTIME_CACHE_SIZE = 512
+MODEL_CALL_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="ollama-call",
+)
 
 
 @lru_cache(maxsize=1)
@@ -1996,19 +2001,6 @@ def translate(request: TranslationRequest) -> TranslationResult:
                         request.context,
                     ),
                 )
-        source_article = ""
-        noun_gender = None
-        if word_analysis is not None and word_analysis.pos in NOUN_POS:
-            noun_grammar = cached_source_noun_grammar(
-                model,
-                word_analysis.lemma,
-                request.source_language,
-            )
-            source_article = normalized_article(
-                noun_grammar.article, request.source_language
-            )
-            if noun_grammar.gender != "none":
-                noun_gender = noun_grammar.gender
 
         def request_translation(
             context: str,
@@ -2023,7 +2015,33 @@ def translate(request: TranslationRequest) -> TranslationResult:
                 word_analysis,
             )
 
-        translated = request_translation(request.context)
+        source_article = ""
+        noun_gender = None
+        if word_analysis is not None and word_analysis.pos in NOUN_POS:
+            # Populate the shared client before both worker threads enter its
+            # cached accessor simultaneously on the first noun lookup.
+            ollama_client()
+            grammar_future = MODEL_CALL_EXECUTOR.submit(
+                cached_source_noun_grammar,
+                model, word_analysis.lemma, request.source_language,
+            )
+            translation_future = MODEL_CALL_EXECUTOR.submit(
+                request_translation, request.context
+            )
+            try:
+                noun_grammar = grammar_future.result()
+                translated = translation_future.result()
+            except Exception:
+                grammar_future.cancel()
+                translation_future.cancel()
+                raise
+            source_article = normalized_article(
+                noun_grammar.article, request.source_language
+            )
+            if noun_grammar.gender != "none":
+                noun_gender = noun_grammar.gender
+        else:
+            translated = request_translation(request.context)
         translated_text = (
             translated.target_lemma
             if isinstance(translated, NounTranslation)

@@ -1,6 +1,7 @@
 import json
 import logging
 import sqlite3
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -430,6 +431,50 @@ def test_source_noun_grammar_is_cached_across_target_languages(monkeypatch) -> N
     assert grammar_calls == 1
     assert translation_calls == 2
     assert cached_source_noun_grammar.cache_info().hits == 1
+
+
+def test_noun_grammar_and_translation_requests_run_concurrently(monkeypatch) -> None:
+    rendezvous = Barrier(2)
+    calls = []
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            calls.append(kwargs)
+            rendezvous.wait(timeout=2)
+            required = set(kwargs["format"]["required"])
+            data = (
+                {"article": "das", "gender": "neutral"}
+                if required == {"article", "gender"}
+                else {"target_lemma": "house", "target_definite_article": "the"}
+            )
+            return SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(data))
+            )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: WordAnalysis("Häuser", "Haus", "NOUN"),
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": "Häuser",
+            "source_language": "German",
+            "target_language": "English",
+            "context": "Viele Häuser stehen an dieser Straße.",
+            "context_offset": 6,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["normalized_source"] == "das Haus"
+    assert response.json()["translation"] == "the house"
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize(
