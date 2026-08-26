@@ -40,7 +40,7 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .history-heading .eyebrow { margin:0; }
 .history-clear,.vocabulary-count { font-size:12px; }
 .history-empty { margin:14px 0 0; color:#858980; font-size:13px; }
-#translation-history-list,#saved-vocabulary-list { margin:14px 0 0; padding:0; list-style:none; overflow:auto; }
+#translation-history-list,#saved-vocabulary-list { margin:14px 0 0; padding:0 8px 0 0; list-style:none; overflow:auto; scrollbar-gutter:stable; }
 #translation-history-list { max-height:38vh; }
 #saved-vocabulary-list { max-height:28vh; }
 #translation-history-list li + li,#saved-vocabulary-list li + li { border-top:1px solid var(--line); }
