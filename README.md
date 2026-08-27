@@ -20,6 +20,15 @@ POS and lemmatization models. Later lookups reuse the local models. The selected
 word is tagged inside its sentence before it is sent to the local translation
 model.
 
+The lookup panel can switch between translation and context-aware synonyms.
+Synonyms are available for single German and Spanish words. Margin obtains
+same-part-of-speech candidates from Open-de-WordNet or Open Multilingual
+WordNet, then asks Ollama to keep and rank only candidates matching the selected
+word's meaning in its sentence. Once the document language is known, Margin
+prepares the relevant WordNet lexicon in the background and reuses it locally.
+Single-candidate lookups bypass Ollama, while ambiguous candidate sets are
+cached after contextual ranking.
+
 At startup the server warms the Ollama translation model in the background and
 keeps it loaded by default. Set `OLLAMA_WARMUP=false` to disable that request or
 `OLLAMA_KEEP_ALIVE` to change the default indefinite (`-1`) retention. Ollama and
@@ -36,6 +45,6 @@ to prepare just that language's Stanza pipeline in the background.
 - PDF.js renders pages and supplies an accurate selectable text layer.
 - Stanza performs contextual POS tagging and lemmatization for single words.
 - Simplemma and Unicode script detection identify the document language locally;
-  structured Ollama calls perform translation.
+  structured Ollama calls perform translation and rank WordNet synonym candidates.
 - PDFs remain local; no upload endpoint exists. For URL imports, the server fetches only public HTTP(S) pages and rejects local/private network destinations.
 - SQLite stores saved vocabulary on the backend. A unique normalized-form and source-language index prevents duplicate words or phrases.

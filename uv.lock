@@ -703,6 +703,7 @@ dependencies = [
     { name = "simplemma" },
     { name = "stanza" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "wn" },
 ]
 
 [package.dev-dependencies]
@@ -721,6 +722,7 @@ requires-dist = [
     { name = "simplemma", specifier = ">=2.0.0" },
     { name = "stanza", specifier = ">=1.14.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35.0" },
+    { name = "wn", specifier = ">=1.1.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -1267,4 +1269,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/2c/9d9c1da5a7ea9af307b386d25f64d1dead4729644198d2b92e36db5dfd41/websockets-17.0.1-cp314-cp314t-win_amd64.whl", hash = "sha256:bb31f42ea095ea826463c770829aa188a86c9a5c976b1467cbbf583c811de833", size = 213094, upload-time = "2026-07-31T11:31:15.367Z" },
     { url = "https://files.pythonhosted.org/packages/5b/24/a585e7573e128070605d003b5544729bcd58d9756c7e99d550818ca4b916/websockets-17.0.1-cp314-cp314t-win_arm64.whl", hash = "sha256:dbfae8e75b342e31fc6fd1a8bbb393b7cbb91d6cfd581650300a94381e7b7e2b", size = 213009, upload-time = "2026-07-31T11:31:16.776Z" },
     { url = "https://files.pythonhosted.org/packages/09/ce/3929538b2b9918f5eee623fbf3346893973191f6df93f19bbda097bd7bb7/websockets-17.0.1-py3-none-any.whl", hash = "sha256:c6be9cba65c65cc76dfa3d4619e359ff02a4476c74e179b215236c11a0b32345", size = 206718, upload-time = "2026-07-31T11:31:26.037Z" },
+]
+
+[[package]]
+name = "wn"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/12/a3/df602e01adb0b18a0b1720a87d5d761cc663ecbaa846ed5a4939a5357dc5/wn-1.1.1.tar.gz", hash = "sha256:0555ea875f13df648f343b9c622153e4f71ee42bc9d57a00f260e1928f86b128", size = 164076, upload-time = "2026-08-14T06:47:27.48Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/03/dd84df87acf1cdba5d6f9fb1770f8880fc9c4139c380118c8b35ad5b4d85/wn-1.1.1-py3-none-any.whl", hash = "sha256:feaea1ef53806729b4629daa769546adb55a45cd029fa8e524db2ada837f8d24", size = 95820, upload-time = "2026-08-14T06:47:26.265Z" },
 ]

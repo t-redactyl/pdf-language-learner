@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
-  <link rel="stylesheet" href="/static/styles.css?v=16">
+  <link rel="stylesheet" href="/static/styles.css?v=17">
 </head>
 <body>
   <header class="topbar">
@@ -116,7 +116,7 @@
       </aside>
       <div id="pages" class="pages" aria-label="Document content" data-i18n-aria-label="document.content"></div>
       <aside class="translation-panel">
-        <p class="eyebrow" data-i18n="translation.title">Translation</p>
+        <p id="lookup-title" class="eyebrow" data-i18n="translation.title">Translation</p>
         <p id="selection-hint" data-i18n="translation.hint">Select text in the document to begin.</p>
         <div id="translation-content" hidden>
           <div class="translation-original">
@@ -124,6 +124,11 @@
             <blockquote id="selected-text"></blockquote>
           </div>
           <div class="translation-controls">
+            <fieldset class="lookup-mode-toggle">
+              <legend data-i18n="lookup.mode">Lookup mode</legend>
+              <label><input type="radio" name="lookup-mode" value="translation" checked><span data-i18n="lookup.translation">Translation</span></label>
+              <label><input type="radio" name="lookup-mode" value="synonyms"><span data-i18n="lookup.synonyms">Synonyms</span></label>
+            </fieldset>
             <label for="source-language" data-i18n="translation.sourceLanguage">Source language</label>
             <select id="source-language">
               <option value="auto" data-i18n="translation.autoDetect">Auto-detect</option>
@@ -132,7 +137,7 @@
               <option value="Japanese">Japanese</option><option value="Korean">Korean</option><option value="Chinese (Simplified)">Chinese (Simplified)</option>
             </select>
             <p id="source-language-status" class="language-status" aria-live="polite"></p>
-            <label for="target-language" data-i18n="translation.targetLanguage">Translate to</label>
+            <label id="target-language-label" for="target-language" data-i18n="translation.targetLanguage">Translate to</label>
             <select id="target-language">
               <option value="English">English</option><option value="German">German</option><option value="Spanish">Spanish</option><option value="French">French</option>
               <option value="Italian">Italian</option><option value="Portuguese">Portuguese</option><option value="Dutch">Dutch</option><option value="Polish">Polish</option>
@@ -147,7 +152,7 @@
                 <p class="result-label" data-i18n="translation.normalized">Normalized</p>
                 <p id="normalized-text"></p>
               </div>
-              <p class="result-label" data-i18n="translation.result">Translation</p>
+              <p id="lookup-result-label" class="result-label" data-i18n="translation.result">Translation</p>
               <p id="translated-text"></p>
             </div>
             <p id="error" class="error" role="alert"></p>
@@ -157,6 +162,6 @@
     </section>
   </main>
   <script type="module" src="/static/revision.js?v=8"></script>
-  <script type="module" src="/static/app.js?v=15"></script>
+  <script type="module" src="/static/app.js?v=16"></script>
 </body>
 </html>

@@ -6,6 +6,7 @@ from threading import Barrier, Event
 from types import SimpleNamespace
 
 import pytest
+import wn
 from fastapi.testclient import TestClient
 
 from pdf_language_learner.app import (
@@ -15,6 +16,7 @@ from pdf_language_learner.app import (
     analyze_word_in_context,
     app,
     cached_model_translation,
+    cached_ranked_synonyms,
     cached_source_noun_grammar,
     cached_verb_lemma_decision,
     multi_word_term_in_context,
@@ -22,6 +24,7 @@ from pdf_language_learner.app import (
     ollama_keep_alive,
     stanza_pipeline,
     warm_translation_model,
+    wordnet_synonym_candidates,
 )
 
 client = TestClient(app)
@@ -37,6 +40,8 @@ def clear_runtime_caches():
         cached_verb_lemma_decision,
         cached_source_noun_grammar,
         cached_model_translation,
+        cached_ranked_synonyms,
+        wordnet_synonym_candidates,
     ):
         cached_function.cache_clear()
     yield
@@ -46,12 +51,18 @@ def clear_runtime_caches():
         cached_verb_lemma_decision,
         cached_source_noun_grammar,
         cached_model_translation,
+        cached_ranked_synonyms,
+        wordnet_synonym_candidates,
     ):
         cached_function.cache_clear()
 
 
 def test_health() -> None:
     assert client.get("/health").json() == {"status": "ok"}
+
+
+def test_wordnet_database_allows_fastapi_worker_threads() -> None:
+    assert wn.config.allow_multithreading is True
 
 
 def test_home_serves_reader() -> None:
@@ -62,8 +73,9 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-view"' in response.text
     assert 'id="interface-language"' in response.text
     assert 'id="toggle-reader-meta"' in response.text
+    assert 'name="lookup-mode"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/app.js?v=15' in response.text
+    assert '/static/app.js?v=16' in response.text
 
 
 def test_spanish_interface_catalog_is_served() -> None:
@@ -202,9 +214,14 @@ def test_detect_language_uses_local_detector(monkeypatch, sample, expected) -> N
 
 def test_prepare_language_starts_background_preparation(monkeypatch) -> None:
     requested = []
+    wordnet_requested = []
     monkeypatch.setattr(
         "pdf_language_learner.app.start_stanza_preparation",
         lambda language: requested.append(language) or "preparing",
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.start_wordnet_preparation",
+        lambda language: wordnet_requested.append(language),
     )
 
     response = client.post(
@@ -214,6 +231,7 @@ def test_prepare_language_starts_background_preparation(monkeypatch) -> None:
     assert response.status_code == 202
     assert response.json() == {"status": "preparing"}
     assert requested == ["German"]
+    assert wordnet_requested == ["German"]
 
 
 def test_prepare_language_rejects_unsupported_language() -> None:
@@ -1391,6 +1409,172 @@ def test_translate_rejects_blank_text() -> None:
             "target_language": "English",
         },
     )
+    assert response.status_code == 422
+
+
+def test_wordnet_candidates_keep_same_part_of_speech_and_remove_source(
+    monkeypatch,
+) -> None:
+    class FakeSynset:
+        def __init__(self, lemmas):
+            self._lemmas = lemmas
+
+        def lemmas(self):
+            return self._lemmas
+
+    class FakeWordnet:
+        def synsets(self, lemma, pos):
+            assert (lemma, pos) == ("schnell", "a")
+            return [
+                FakeSynset(["schnell", "rasch", "flink"]),
+                FakeSynset(["rasch", "geschwind"]),
+            ]
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.wordnet_for_language",
+        lambda language: FakeWordnet(),
+    )
+
+    assert wordnet_synonym_candidates("schnell", "German", "ADJ") == (
+        "rasch",
+        "flink",
+        "geschwind",
+    )
+
+
+def test_wordnet_candidates_recover_from_an_overly_strict_pos(monkeypatch) -> None:
+    class FakeSynset:
+        def __init__(self, lemmas):
+            self._lemmas = lemmas
+
+        def lemmas(self):
+            return self._lemmas
+
+    class FakeWordnet:
+        def synsets(self, lemma, pos=None):
+            assert lemma == "schnell"
+            return (
+                [FakeSynset(["schnell"])]
+                if pos == "a"
+                else [FakeSynset(["schnell", "rasch"])]
+            )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.wordnet_for_language",
+        lambda language: FakeWordnet(),
+    )
+
+    assert wordnet_synonym_candidates("schnell", "German", "ADJ") == ("rasch",)
+
+
+def test_synonyms_are_ranked_by_context_and_restricted_to_wordnet(
+    monkeypatch,
+) -> None:
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            assert kwargs["format"]["required"] == ["synonyms"]
+            assert kwargs["options"]["num_predict"] == 64
+            assert "useful close synonyms" in kwargs["messages"][0]["content"]
+            prompt = kwargs["messages"][1]["content"]
+            assert "Source lemma: schnell" in prompt
+            assert "Das Auto ist sehr schnell." in prompt
+            assert "rasch, flink, eilig" in prompt
+            return SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "synonyms": ["rasch", "erfunden", "RASCH", "flink"]
+            })))
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: WordAnalysis("schnell", "schnell", "ADJ"),
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.wordnet_synonym_candidates",
+        lambda *args: ("rasch", "flink", "eilig"),
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+
+    response = client.post(
+        "/api/synonyms",
+        json={
+            "text": "schnell",
+            "source_language": "German",
+            "context": "Das Auto ist sehr schnell.",
+            "context_offset": 18,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "detected_language": "German",
+        "normalized_source": "schnell",
+        "synonyms": ["rasch", "flink"],
+    }
+
+
+def test_synonyms_skip_ollama_when_wordnet_has_no_candidates(monkeypatch) -> None:
+    class UnexpectedClient:
+        def __init__(self, host: str) -> None:
+            raise AssertionError("Ollama should not run without WordNet candidates")
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: WordAnalysis("Wort", "Wort", "NOUN"),
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.wordnet_synonym_candidates", lambda *args: ()
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
+
+    response = client.post(
+        "/api/synonyms",
+        json={"text": "Wort", "source_language": "German"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["synonyms"] == []
+
+
+def test_synonyms_skip_ollama_for_a_single_wordnet_candidate(monkeypatch) -> None:
+    class UnexpectedClient:
+        def __init__(self, host: str) -> None:
+            raise AssertionError("One unambiguous candidate does not need ranking")
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: WordAnalysis("veloz", "veloz", "ADJ"),
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.wordnet_synonym_candidates",
+        lambda *args: ("rápido",),
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
+
+    response = client.post(
+        "/api/synonyms",
+        json={
+            "text": "veloz",
+            "source_language": "Spanish",
+            "context": "Es un corredor veloz.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["synonyms"] == ["rápido"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"text": "quick", "source_language": "English"},
+        {"text": "muy rápido", "source_language": "Spanish"},
+    ],
+)
+def test_synonyms_reject_unsupported_lookup(payload) -> None:
+    response = client.post("/api/synonyms", json=payload)
+
     assert response.status_code == 422
 
 

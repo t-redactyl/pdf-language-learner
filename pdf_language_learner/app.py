@@ -17,6 +17,7 @@ from typing import Any, Iterator, Literal
 
 import simplemma
 import stanza
+import wn
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -85,6 +86,19 @@ MODEL_CALL_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="ollama-call",
 )
+WORDNET_LEXICONS = {
+    "german": "odenet:1.4",
+    "spanish": "omw-es:2.0",
+}
+# Wn pools one SQLite connection per database. FastAPI's synchronous endpoints
+# can run on different worker threads, and the background lexicon warm-up opens
+# the same database before a request uses it, so the pooled connection must be
+# created in Wn's supported multithreaded mode. Access is still serialized by
+# WORDNET_LOCK below.
+wn.config.allow_multithreading = True
+WORDNETS: dict[str, wn.Wordnet] = {}
+WORDNET_LOCK = threading.RLock()
+WORDNET_PREPARING: set[str] = set()
 
 
 @lru_cache(maxsize=1)
@@ -566,6 +580,26 @@ class TranslationRequest(BaseModel):
         return value.strip()
 
 
+class SynonymRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2_000)
+    source_language: str = Field(min_length=2, max_length=60)
+    context: str = Field(default="", max_length=2_000)
+    context_offset: int | None = Field(default=None, ge=0, le=2_000)
+
+    @field_validator("text", "source_language")
+    @classmethod
+    def strip_value(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("context")
+    @classmethod
+    def strip_context(cls, value: str) -> str:
+        return value.strip()
+
+
 class LanguageDetectionRequest(BaseModel):
     text: str = Field(min_length=20, max_length=12_000)
 
@@ -641,10 +675,25 @@ class TranslationResult(BaseModel):
     )
 
 
+class SynonymResult(BaseModel):
+    detected_language: str = Field(description="The source language in English")
+    normalized_source: str = Field(description="The source word in dictionary form")
+    synonyms: list[str] = Field(
+        description="Context-appropriate synonyms ranked by usefulness"
+    )
+
+
 class TranslatedText(BaseModel):
     translation: str = Field(
         min_length=1,
         description="A natural translation in the requested target language",
+    )
+
+
+class RankedSynonyms(BaseModel):
+    synonyms: list[str] = Field(
+        max_length=5,
+        description="Ranked candidates that match the word's contextual meaning",
     )
 
 
@@ -1374,6 +1423,141 @@ def translation_messages(
     ]
 
 
+def synonym_ranking_messages(
+    *,
+    source: str,
+    source_language: str,
+    context: str,
+    part_of_speech: str,
+    candidates: tuple[str, ...],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You rank synonyms for a language-learning application. Select "
+                "candidates that express the source word's sense and part of speech "
+                "in the supplied context. Include useful close synonyms even when "
+                "they are not interchangeable in every possible sentence. Rank the "
+                "most natural candidate first and return at most five. Never invent, "
+                "inflect, translate, explain, or return a candidate from a different "
+                "sense. Return an empty list only when every candidate belongs to a "
+                "different contextual sense."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Source language: {source_language}\n"
+                f"Source lemma: {source}\n"
+                f"Part of speech (Universal POS): {part_of_speech}\n"
+                f"Surrounding context: {context or '(not available)'}\n"
+                f"Allowed WordNet candidates: {', '.join(candidates)}\n"
+                "Return only suitable items from the allowed candidate list."
+            ),
+        },
+    ]
+
+
+def wordnet_for_language(source_language: str) -> wn.Wordnet:
+    language = source_language.casefold()
+    specifier = WORDNET_LEXICONS.get(language)
+    if specifier is None:
+        raise ValueError("synonyms are currently available only for German and Spanish")
+    with WORDNET_LOCK:
+        wordnet = WORDNETS.get(language)
+        if wordnet is not None:
+            return wordnet
+        try:
+            wordnet = wn.Wordnet(specifier)
+        except wn.Error:
+            logger.info("Downloading WordNet lexicon %s", specifier)
+            wn.download(specifier, progress_handler=None)
+            wordnet = wn.Wordnet(specifier)
+        WORDNETS[language] = wordnet
+        return wordnet
+
+
+def _prepare_wordnet_language(source_language: str) -> None:
+    language = source_language.casefold()
+    try:
+        wordnet_for_language(source_language)
+    except Exception as exc:
+        logger.warning(
+            "Background WordNet preparation failed for %s: %s",
+            source_language,
+            exc,
+        )
+    finally:
+        with WORDNET_LOCK:
+            WORDNET_PREPARING.discard(language)
+
+
+def start_wordnet_preparation(source_language: str) -> None:
+    language = source_language.casefold()
+    if language not in WORDNET_LEXICONS:
+        return
+    with WORDNET_LOCK:
+        if language in WORDNETS or language in WORDNET_PREPARING:
+            return
+        WORDNET_PREPARING.add(language)
+    threading.Thread(
+        target=_prepare_wordnet_language,
+        args=(source_language,),
+        name=f"wordnet-{language}-warmup",
+        daemon=True,
+    ).start()
+
+
+@lru_cache(maxsize=RUNTIME_CACHE_SIZE)
+def wordnet_synonym_candidates(
+    lemma: str, source_language: str, part_of_speech: str
+) -> tuple[str, ...]:
+    wordnet_pos = {
+        "NOUN": "n",
+        "VERB": "v",
+        "AUX": "v",
+        "ADJ": "a",
+        "ADV": "r",
+    }.get(part_of_speech)
+    candidates: dict[str, str] = {}
+    lookup_forms = [lemma]
+    if lemma.casefold().startswith("sich "):
+        lookup_forms.append(lemma[5:].strip())
+    elif source_language.casefold() == "spanish" and lemma.casefold().endswith("se"):
+        lookup_forms.append(lemma[:-2])
+    excluded = {canonicalize(value) for value in lookup_forms}
+    with WORDNET_LOCK:
+        wordnet = wordnet_for_language(source_language)
+
+        def add_synsets(synsets: list[wn.Synset]) -> bool:
+            for synset in synsets:
+                for candidate in synset.lemmas():
+                    candidate = candidate.replace("_", " ").strip()
+                    key = canonicalize(candidate)
+                    if key and key not in excluded:
+                        candidates.setdefault(key, candidate)
+                    if len(candidates) >= 32:
+                        return True
+            return False
+
+        for lookup in lookup_forms:
+            synsets = wordnet.synsets(lookup, pos=wordnet_pos) if wordnet_pos else []
+            if add_synsets(synsets):
+                return tuple(candidates.values())
+            # Recover from an unknown/mistagged POS, a source-only synset, or
+            # lexicons whose adjective categories do not map exactly to UPOS.
+            if (
+                not candidates
+                and wordnet_pos
+                and add_synsets(wordnet.synsets(lookup))
+            ):
+                return tuple(candidates.values())
+            if candidates:
+                break
+    return tuple(candidates.values())
+
+
 def canonicalize(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
@@ -2002,6 +2186,42 @@ def cached_model_translation(
     return response_model.model_validate_json(response.message.content)
 
 
+@lru_cache(maxsize=RUNTIME_CACHE_SIZE)
+def cached_ranked_synonyms(
+    model: str,
+    source: str,
+    source_language: str,
+    context: str,
+    part_of_speech: str,
+    candidates: tuple[str, ...],
+) -> tuple[str, ...]:
+    response = timed_ollama_chat(
+        ollama_client(),
+        "synonym ranking",
+        model=model,
+        messages=synonym_ranking_messages(
+            source=source,
+            source_language=source_language,
+            context=context,
+            part_of_speech=part_of_speech,
+            candidates=candidates,
+        ),
+        format=RankedSynonyms.model_json_schema(),
+        keep_alive=ollama_keep_alive(),
+        options={"temperature": 0, "num_ctx": 1024, "num_predict": 64},
+    )
+    ranked = RankedSynonyms.model_validate_json(response.message.content).synonyms
+    allowed = {canonicalize(candidate): candidate for candidate in candidates}
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for candidate in ranked:
+        key = canonicalize(candidate)
+        if key in allowed and key not in seen:
+            filtered.append(allowed[key])
+            seen.add(key)
+    return tuple(filtered)
+
+
 @app.post("/api/detect-language", response_model=LanguageDetectionResult)
 def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResult:
     try:
@@ -2027,7 +2247,57 @@ def prepare_language(
         status = start_stanza_preparation(request.source_language)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    start_wordnet_preparation(request.source_language)
     return LanguagePreparationResult(status=status)
+
+
+@app.post("/api/synonyms", response_model=SynonymResult)
+def synonyms(request: SynonymRequest) -> SynonymResult:
+    if request.source_language.casefold() not in WORDNET_LEXICONS:
+        raise HTTPException(
+            status_code=422,
+            detail="Synonyms are currently available only for German and Spanish",
+        )
+    if len(request.text.split()) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Select a single word to look up synonyms",
+        )
+    try:
+        analysis = analyze_word_in_context(
+            request.text,
+            request.source_language,
+            request.context,
+            request.context_offset,
+        )
+        source = analysis.lemma
+        candidates = wordnet_synonym_candidates(
+            source, request.source_language, analysis.pos
+        )
+        ranked = (
+            cached_ranked_synonyms(
+                translation_model(),
+                source,
+                request.source_language,
+                request.context,
+                analysis.pos,
+                candidates,
+            )
+            if len(candidates) > 1
+            else ()
+        )
+        if len(candidates) == 1:
+            ranked = candidates
+        return SynonymResult(
+            detected_language=request.source_language,
+            normalized_source=source,
+            synonyms=list(ranked),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Local synonym lookup failed: {exc}",
+        ) from exc
 
 
 @app.post(
