@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=2";
-import { initI18n, languageName, t } from "./i18n.js?v=1";
+import { initI18n, languageName, t } from "./i18n.js?v=2";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -39,7 +39,10 @@ function updatePdfReaderLayout() {
   const reader = $("#reader");
   reader.classList.remove("reader-stacked");
   const firstPage = pages.querySelector(".pdf-page");
-  if (!firstPage || reader.hidden) return;
+  if (!firstPage || reader.hidden) {
+    if (window.innerWidth > 1050) setReaderMetaOpen(false);
+    return;
+  }
   const pageBox = firstPage.getBoundingClientRect();
   const pageTopAtViewportStart = pageBox.top + window.scrollY;
   const availableHeight = window.innerHeight - pageTopAtViewportStart;
@@ -47,6 +50,9 @@ function updatePdfReaderLayout() {
   // If it would end with a visible strip of empty viewport beneath it, give the
   // PDF the full reading column and move translation controls to the bottom.
   reader.classList.toggle("reader-stacked", pageBox.height + 24 < availableHeight);
+  if (!reader.classList.contains("reader-stacked") && window.innerWidth > 1050) {
+    setReaderMetaOpen(false);
+  }
 }
 
 function schedulePdfReaderLayout() {
@@ -55,6 +61,27 @@ function schedulePdfReaderLayout() {
 }
 
 window.addEventListener("resize", schedulePdfReaderLayout);
+
+function setReaderMetaOpen(open, returnFocus = false) {
+  const reader = $("#reader");
+  const toggle = $("#toggle-reader-meta");
+  reader.classList.toggle("meta-open", open);
+  document.body.classList.toggle("reader-meta-open", open);
+  toggle.setAttribute("aria-expanded", String(open));
+  $("#reader-meta-backdrop").hidden = !open;
+  if (open) $("#close-reader-meta").focus();
+  else if (returnFocus) toggle.focus();
+}
+
+$("#toggle-reader-meta").addEventListener("click", () => setReaderMetaOpen(true));
+$("#close-reader-meta").addEventListener("click", () => setReaderMetaOpen(false, true));
+$("#reader-meta-backdrop").addEventListener("click", () => setReaderMetaOpen(false, true));
+$("#open-revision").addEventListener("click", () => setReaderMetaOpen(false));
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && $("#reader").classList.contains("meta-open")) {
+    setReaderMetaOpen(false, true);
+  }
+});
 
 initI18n();
 localizeLanguageOptions();
@@ -97,6 +124,7 @@ async function openPdf(file) {
 
 function prepareDocument(documentKey) {
   clearCurrentHighlight();
+  setReaderMetaOpen(false);
   pages.querySelectorAll(".pdf-page").forEach(page => pdfPageResizeObserver.unobserve(page));
   pages.replaceChildren();
   $("#reader").classList.remove("reader-stacked");
@@ -1077,7 +1105,10 @@ async function handleTranslationListClick(event) {
   const button = event.target.closest(".history-item");
   if (!button) return;
   const translation = translationFromControl(button);
-  if (translation) showTranslation(translation);
+  if (translation) {
+    showTranslation(translation);
+    setReaderMetaOpen(false);
+  }
 }
 
 $("#translation-history-list")?.addEventListener("click", handleTranslationListClick);

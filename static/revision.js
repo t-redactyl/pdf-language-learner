@@ -1,5 +1,5 @@
 import { renderHighlightedSentence, sentenceContaining } from "./text.js";
-import { languageName, t } from "./i18n.js?v=1";
+import { languageName, t } from "./i18n.js?v=2";
 
 const $ = selector => document.querySelector(selector);
 

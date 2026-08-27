@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
-  <link rel="stylesheet" href="/static/styles.css?v=12">
+  <link rel="stylesheet" href="/static/styles.css?v=16">
 </head>
 <body>
   <header class="topbar">
@@ -90,7 +90,13 @@
       </form>
     </section>
     <section id="reader" class="reader" hidden>
-      <aside class="reader-meta">
+      <button id="toggle-reader-meta" class="reader-meta-toggle" type="button" aria-controls="reader-meta" aria-expanded="false" aria-label="Saved &amp; history" title="Saved &amp; history" data-i18n-aria-label="library.open" data-i18n-title="library.open"><span class="visually-hidden" data-i18n="library.open">Saved &amp; history</span></button>
+      <button id="reader-meta-backdrop" class="reader-meta-backdrop" type="button" aria-label="Close library" data-i18n-aria-label="library.close" hidden></button>
+      <aside id="reader-meta" class="reader-meta">
+        <div class="reader-meta-drawer-heading">
+          <p class="eyebrow" data-i18n="library.title">Reading library</p>
+          <button id="close-reader-meta" class="text-button" type="button" data-i18n="common.close">Close</button>
+        </div>
         <section class="saved-vocabulary" aria-labelledby="saved-vocabulary-title">
           <div class="history-heading">
             <p id="saved-vocabulary-title" class="eyebrow" data-i18n="vocabulary.saved">Saved vocabulary</p>
@@ -150,7 +156,7 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="/static/revision.js?v=7"></script>
-  <script type="module" src="/static/app.js?v=13"></script>
+  <script type="module" src="/static/revision.js?v=8"></script>
+  <script type="module" src="/static/app.js?v=14"></script>
 </body>
 </html>
