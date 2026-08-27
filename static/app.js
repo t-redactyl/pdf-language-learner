@@ -24,6 +24,37 @@ let selectionDragStart = null;
 let translations = [];
 const LEGACY_SAVED_VOCABULARY_STORAGE_KEY = "margin:saved-vocabulary:v1";
 let savedVocabulary = [];
+const pdfPageResizeObserver = new ResizeObserver(entries => {
+  entries.forEach(({ target, contentRect }) => {
+    const renderWidth = Number(target.dataset.renderWidth);
+    if (renderWidth > 0) {
+      target.style.setProperty("--responsive-scale", contentRect.width / renderWidth);
+    }
+  });
+});
+let readerLayoutFrame = null;
+
+function updatePdfReaderLayout() {
+  readerLayoutFrame = null;
+  const reader = $("#reader");
+  reader.classList.remove("reader-stacked");
+  const firstPage = pages.querySelector(".pdf-page");
+  if (!firstPage || reader.hidden) return;
+  const pageBox = firstPage.getBoundingClientRect();
+  const pageTopAtViewportStart = pageBox.top + window.scrollY;
+  const availableHeight = window.innerHeight - pageTopAtViewportStart;
+  // Keep the side panels while the page already fills the screen vertically.
+  // If it would end with a visible strip of empty viewport beneath it, give the
+  // PDF the full reading column and move translation controls to the bottom.
+  reader.classList.toggle("reader-stacked", pageBox.height + 24 < availableHeight);
+}
+
+function schedulePdfReaderLayout() {
+  if (readerLayoutFrame !== null) cancelAnimationFrame(readerLayoutFrame);
+  readerLayoutFrame = requestAnimationFrame(updatePdfReaderLayout);
+}
+
+window.addEventListener("resize", schedulePdfReaderLayout);
 
 initI18n();
 localizeLanguageOptions();
@@ -66,7 +97,9 @@ async function openPdf(file) {
 
 function prepareDocument(documentKey) {
   clearCurrentHighlight();
+  pages.querySelectorAll(".pdf-page").forEach(page => pdfPageResizeObserver.unobserve(page));
   pages.replaceChildren();
+  $("#reader").classList.remove("reader-stacked");
   activeDocumentKey = documentKey;
   translations = readStoredTranslations();
   renderTranslationHistory();
@@ -204,18 +237,22 @@ async function renderPage(page, number) {
   const wrapper = document.createElement("article");
   wrapper.className = "pdf-page";
   wrapper.dataset.page = number;
+  wrapper.dataset.renderWidth = viewport.width;
   // TextLayer uses this variable for all PDF-space coordinates and font sizes.
   // The stock PDF.js viewer defines it on its viewer container; since this app
   // embeds TextLayer directly, it must provide the viewport scale itself.
   wrapper.style.setProperty("--scale-factor", viewport.scale);
-  wrapper.style.width = `${viewport.width}px`;
-  wrapper.style.height = `${viewport.height}px`;
+  wrapper.style.setProperty("--pdf-width", `${viewport.width}px`);
+  wrapper.style.setProperty("--pdf-height", `${viewport.height}px`);
+  wrapper.style.setProperty("--responsive-scale", "1");
+  wrapper.style.width = `min(100%, ${viewport.width}px)`;
+  wrapper.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
   const canvas = document.createElement("canvas");
   const ratio = window.devicePixelRatio || 1;
   canvas.width = viewport.width * ratio;
   canvas.height = viewport.height * ratio;
-  canvas.style.width = `${viewport.width}px`;
-  canvas.style.height = `${viewport.height}px`;
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
   wrapper.append(canvas);
   const highlightLayer = document.createElement("div");
   highlightLayer.className = "highlight-layer";
@@ -224,6 +261,8 @@ async function renderPage(page, number) {
   textLayer.className = "textLayer";
   wrapper.append(textLayer);
   pages.append(wrapper);
+  if (number === 1) updatePdfReaderLayout();
+  pdfPageResizeObserver.observe(wrapper);
   await page.render({ canvasContext: canvas.getContext("2d"), viewport, transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0] }).promise;
   const textContent = await page.getTextContent();
   const textLayerTask = new pdfjsLib.TextLayer({ textContentSource: textContent, container: textLayer, viewport });
