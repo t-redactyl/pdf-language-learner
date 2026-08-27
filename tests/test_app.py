@@ -63,7 +63,7 @@ def test_home_serves_reader() -> None:
     assert 'id="interface-language"' in response.text
     assert 'id="toggle-reader-meta"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/app.js?v=14' in response.text
+    assert '/static/app.js?v=15' in response.text
 
 
 def test_spanish_interface_catalog_is_served() -> None:

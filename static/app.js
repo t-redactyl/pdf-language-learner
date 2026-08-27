@@ -103,7 +103,14 @@ function localizeLanguageOptions() {
   });
 }
 
-document.querySelectorAll("input[type=file]").forEach((input) => input.addEventListener("change", (event) => openPdf(event.target.files[0])));
+document.querySelectorAll("input[type=file]").forEach(input => input.addEventListener("change", event => {
+  const file = event.currentTarget.files[0];
+  // A file input does not emit another change event when the user picks the
+  // same file. Clear it immediately so a PDF can be reopened after reading a
+  // web document (or after a failed attempt to load it).
+  event.currentTarget.value = "";
+  openPdf(file);
+}));
 
 async function openPdf(file) {
   if (!file) return;
