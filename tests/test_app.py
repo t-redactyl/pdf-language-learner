@@ -96,9 +96,18 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-connector-hint"' in response.text
     assert 'id="revision-exercise-selector"' in response.text
     assert 'data-i18n="hero.title"' in response.text
+    assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">' in response.text
     assert '/static/styles.css?v=27' in response.text
     assert '/static/revision.js?v=18' in response.text
     assert '/static/app.js?v=28' in response.text
+
+
+def test_favicon_is_served() -> None:
+    response = client.get("/static/favicon.svg")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert 'viewBox="0 0 64 64"' in response.text
 
 
 def test_frontend_entry_points_share_current_dependency_versions() -> None:
