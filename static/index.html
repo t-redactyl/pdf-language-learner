@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
-  <link rel="stylesheet" href="/static/styles.css?v=18">
+  <link rel="stylesheet" href="/static/styles.css?v=20">
 </head>
 <body>
   <header class="topbar">
@@ -124,11 +124,6 @@
             <blockquote id="selected-text"></blockquote>
           </div>
           <div class="translation-controls">
-            <fieldset class="lookup-mode-toggle">
-              <legend data-i18n="lookup.mode">Lookup mode</legend>
-              <label><input type="radio" name="lookup-mode" value="translation" checked><span data-i18n="lookup.translation">Translation</span></label>
-              <label><input type="radio" name="lookup-mode" value="synonyms"><span data-i18n="lookup.synonyms">Synonyms</span></label>
-            </fieldset>
             <label for="source-language" data-i18n="translation.sourceLanguage">Source language</label>
             <select id="source-language">
               <option value="auto" data-i18n="translation.autoDetect">Auto-detect</option>
@@ -152,8 +147,12 @@
                 <p class="result-label" data-i18n="translation.normalized">Normalized</p>
                 <p id="normalized-text"></p>
               </div>
-              <p id="lookup-result-label" class="result-label" data-i18n="translation.result">Translation</p>
+              <p class="result-label" data-i18n="translation.result">Translation</p>
               <p id="translated-text"></p>
+              <div id="synonyms-result" hidden>
+                <p class="result-label" data-i18n="synonyms.result">Synonyms</p>
+                <ul id="synonyms-list" class="synonym-list"></ul>
+              </div>
             </div>
             <p id="error" class="error" role="alert"></p>
           </div>
@@ -162,6 +161,6 @@
     </section>
   </main>
   <script type="module" src="/static/revision.js?v=8"></script>
-  <script type="module" src="/static/app.js?v=17"></script>
+  <script type="module" src="/static/app.js?v=19"></script>
 </body>
 </html>

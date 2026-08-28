@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=2";
-import { initI18n, languageName, t } from "./i18n.js?v=3";
+import { initI18n, languageName, t } from "./i18n.js?v=4";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -85,7 +85,6 @@ document.addEventListener("keydown", event => {
 
 initI18n();
 localizeLanguageOptions();
-renderLookupMode();
 
 document.addEventListener("margin:locale-changed", () => {
   localizeLanguageOptions();
@@ -94,7 +93,6 @@ document.addEventListener("margin:locale-changed", () => {
   renderTranslationHistory();
   renderSavedVocabulary();
   refreshNounGenderTitles();
-  renderLookupMode();
   const shownSource = $("#result").hidden ? "" : $("#detected-language").dataset.language;
   if (shownSource) $("#detected-language").textContent = t("translation.source", { language: languageName(shownSource) });
 });
@@ -104,29 +102,6 @@ function localizeLanguageOptions() {
     option.textContent = languageName(option.value);
   });
 }
-
-function lookupMode() {
-  return document.querySelector("input[name=lookup-mode]:checked")?.value || "translation";
-}
-
-function renderLookupMode() {
-  const synonymMode = lookupMode() === "synonyms";
-  const title = $("#lookup-title");
-  title.textContent = t(synonymMode ? "synonyms.title" : "translation.title");
-  title.dataset.i18n = synonymMode ? "synonyms.title" : "translation.title";
-  $("#target-language-label").hidden = synonymMode;
-  $("#target-language").hidden = synonymMode;
-  $("#translate-button").textContent = t(synonymMode ? "synonyms.button" : "translation.button");
-  const resultLabel = $("#lookup-result-label");
-  resultLabel.textContent = t(synonymMode ? "synonyms.result" : "translation.result");
-  resultLabel.dataset.i18n = synonymMode ? "synonyms.result" : "translation.result";
-}
-
-document.querySelectorAll("input[name=lookup-mode]").forEach(input => input.addEventListener("change", () => {
-  $("#result").hidden = true;
-  $("#error").textContent = "";
-  renderLookupMode();
-}));
 
 document.querySelectorAll("input[type=file]").forEach(input => input.addEventListener("change", event => {
   const file = event.currentTarget.files[0];
@@ -707,12 +682,6 @@ function renderSourceLanguageState(message = "") {
     status.textContent = t("language.choose");
   }
   const sourceLanguage = effectiveSourceLanguage();
-  const synonymInput = document.querySelector("input[name=lookup-mode][value=synonyms]");
-  synonymInput.disabled = Boolean(sourceLanguage) && !["german", "spanish"].includes(sourceLanguage.toLocaleLowerCase());
-  if (synonymInput.disabled && synonymInput.checked) {
-    document.querySelector("input[name=lookup-mode][value=translation]").checked = true;
-    renderLookupMode();
-  }
   prepareSourceLanguage(sourceLanguage);
   $("#translate-button").disabled = !selectedText || !sourceLanguage;
   document.dispatchEvent(new CustomEvent("margin:document-language", {
@@ -819,20 +788,49 @@ function showNormalizedResult(source, isWord, nounGender = null) {
   setNounGender(normalizedText, nounGender);
 }
 
+function showSynonymResult(synonyms, visible) {
+  const container = $("#synonyms-result");
+  const result = $("#synonyms-list");
+  container.hidden = !visible;
+  result.replaceChildren();
+  if (!visible) return;
+  if (!synonyms.length) {
+    const empty = document.createElement("li");
+    empty.className = "synonym-empty";
+    empty.textContent = t("synonyms.none");
+    result.append(empty);
+    return;
+  }
+  synonyms.forEach(entry => {
+    const value = typeof entry === "string" ? { text: entry } : entry;
+    const synonym = document.createElement("span");
+    synonym.className = "synonym-text";
+    synonym.textContent = value.text;
+    const item = document.createElement("li");
+    item.className = "synonym-result";
+    setNounGender(item, value.noun_gender);
+    item.append(synonym);
+    result.append(item);
+  });
+}
+
 $("#translate-button").addEventListener("click", async () => {
   const button = $("#translate-button");
-  const mode = lookupMode();
   button.disabled = true;
-  button.textContent = t(mode === "synonyms" ? "synonyms.finding" : "translation.translating");
+  button.textContent = t("translation.translating");
   $("#error").textContent = "";
   try {
     const sourceLanguage = effectiveSourceLanguage();
     if (!sourceLanguage) throw new Error(t("translation.chooseSource"));
-    const synonymMode = mode === "synonyms";
-    const endpoint = synonymMode ? "/api/synonyms" : "/api/translate";
-    const payload = { text:selectedText, source_language:sourceLanguage, context:selectedContext, context_offset:selectedContextOffset };
-    if (!synonymMode) payload.target_language = $("#target-language").value;
-    const response = await fetch(endpoint, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
+    const payload = {
+      text:selectedText,
+      source_language:sourceLanguage,
+      target_language:$("#target-language").value,
+      include_synonyms:true,
+      context:selectedContext,
+      context_offset:selectedContextOffset,
+    };
+    const response = await fetch("/api/translate", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
     const contentType = response.headers.get("content-type") || "";
     const data = contentType.includes("application/json")
       ? await response.json()
@@ -840,37 +838,17 @@ $("#translate-button").addEventListener("click", async () => {
 
     if (!response.ok) {
       throw new Error(
-        data.detail || t(synonymMode ? "error.synonyms" : "error.translation", { status: response.status })
+        data.detail || t("error.translation", { status: response.status })
       );
     }
     $("#detected-language").dataset.language = data.detected_language;
     $("#detected-language").textContent = t("translation.source", { language: languageName(data.detected_language) });
-    if (synonymMode) {
-      showNormalizedResult(data.normalized_source, true, data.noun_gender);
-      const synonymResult = $("#translated-text");
-      synonymResult.replaceChildren();
-      if (data.synonyms.length) {
-        data.synonyms.forEach((entry, index) => {
-          if (index) synonymResult.append(document.createTextNode(" · "));
-          const value = typeof entry === "string" ? { text: entry } : entry;
-          const synonym = document.createElement("span");
-          synonym.className = "synonym-result";
-          synonym.textContent = value.text;
-          setNounGender(synonym, value.noun_gender);
-          synonymResult.append(synonym);
-        });
-      } else {
-        synonymResult.textContent = t("synonyms.none");
-      }
-      $("#result").hidden = false;
-      showCurrentHighlight(pendingHighlight);
-      return;
-    }
     // The API can resolve a one-word selection to a known multi-word term.
     const isWord = data.is_word === true;
     const nounGender = nounGenderFor({ ...data, sourceLanguage });
     showNormalizedResult(data.normalized_source, isWord, nounGender);
     $("#translated-text").textContent = data.translation;
+    showSynonymResult(data.synonyms || [], Array.isArray(data.synonyms));
     $("#result").hidden = false;
     showCurrentHighlight(pendingHighlight);
     saveTranslation({
@@ -887,9 +865,10 @@ $("#translate-button").addEventListener("click", async () => {
       createdAt: new Date().toISOString(),
       isWord,
       nounGender,
+      synonyms: data.synonyms || null,
     });
   } catch (error) { $("#error").textContent = error.message; }
-  finally { renderLookupMode(); renderSourceLanguageState(); }
+  finally { button.textContent = t("translation.button"); renderSourceLanguageState(); }
 });
 
 function showCurrentHighlight(rectangles) {
@@ -1138,8 +1117,6 @@ function showTranslation(translation) {
   selectedContext = translation.context || "";
   selectedContextOffset = translation.contextOffset ?? null;
   pendingHighlight = [];
-  document.querySelector("input[name=lookup-mode][value=translation]").checked = true;
-  renderLookupMode();
   $("#selected-text").textContent = translation.originalSource || source;
   $("#target-language").value = translation.targetLanguage;
   $("#detected-language").dataset.language = sourceLanguage;
@@ -1148,6 +1125,7 @@ function showTranslation(translation) {
     ?? String(translation.originalSource || source).trim().split(/\s+/).length === 1;
   showNormalizedResult(source, isWord, nounGenderFor(translation));
   $("#translated-text").textContent = translation.translation;
+  showSynonymResult(translation.synonyms || [], Array.isArray(translation.synonyms));
   $("#selection-hint").hidden = true;
   $("#translation-content").hidden = false;
   $("#result").hidden = false;

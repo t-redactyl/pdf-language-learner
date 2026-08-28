@@ -84,6 +84,7 @@ STANZA_PREPARING: set[str] = set()
 LOCAL_NOUN_GRAMMAR_CACHE: dict[tuple[str, str], "SourceNounGrammar | None"] = {}
 LOCAL_NOUN_GRAMMAR_CACHE_LOCK = threading.Lock()
 RUNTIME_CACHE_SIZE = 512
+MAX_SYNONYMS = 2
 MODEL_CALL_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="ollama-call",
@@ -567,6 +568,7 @@ class TranslationRequest(BaseModel):
     target_language: str = Field(min_length=2, max_length=60)
     context: str = Field(default="", max_length=2_000)
     context_offset: int | None = Field(default=None, ge=0, le=2_000)
+    include_synonyms: bool = False
 
     @field_validator("text", "source_language", "target_language")
     @classmethod
@@ -654,6 +656,11 @@ class LanguageDetectionResult(BaseModel):
     )
 
 
+class SynonymValue(BaseModel):
+    text: str
+    noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+
+
 class TranslationResult(BaseModel):
     detected_language: str = Field(description="The source language in English")
     is_word: bool = Field(
@@ -675,11 +682,10 @@ class TranslationResult(BaseModel):
         default=None,
         description="The grammatical gender of a noun, when the source language assigns one",
     )
-
-
-class SynonymValue(BaseModel):
-    text: str
-    noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+    synonyms: list[SynonymValue] | None = Field(
+        default=None,
+        description="Context-appropriate synonyms for supported single-word lookups",
+    )
 
 
 class SynonymResult(BaseModel):
@@ -1574,7 +1580,7 @@ def synonym_ranking_messages(
                 "candidates that express the source word's sense and part of speech "
                 "in the supplied context. Include useful close synonyms even when "
                 "they are not interchangeable in every possible sentence. Rank the "
-                "most natural candidate first and return at most five. Never invent, "
+                "most natural candidate first and return at most two. Never invent, "
                 "inflect, translate, explain, or return a candidate from a different "
                 "sense. Return an empty list only when every candidate belongs to a "
                 "different contextual sense."
@@ -2365,6 +2371,50 @@ def cached_ranked_synonyms(
     return tuple(filtered)
 
 
+def contextual_synonyms(
+    model: str,
+    analysis: WordAnalysis,
+    source_language: str,
+    context: str,
+) -> list[SynonymValue]:
+    candidate_set = wordnet_synonym_candidates(
+        analysis.lemma, source_language, analysis.pos
+    )
+    candidates = candidate_set.values
+    ranked = (
+        cached_ranked_synonyms(
+            model,
+            analysis.lemma,
+            source_language,
+            context,
+            analysis.pos,
+            candidates,
+        )
+        if candidate_set.sense_count > 1
+        else candidates
+    )[:MAX_SYNONYMS]
+    synonym_grammars: tuple[SourceNounGrammar | None, ...] = tuple(
+        None for _ in ranked
+    )
+    if analysis.pos in NOUN_POS:
+        synonym_grammars = local_noun_grammars(tuple(ranked), source_language)
+    return [
+        SynonymValue(
+            text=(
+                article_and_lemma(grammar.article, synonym)
+                if grammar is not None
+                else synonym
+            ),
+            noun_gender=(
+                grammar.gender
+                if grammar is not None and grammar.gender != "none"
+                else None
+            ),
+        )
+        for synonym, grammar in zip(ranked, synonym_grammars, strict=True)
+    ]
+
+
 @app.post("/api/detect-language", response_model=LanguageDetectionResult)
 def detect_language(request: LanguageDetectionRequest) -> LanguageDetectionResult:
     try:
@@ -2414,26 +2464,7 @@ def synonyms(request: SynonymRequest) -> SynonymResult:
             request.context_offset,
         )
         source = analysis.lemma
-        candidate_set = wordnet_synonym_candidates(
-            source, request.source_language, analysis.pos
-        )
-        candidates = candidate_set.values
-        ranked = (
-            cached_ranked_synonyms(
-                translation_model(),
-                source,
-                request.source_language,
-                request.context,
-                analysis.pos,
-                candidates,
-            )
-            if candidate_set.sense_count > 1
-            else candidates[:5]
-        )
         source_grammar = None
-        synonym_grammars: tuple[SourceNounGrammar | None, ...] = tuple(
-            None for _ in ranked
-        )
         if analysis.pos in NOUN_POS:
             source_grammar = grammar_from_gender(
                 source, request.source_language, analysis.noun_gender
@@ -2442,9 +2473,6 @@ def synonyms(request: SynonymRequest) -> SynonymResult:
                 source_grammar = local_noun_grammars(
                     (source,), request.source_language
                 )[0]
-            synonym_grammars = local_noun_grammars(
-                tuple(ranked), request.source_language
-            )
         normalized_source = (
             article_and_lemma(source_grammar.article, source)
             if source_grammar is not None
@@ -2458,23 +2486,12 @@ def synonyms(request: SynonymRequest) -> SynonymResult:
                 if source_grammar is not None and source_grammar.gender != "none"
                 else None
             ),
-            synonyms=[
-                SynonymValue(
-                    text=(
-                        article_and_lemma(grammar.article, synonym)
-                        if grammar is not None
-                        else synonym
-                    ),
-                    noun_gender=(
-                        grammar.gender
-                        if grammar is not None and grammar.gender != "none"
-                        else None
-                    ),
-                )
-                for synonym, grammar in zip(
-                    ranked, synonym_grammars, strict=True
-                )
-            ],
+            synonyms=contextual_synonyms(
+                translation_model(),
+                analysis,
+                request.source_language,
+                request.context,
+            ),
         )
     except Exception as exc:
         raise HTTPException(
@@ -2489,6 +2506,7 @@ def synonyms(request: SynonymRequest) -> SynonymResult:
     response_model_exclude_none=True,
 )
 def translate(request: TranslationRequest) -> TranslationResult:
+    synonym_future = None
     try:
         model = translation_model()
         multi_word_term = multi_word_term_in_context(
@@ -2529,6 +2547,20 @@ def translate(request: TranslationRequest) -> TranslationResult:
                         request.context,
                     ),
                 )
+
+        if (
+            request.include_synonyms
+            and is_single_word
+            and word_analysis is not None
+            and request.source_language.casefold() in WORDNET_LEXICONS
+        ):
+            synonym_future = MODEL_CALL_EXECUTOR.submit(
+                contextual_synonyms,
+                model,
+                word_analysis,
+                request.source_language,
+                request.context,
+            )
 
         def request_translation(
             context: str,
@@ -2636,15 +2668,29 @@ def translate(request: TranslationRequest) -> TranslationResult:
             else:
                 normalized_source = word_analysis.lemma
 
+        synonym_values = None
+        if synonym_future is not None:
+            try:
+                synonym_values = synonym_future.result()
+            except Exception:
+                logger.exception(
+                    "Synonym lookup failed during translation for %s",
+                    request.source_language,
+                )
+                synonym_values = []
+
         return TranslationResult(
             detected_language=request.source_language,
             is_word=is_term,
             normalized_source=normalized_source,
             translation=translation,
             noun_gender=noun_gender,
+            synonyms=synonym_values,
         )
 
     except Exception as exc:
+        if synonym_future is not None:
+            synonym_future.cancel()
         raise HTTPException(
             status_code=502,
             detail=f"Local translation model failed: {exc}",

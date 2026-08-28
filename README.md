@@ -20,14 +20,16 @@ POS and lemmatization models. Later lookups reuse the local models. The selected
 word is tagged inside its sentence before it is sent to the local translation
 model.
 
-The lookup panel can switch between translation and context-aware synonyms.
-Synonyms are available for single German and Spanish words. Margin obtains
+Single-word lookups show the normalized word, its translation, and up to two
+context-aware synonyms together. Synonyms are available for German and Spanish
+words. Margin obtains
 same-part-of-speech candidates from Open-de-WordNet or Open Multilingual
 WordNet, then asks Ollama to keep and rank only candidates matching the selected
 word's meaning in its sentence. Once the document language is known, Margin
 prepares the relevant WordNet lexicon in the background and reuses it locally.
-Single-sense lookups bypass Ollama, while ambiguous candidate sets are
-cached after contextual ranking.
+Single-sense lookups bypass Ollama, while ambiguous candidate sets are cached
+after contextual ranking. Synonym ranking runs alongside translation so the
+combined result does not add unnecessary sequential model latency.
 For German and Spanish nouns, the existing Stanza morphology supplies gender
 locally. Margin derives definite articles from that gender for normalized
 sources, translations, and synonym results; Spanish stressed-a nouns such as

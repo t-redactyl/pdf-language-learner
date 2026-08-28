@@ -15,6 +15,7 @@ from pdf_language_learner.app import (
     SourceNounGrammar,
     STANZA_PIPELINES,
     SynonymCandidateSet,
+    SynonymValue,
     WordAnalysis,
     analyze_word_in_context,
     app,
@@ -78,9 +79,9 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-view"' in response.text
     assert 'id="interface-language"' in response.text
     assert 'id="toggle-reader-meta"' in response.text
-    assert 'name="lookup-mode"' in response.text
+    assert 'id="synonyms-result"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/app.js?v=17' in response.text
+    assert '/static/app.js?v=19' in response.text
 
 
 def test_spanish_interface_catalog_is_served() -> None:
@@ -506,6 +507,70 @@ def test_contextual_gender_removes_source_noun_model_lookup(monkeypatch) -> None
     assert response.json()["normalized_source"] == "das Haus"
     assert response.json()["noun_gender"] == "neutral"
     assert len(calls) == 1
+
+
+def test_translate_combines_translation_and_synonyms(monkeypatch) -> None:
+    synonym_calls = []
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            return SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "translation": "probably / presumably",
+            })))
+
+    analysis = WordAnalysis("vermutlich", "vermutlich", "ADJ")
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: analysis,
+    )
+
+    def fake_synonyms(model, word_analysis, source_language, context):
+        synonym_calls.append(
+            (model, word_analysis, source_language, context)
+        )
+        return [
+            SynonymValue(text="wahrscheinlich"),
+            SynonymValue(text="wohl"),
+        ]
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.contextual_synonyms", fake_synonyms
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": "vermutlich",
+            "source_language": "German",
+            "target_language": "English",
+            "context": "Das ist vermutlich richtig.",
+            "include_synonyms": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "detected_language": "German",
+        "is_word": True,
+        "normalized_source": "vermutlich",
+        "translation": "probably / presumably",
+        "synonyms": [
+            {"text": "wahrscheinlich"},
+            {"text": "wohl"},
+        ],
+    }
+    assert synonym_calls == [
+        (
+            "translategemma:4b",
+            analysis,
+            "German",
+            "Das ist vermutlich richtig.",
+        )
+    ]
 
 
 def test_local_target_grammar_overrides_model_article(monkeypatch) -> None:
@@ -1693,7 +1758,8 @@ def test_synonyms_skip_ollama_for_a_single_wordnet_sense(monkeypatch) -> None:
     monkeypatch.setattr(
         "pdf_language_learner.app.wordnet_synonym_candidates",
         lambda *args: SynonymCandidateSet(
-            values=("rápido", "ligero", "acelerado"), sense_count=1
+            values=("rápido", "ligero", "acelerado", "velozmente"),
+            sense_count=1,
         ),
     )
     monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
@@ -1711,7 +1777,6 @@ def test_synonyms_skip_ollama_for_a_single_wordnet_sense(monkeypatch) -> None:
     assert response.json()["synonyms"] == [
         {"text": "rápido", "noun_gender": None},
         {"text": "ligero", "noun_gender": None},
-        {"text": "acelerado", "noun_gender": None},
     ]
 
 
