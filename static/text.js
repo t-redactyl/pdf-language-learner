@@ -49,6 +49,21 @@ export function renderHighlightedSentence(element, text, needles, prefix = "") {
   element.append(mark, document.createTextNode(text.slice(match.index + match.length)));
 }
 
+export function renderClozeSentence(element, text, needle, label = "") {
+  element.replaceChildren();
+  const candidate = String(needle || "").trim();
+  const index = findIgnoringCase(text, candidate);
+  if (index < 0) return false;
+
+  element.append(document.createTextNode(text.slice(0, index)));
+  const blank = document.createElement("span");
+  blank.className = "revision-cloze";
+  blank.textContent = "_____";
+  if (label) blank.setAttribute("aria-label", label);
+  element.append(blank, document.createTextNode(text.slice(index + candidate.length)));
+  return true;
+}
+
 function findIgnoringCase(text, needle) {
   const candidate = String(needle || "").trim();
   if (!candidate) return -1;

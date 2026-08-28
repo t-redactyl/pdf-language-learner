@@ -28,6 +28,7 @@ class RevisionDirection(StrEnum):
 
 class RevisionExercise(StrEnum):
     MULTIPLE_CHOICE = "multiple_choice"
+    LETTER_TILES = "letter_tiles"
     TYPED_RECALL = "typed_recall"
 
 

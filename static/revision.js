@@ -1,5 +1,9 @@
-import { renderHighlightedSentence, sentenceContaining } from "./text.js";
-import { languageName, t } from "./i18n.js?v=2";
+import {
+  renderClozeSentence,
+  renderHighlightedSentence,
+  sentenceContaining,
+} from "./text.js?v=3";
+import { languageName, t } from "./i18n.js?v=6";
 
 const $ = selector => document.querySelector(selector);
 
@@ -13,6 +17,10 @@ let answered = 0;
 let correctAnswers = 0;
 let removed = 0;
 let documentLanguage = "";
+let tilePattern = [];
+let tileOptions = [];
+let selectedTileIds = [];
+let tilesLocked = false;
 const NOUN_GENDERS = new Set(["masculine", "feminine", "neutral"]);
 const ARTICLE_GENDERS = {
   german: { der: "masculine", die: "feminine", das: "neutral" },
@@ -46,6 +54,14 @@ $("#revision-recall")?.addEventListener("submit", event => {
   const answer = $("#revision-recall-answer").value.trim();
   if (answer) submitAnswer(answer);
 });
+$("#revision-tiles")?.addEventListener("submit", event => {
+  event.preventDefault();
+  if (selectedTileIds.length === tileOptions.length) submitAnswer(tileAnswer());
+});
+$("#revision-tile-clear")?.addEventListener("click", () => {
+  selectedTileIds = [];
+  renderLetterTiles();
+});
 $("#revision-language")?.addEventListener("change", loadRevisionSession);
 document.addEventListener("margin:document-language", event => {
   const nextLanguage = event.detail?.language || "";
@@ -69,6 +85,7 @@ document.addEventListener("margin:locale-changed", () => {
   const prompt = $("#revision-prompt");
   const gender = [...NOUN_GENDERS].find(value => prompt?.classList.contains(`noun-${value}`));
   if (gender) setNounGender(prompt, gender);
+  if (currentCard?.exercise === "letter_tiles") renderLetterTiles();
   updateProgress();
 });
 
@@ -119,7 +136,11 @@ async function loadRevisionSession() {
   }
 
   try {
-    const params = new URLSearchParams({ language, limit: "40" });
+    const params = new URLSearchParams({
+      language,
+      limit: "40",
+      supports_letter_tiles: "true",
+    });
     const response = await fetch(`/api/revision/session?${params}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || t("revision.loadError"));
@@ -185,9 +206,40 @@ function renderNextCard() {
   const prompt = $("#revision-prompt");
   prompt.textContent = currentCard.prompt;
   setNounGender(prompt, null);
+  const promptContext = $("#revision-prompt-context");
+  const dictionaryForm = $("#revision-dictionary-form");
+  const context = sentenceContaining(
+    currentCard.context,
+    currentCard.original_source || currentCard.normalized_source,
+  );
+  if (sourceFirst && context) {
+    renderHighlightedSentence(
+      promptContext,
+      context,
+      [currentCard.original_source, currentCard.normalized_source],
+    );
+    promptContext.hidden = false;
+    dictionaryForm.hidden = false;
+    $("#revision-dictionary-value").textContent = currentCard.normalized_source;
+    prompt.hidden = true;
+  } else if (!sourceFirst && context && renderClozeSentence(
+    promptContext,
+    context,
+    currentCard.original_source,
+    t("revision.missingWord"),
+  )) {
+    promptContext.hidden = false;
+    dictionaryForm.hidden = true;
+    prompt.hidden = false;
+  } else {
+    promptContext.replaceChildren();
+    promptContext.hidden = true;
+    dictionaryForm.hidden = true;
+    prompt.hidden = false;
+  }
   const removeButton = $("#revision-remove");
   removeButton.dataset.itemId = currentCard.item_id;
-  removeButton.dataset.prompt = currentCard.prompt;
+  removeButton.dataset.prompt = currentCard.normalized_source || currentCard.prompt;
   removeButton.disabled = false;
   removeButton.textContent = t("revision.remove");
   $("#revision-action-error").textContent = "";
@@ -195,10 +247,12 @@ function renderNextCard() {
 
   const choices = $("#revision-choices");
   const recall = $("#revision-recall");
+  const tiles = $("#revision-tiles");
   const recallAnswer = $("#revision-recall-answer");
   choices.replaceChildren();
   choices.hidden = currentCard.exercise !== "multiple_choice";
   recall.hidden = currentCard.exercise !== "typed_recall";
+  tiles.hidden = currentCard.exercise !== "letter_tiles";
   recallAnswer.value = "";
   recallAnswer.disabled = false;
   recall.querySelector("button[type=submit]").disabled = false;
@@ -221,7 +275,118 @@ function renderNextCard() {
     button.addEventListener("click", () => submitAnswer(choice));
     choices.append(button);
   });
+  if (currentCard.exercise === "letter_tiles") {
+    setupLetterTiles(currentCard.normalized_source);
+  }
   if (currentCard.exercise === "typed_recall") recallAnswer.focus();
+}
+
+function setupLetterTiles(answer) {
+  tilePattern = graphemes(answer).map(value => ({
+    value,
+    selectable: /[\p{L}\p{N}]/u.test(value),
+  }));
+  tileOptions = tilePattern
+    .map((entry, index) => ({ ...entry, id: String(index) }))
+    .filter(entry => entry.selectable);
+  shuffle(tileOptions);
+  selectedTileIds = [];
+  tilesLocked = false;
+  $("#revision-tile-answer").classList.remove("is-correct", "is-incorrect");
+  renderLetterTiles();
+}
+
+function graphemes(value) {
+  if (typeof Intl.Segmenter === "function") {
+    return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value)]
+      .map(segment => segment.segment);
+  }
+  return Array.from(value);
+}
+
+function shuffle(values) {
+  for (let index = values.length - 1; index > 0; index -= 1) {
+    const other = Math.floor(Math.random() * (index + 1));
+    [values[index], values[other]] = [values[other], values[index]];
+  }
+}
+
+function renderLetterTiles() {
+  const optionsById = new Map(tileOptions.map(option => [option.id, option]));
+  const selected = new Set(selectedTileIds);
+  const answer = $("#revision-tile-answer");
+  const pool = $("#revision-tile-pool");
+  answer.replaceChildren();
+  pool.replaceChildren();
+
+  let selectedIndex = 0;
+  tilePattern.forEach(entry => {
+    if (!entry.selectable) {
+      const separator = document.createElement("span");
+      separator.className = "revision-tile-separator";
+      separator.textContent = /\s/u.test(entry.value) ? "\u00a0" : entry.value;
+      answer.append(separator);
+      return;
+    }
+
+    const tileId = selectedTileIds[selectedIndex];
+    const option = optionsById.get(tileId);
+    if (option) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "revision-letter-tile is-selected";
+      button.textContent = option.value;
+      button.disabled = tilesLocked;
+      button.setAttribute("aria-label", t("revision.removeLetter", { letter: option.value }));
+      const removeAt = selectedIndex;
+      button.addEventListener("click", () => {
+        selectedTileIds.splice(removeAt, 1);
+        renderLetterTiles();
+      });
+      answer.append(button);
+      selectedIndex += 1;
+      return;
+    }
+
+    const blank = document.createElement("span");
+    blank.className = "revision-letter-blank";
+    blank.setAttribute("aria-hidden", "true");
+    answer.append(blank);
+  });
+
+  tileOptions.forEach(option => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "revision-letter-tile";
+    button.textContent = option.value;
+    button.disabled = tilesLocked || selected.has(option.id);
+    button.setAttribute("aria-label", t("revision.addLetter", { letter: option.value }));
+    button.addEventListener("click", () => {
+      selectedTileIds.push(option.id);
+      renderLetterTiles();
+    });
+    pool.append(button);
+  });
+
+  $("#revision-tile-clear").disabled = tilesLocked || !selectedTileIds.length;
+  $("#revision-tile-check").disabled = tilesLocked
+    || selectedTileIds.length !== tileOptions.length;
+}
+
+function tileAnswer() {
+  const optionsById = new Map(tileOptions.map(option => [option.id, option]));
+  let selectedIndex = 0;
+  return tilePattern.map(entry => {
+    if (!entry.selectable) return entry.value;
+    const value = optionsById.get(selectedTileIds[selectedIndex])?.value || "";
+    selectedIndex += 1;
+    return value;
+  }).join("");
+}
+
+function setTileControlsDisabled(disabled) {
+  tilesLocked = disabled;
+  renderLetterTiles();
 }
 
 async function removeCurrentCard() {
@@ -238,6 +403,7 @@ async function removeCurrentCard() {
   choiceButtons.forEach(choice => { choice.disabled = true; });
   recallAnswer.disabled = true;
   recallButton.disabled = true;
+  setTileControlsDisabled(true);
   $("#revision-action-error").textContent = "";
   try {
     const response = await fetch(`/api/vocabulary/${encodeURIComponent(itemId)}`, {
@@ -266,6 +432,7 @@ async function removeCurrentCard() {
       choiceButtons.forEach(choice => { choice.disabled = false; });
       recallAnswer.disabled = false;
       recallButton.disabled = false;
+      setTileControlsDisabled(false);
     }
     $("#revision-action-error").textContent = error.message;
   }
@@ -279,6 +446,7 @@ async function submitAnswer(selectedAnswer) {
   buttons.forEach(button => { button.disabled = true; });
   recallAnswer.disabled = true;
   recallButton.disabled = true;
+  setTileControlsDisabled(true);
   removeButton.disabled = true;
   try {
     const response = await fetch(`/api/revision/${encodeURIComponent(currentCard.item_id)}/answer`, {
@@ -308,6 +476,10 @@ async function submitAnswer(selectedAnswer) {
     });
     if (currentCard.exercise === "typed_recall") {
       recallAnswer.classList.add(data.correct ? "is-correct" : "is-incorrect");
+    } else if (currentCard.exercise === "letter_tiles") {
+      $("#revision-tile-answer").classList.add(
+        data.correct ? "is-correct" : "is-incorrect",
+      );
     }
     $("#revision-feedback-title").textContent = data.correct
       ? t("revision.correct")
@@ -322,6 +494,9 @@ async function submitAnswer(selectedAnswer) {
       [data.item.original_source, data.item.normalized_source],
       t("revision.fromText"),
     );
+    $("#revision-context").hidden = !context;
+    $("#revision-feedback-dictionary").hidden = false;
+    $("#revision-feedback-dictionary-value").textContent = data.item.normalized_source;
     $("#revision-feedback").hidden = false;
     currentCard = null;
     removeButton.disabled = false;
@@ -330,9 +505,12 @@ async function submitAnswer(selectedAnswer) {
     buttons.forEach(button => { button.disabled = false; });
     recallAnswer.disabled = false;
     recallButton.disabled = false;
+    setTileControlsDisabled(false);
     removeButton.disabled = false;
     $("#revision-feedback-title").textContent = error.message;
     $("#revision-context").textContent = "";
+    $("#revision-context").hidden = true;
+    $("#revision-feedback-dictionary").hidden = true;
     $("#revision-feedback").hidden = false;
   }
 }

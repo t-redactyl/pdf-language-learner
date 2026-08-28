@@ -130,6 +130,12 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-card { padding:clamp(28px,6vw,58px); border:1px solid var(--line); background:var(--card); box-shadow:0 12px 38px #28261f10; }
 .revision-card.noun-masculine,.revision-card.noun-feminine,.revision-card.noun-neutral { border:2px solid var(--noun-colour); background:var(--card); }
 .revision-card > .eyebrow { margin:0; text-align:center; }
+.revision-prompt-context { margin:20px 0 14px; text-align:center; font:italic 22px/1.5 Georgia,serif; }
+.revision-prompt-context mark { padding:0 .12em; background:var(--gold); color:var(--ink); font-weight:700; }
+.revision-cloze { display:inline-block; min-width:4.5em; border-bottom:2px solid var(--sage); color:transparent; line-height:1; }
+.revision-dictionary-form { margin:0 0 30px; text-align:center; }
+.revision-dictionary-form p { margin:0 0 4px; color:#777c74; font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
+.revision-dictionary-form strong { font:500 clamp(27px,5vw,38px)/1.2 Georgia,serif; }
 .revision-card h3 { margin:18px 0 32px; text-align:center; font:500 clamp(36px,7vw,58px)/1.08 Georgia,serif; letter-spacing:-.035em; }
 .revision-card h3.noun-masculine,.revision-card h3.noun-feminine,.revision-card h3.noun-neutral { width:fit-content; margin:18px auto 32px; padding-left:12px; border-left:4px solid var(--noun-colour); }
 .revision-card-actions { min-height:24px; margin:-20px 0 24px; text-align:center; }
@@ -150,11 +156,28 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-recall input.is-correct { border-color:#608465; background:#6084651a; color:#38583d; }
 .revision-recall input.is-incorrect { border-color:#b15a4d; background:#b15a4d12; color:#8b3e34; }
 .revision-recall .primary-button { flex:0 0 auto; }
+.revision-tiles-label { margin:0 0 8px; color:#777c74; font-size:12px; font-weight:700; }
+.revision-tile-answer { display:flex; min-height:70px; align-items:center; justify-content:center; flex-wrap:wrap; gap:7px; padding:10px; border:1px solid var(--line); border-radius:3px; background:white; }
+.revision-tile-answer.is-correct { border-color:#608465; background:#6084651a; }
+.revision-tile-answer.is-incorrect { border-color:#b15a4d; background:#b15a4d12; }
+.revision-letter-tile,.revision-letter-blank { width:42px; min-height:48px; border-radius:4px; }
+.revision-letter-tile { border:1px solid var(--line); background:white; color:var(--ink); cursor:pointer; font:600 21px/1 Georgia,serif; box-shadow:0 2px 5px #28261f12; }
+.revision-letter-tile:hover,.revision-letter-tile:focus-visible { border-color:var(--sage); background:#78907b0d; }
+.revision-letter-tile:disabled { cursor:default; opacity:.25; }
+.revision-letter-tile.is-selected:disabled { opacity:1; }
+.revision-letter-blank { border-bottom:2px solid #b8bbb4; }
+.revision-tile-separator { min-width:10px; text-align:center; font:600 21px/1 Georgia,serif; }
+.revision-tile-pool { display:flex; min-height:66px; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; margin-top:18px; padding-top:18px; border-top:1px solid var(--line); }
+.revision-tile-pool .revision-letter-tile:disabled { visibility:hidden; }
+.revision-tile-controls { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:18px; }
+.revision-tile-controls .text-button:disabled { cursor:default; opacity:.45; }
 .revision-feedback { margin-top:24px; padding-top:20px; border-top:1px solid var(--line); }
 .revision-feedback-title { font-weight:700; }
 #revision-feedback-title { margin:0; font-weight:700; }
 .revision-context { margin:8px 0 18px; color:#686d65; font:italic 15px/1.5 Georgia,serif; }
 .revision-context mark { padding:0 .1em; background:var(--gold); color:var(--ink); font-weight:700; }
+.revision-feedback-dictionary { margin:0 0 18px; color:#686d65; font-size:13px; }
+.revision-feedback-dictionary strong { color:var(--ink); font:500 17px/1.4 Georgia,serif; }
 .revision-feedback .primary-button { width:100%; }
 [hidden] { display:none !important; }
 @media (max-width:1050px) { .reader { grid-template-columns:minmax(0,820px) minmax(200px,240px); gap:clamp(18px,2.5vw,26px); padding-inline:clamp(14px,2.5vw,26px); } .reader-meta { display:none; } .reader-meta-toggle { display:inline-flex; } .translation-panel { padding:clamp(18px,2.5vw,24px); } }

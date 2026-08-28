@@ -93,7 +93,20 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-reader-meta"' in response.text
     assert 'id="synonyms-result"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/app.js?v=19' in response.text
+    assert '/static/revision.js?v=12' in response.text
+    assert '/static/app.js?v=21' in response.text
+
+
+def test_frontend_entry_points_share_current_dependency_versions() -> None:
+    app_script = client.get("/static/app.js").text
+    revision_script = client.get("/static/revision.js").text
+    text_script = client.get("/static/text.js").text
+
+    assert './text.js?v=3' in app_script
+    assert './text.js?v=3' in revision_script
+    assert './i18n.js?v=6' in app_script
+    assert './i18n.js?v=6' in revision_script
+    assert "export function renderClozeSentence" in text_script
 
 
 def test_spanish_interface_catalog_is_served() -> None:
@@ -2155,7 +2168,10 @@ def save_revision_vocabulary() -> list[dict]:
 def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:
     saved = save_revision_vocabulary()
 
-    response = client.get("/api/revision/session")
+    response = client.get(
+        "/api/revision/session",
+        params={"supports_letter_tiles": True},
+    )
 
     assert response.status_code == 200
     session = response.json()
@@ -2163,17 +2179,54 @@ def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:
     assert {card["item_id"] for card in session["cards"]} == {
         item["id"] for item in saved
     }
-    assert all(2 <= len(card["choices"]) <= 4 for card in session["cards"])
-    assert all(card["exercise"] == "multiple_choice" for card in session["cards"])
     assert all(card["category"] == "new" for card in session["cards"])
     assert all(card["noun_gender"] == "neutral" for card in session["cards"])
     for card in session["cards"]:
+        item = next(item for item in saved if item["id"] == card["item_id"])
+        assert card["original_source"] == item["original_source"]
+        assert card["normalized_source"] == item["normalized_source"]
+        assert card["context"] == item["context"]
         if card["direction"] == "translation_to_source":
-            assert card["choice_genders"] == {
-                choice: "neutral" for choice in card["choices"]
-            }
-        else:
+            assert card["exercise"] == "letter_tiles"
+            assert card["choices"] == []
             assert card["choice_genders"] == {}
+        else:
+            assert card["exercise"] == "multiple_choice"
+            assert 2 <= len(card["choices"]) <= 4
+            assert card["choice_genders"] == {}
+
+
+def test_new_revision_source_direction_retains_multiple_choice(
+    vocabulary_database, monkeypatch
+) -> None:
+    class PreferSourceDirection:
+        @staticmethod
+        def shuffle(values) -> None:
+            return None
+
+        @staticmethod
+        def choice(values):
+            return next(
+                value
+                for value in values
+                if value.value == "source_to_translation"
+            )
+
+    save_revision_vocabulary()
+    monkeypatch.setattr(
+        "pdf_language_learner.app.random.SystemRandom",
+        PreferSourceDirection,
+    )
+
+    cards = client.get(
+        "/api/revision/session",
+        params={"supports_letter_tiles": True},
+    ).json()["cards"]
+
+    assert cards
+    assert all(card["direction"] == "source_to_translation" for card in cards)
+    assert all(card["exercise"] == "multiple_choice" for card in cards)
+    assert all(2 <= len(card["choices"]) <= 4 for card in cards)
 
 
 def test_revision_session_only_uses_selected_language(vocabulary_database) -> None:
@@ -2222,7 +2275,10 @@ def test_correct_revision_is_persisted_and_no_longer_due(
     assert result["category"] == "usually_correct"
     assert result["item"]["review"]["repetitions"] == 1
     assert result["item"]["review"]["lapses"] == 0
-    session = client.get("/api/revision/session").json()
+    session = client.get(
+        "/api/revision/session",
+        params={"supports_letter_tiles": True},
+    ).json()
     assert session["due_count"] == 3
     assert item["id"] not in {card["item_id"] for card in session["cards"]}
 
@@ -2247,18 +2303,52 @@ def test_incorrect_revision_records_lapse(vocabulary_database) -> None:
     assert result["item"]["review"]["lapses"] == 1
 
 
-def test_revision_without_distractors_uses_typed_recall(vocabulary_database) -> None:
+def test_new_revision_without_distractors_uses_letter_tiles(
+    vocabulary_database,
+) -> None:
     item = client.post("/api/vocabulary", json=vocabulary_payload()).json()["item"]
 
-    session = client.get("/api/revision/session").json()
+    session = client.get(
+        "/api/revision/session",
+        params={"supports_letter_tiles": True},
+    ).json()
 
     assert session["due_count"] == 1
     assert len(session["cards"]) == 1
     card = session["cards"][0]
     assert card["item_id"] == item["id"]
-    assert card["exercise"] == "typed_recall"
+    assert card["direction"] == "translation_to_source"
+    assert card["exercise"] == "letter_tiles"
     assert card["choices"] == []
     assert card["category"] == "new"
+
+    legacy_card = client.get("/api/revision/session").json()["cards"][0]
+    assert legacy_card["exercise"] == "typed_recall"
+
+
+def test_needs_practice_revision_without_distractors_uses_letter_tiles(
+    vocabulary_database,
+) -> None:
+    item = client.post("/api/vocabulary", json=vocabulary_payload()).json()["item"]
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            """
+            UPDATE vocabulary_german
+            SET lapses = 1, next_review_at = '2026-08-22T12:00:00+00:00'
+            WHERE id = ?
+            """,
+            (item["id"],),
+        )
+
+    card = client.get(
+        "/api/revision/session",
+        params={"supports_letter_tiles": True},
+    ).json()["cards"][0]
+
+    assert card["category"] == "needs_practice"
+    assert card["direction"] == "translation_to_source"
+    assert card["exercise"] == "letter_tiles"
+    assert card["choices"] == []
 
 
 def test_familiar_due_vocabulary_uses_typed_recall(vocabulary_database) -> None:

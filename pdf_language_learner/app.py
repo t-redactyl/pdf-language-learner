@@ -862,6 +862,9 @@ class VocabularySaveResult(BaseModel):
 class RevisionCard(BaseModel):
     item_id: str
     prompt: str
+    original_source: str
+    normalized_source: str
+    context: str
     direction: RevisionDirection
     exercise: RevisionExercise
     choices: list[str]
@@ -2285,28 +2288,53 @@ def revision_choices(
 
 
 def revision_card(
-    row: sqlite3.Row, rows: list[sqlite3.Row]
+    row: sqlite3.Row,
+    rows: list[sqlite3.Row],
+    *,
+    supports_letter_tiles: bool = False,
 ) -> RevisionCard:
-    multiple_choice_directions = [
-        direction
-        for direction in RevisionDirection
-        if len(revision_choices(row, rows, direction)) >= 2
-    ]
     category = revision_category(schedule_state(row))
-    exercise = (
-        RevisionExercise.TYPED_RECALL
-        if category in {
-            RevisionCategory.ALWAYS_CORRECT,
-            RevisionCategory.USUALLY_CORRECT,
-        } or not multiple_choice_directions
-        else RevisionExercise.MULTIPLE_CHOICE
-    )
-    directions = (
-        list(RevisionDirection)
-        if exercise is RevisionExercise.TYPED_RECALL
-        else multiple_choice_directions
-    )
+    familiar = category in {
+        RevisionCategory.ALWAYS_CORRECT,
+        RevisionCategory.USUALLY_CORRECT,
+    }
+    if familiar:
+        exercise = RevisionExercise.TYPED_RECALL
+        directions = list(RevisionDirection)
+    elif supports_letter_tiles:
+        source_choices = revision_choices(
+            row, rows, RevisionDirection.SOURCE_TO_TRANSLATION
+        )
+        directions = [
+            RevisionDirection.TRANSLATION_TO_SOURCE,
+            *(
+                [RevisionDirection.SOURCE_TO_TRANSLATION]
+                if len(source_choices) >= 2
+                else []
+            ),
+        ]
+        exercise = None
+    else:
+        directions = [
+            direction
+            for direction in RevisionDirection
+            if len(revision_choices(row, rows, direction)) >= 2
+        ]
+        exercise = (
+            RevisionExercise.MULTIPLE_CHOICE
+            if directions
+            else RevisionExercise.TYPED_RECALL
+        )
+        if not directions:
+            directions = list(RevisionDirection)
+
     direction = random.SystemRandom().choice(directions)
+    if exercise is None:
+        exercise = (
+            RevisionExercise.MULTIPLE_CHOICE
+            if direction is RevisionDirection.SOURCE_TO_TRANSLATION
+            else RevisionExercise.LETTER_TILES
+        )
     prompt_field = (
         "normalized_source"
         if direction is RevisionDirection.SOURCE_TO_TRANSLATION
@@ -2332,6 +2360,9 @@ def revision_card(
     return RevisionCard(
         item_id=row["id"],
         prompt=row[prompt_field],
+        original_source=row["original_source"],
+        normalized_source=row["normalized_source"],
+        context=row["context"],
         direction=direction,
         exercise=exercise,
         choices=choices,
@@ -2470,7 +2501,11 @@ def delete_vocabulary(item_id: str) -> Response:
 
 
 @app.get("/api/revision/session", response_model=RevisionSession)
-def revision_session(language: str | None = None, limit: int = 40) -> RevisionSession:
+def revision_session(
+    language: str | None = None,
+    limit: int = 40,
+    supports_letter_tiles: bool = False,
+) -> RevisionSession:
     limit = max(1, min(limit, 100))
     now = datetime.now(UTC)
     with vocabulary_database() as connection:
@@ -2493,7 +2528,14 @@ def revision_session(language: str | None = None, limit: int = 40) -> RevisionSe
     due_count = sum(is_due(schedule_state(row), at=now) for row in rows)
     selected = select_session_rows(rows, now=now, limit=limit)
     return RevisionSession(
-        cards=[revision_card(row, rows) for row in selected],
+        cards=[
+            revision_card(
+                row,
+                rows,
+                supports_letter_tiles=supports_letter_tiles,
+            )
+            for row in selected
+        ],
         due_count=due_count,
     )
 

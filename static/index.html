@@ -51,6 +51,11 @@
           </div>
           <article class="revision-card">
             <p id="revision-direction" class="eyebrow"></p>
+            <p id="revision-prompt-context" class="revision-prompt-context" hidden></p>
+            <div id="revision-dictionary-form" class="revision-dictionary-form" hidden>
+              <p data-i18n="revision.dictionaryForm">Dictionary form</p>
+              <strong id="revision-dictionary-value"></strong>
+            </div>
             <h3 id="revision-prompt"></h3>
             <div class="revision-card-actions">
               <button id="revision-remove" class="text-button" type="button" data-i18n="revision.remove">Remove from revision</button>
@@ -64,9 +69,22 @@
                 <button class="primary-button" type="submit" data-i18n="revision.check">Check answer</button>
               </div>
             </form>
+            <form id="revision-tiles" class="revision-tiles" hidden>
+              <p class="revision-tiles-label" data-i18n="revision.buildAnswer">Build your answer</p>
+              <div id="revision-tile-answer" class="revision-tile-answer" aria-live="polite" aria-label="Your answer" data-i18n-aria-label="revision.yourAnswer"></div>
+              <div id="revision-tile-pool" class="revision-tile-pool" aria-label="Available letters" data-i18n-aria-label="revision.availableLetters"></div>
+              <div class="revision-tile-controls">
+                <button id="revision-tile-clear" class="text-button" type="button" data-i18n="revision.clearLetters">Clear</button>
+                <button id="revision-tile-check" class="primary-button" type="submit" data-i18n="revision.check" disabled>Check answer</button>
+              </div>
+            </form>
             <div id="revision-feedback" class="revision-feedback" aria-live="polite" hidden>
               <p id="revision-feedback-title"></p>
               <p id="revision-context" class="revision-context"></p>
+              <p id="revision-feedback-dictionary" class="revision-feedback-dictionary" hidden>
+                <span data-i18n="revision.dictionaryForm">Dictionary form</span>:
+                <strong id="revision-feedback-dictionary-value"></strong>
+              </p>
               <button id="revision-continue" class="primary-button" type="button" data-i18n="revision.continue">Continue</button>
             </div>
           </article>
@@ -160,7 +178,7 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="/static/revision.js?v=8"></script>
-  <script type="module" src="/static/app.js?v=19"></script>
+  <script type="module" src="/static/revision.js?v=12"></script>
+  <script type="module" src="/static/app.js?v=21"></script>
 </body>
 </html>
