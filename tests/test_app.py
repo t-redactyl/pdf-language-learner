@@ -96,6 +96,7 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-connector-hint"' in response.text
     assert 'id="revision-exercise-selector"' in response.text
     assert 'data-i18n="hero.title"' in response.text
+    assert '/static/styles.css?v=26' in response.text
     assert '/static/revision.js?v=16' in response.text
     assert '/static/app.js?v=27' in response.text
 
@@ -110,6 +111,13 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert './i18n.js?v=9' in app_script
     assert './i18n.js?v=9' in revision_script
     assert "export function renderClozeSentence" in text_script
+
+
+def test_narrow_library_keeps_history_and_saved_vocabulary_independently_scrollable() -> None:
+    styles = client.get("/static/styles.css").text
+
+    assert ".reader.meta-open #translation-history-list { max-height:38vh; overflow:auto; }" in styles
+    assert ".reader.meta-open #saved-vocabulary-list { max-height:28vh; overflow:auto; }" in styles
 
 
 def test_spanish_interface_catalog_is_served() -> None:
