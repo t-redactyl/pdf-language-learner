@@ -94,7 +94,7 @@ def test_home_serves_reader() -> None:
     assert 'id="synonyms-result"' in response.text
     assert 'data-i18n="hero.title"' in response.text
     assert '/static/revision.js?v=12' in response.text
-    assert '/static/app.js?v=21' in response.text
+    assert '/static/app.js?v=22' in response.text
 
 
 def test_frontend_entry_points_share_current_dependency_versions() -> None:
@@ -1977,7 +1977,7 @@ def vocabulary_database(tmp_path, monkeypatch):
     return tmp_path
 
 
-def vocabulary_payload(**overrides) -> dict[str, str]:
+def vocabulary_payload(**overrides) -> dict[str, object]:
     payload = {
         "original_source": "Wörter",
         "normalized_source": "Wort",
@@ -2001,12 +2001,63 @@ def test_vocabulary_is_persisted(vocabulary_database) -> None:
     assert len(items) == 1
     assert items[0]["normalized_source"] == "Wort"
     assert items[0]["noun_gender"] == "neutral"
+    assert items[0]["synonyms"] == []
     assert items[0]["review"] == {
         "last_reviewed_at": None,
         "next_review_at": None,
         "repetitions": 0,
         "lapses": 0,
     }
+
+
+def test_vocabulary_persists_ranked_synonyms(vocabulary_database) -> None:
+    synonyms = [
+        {"text": "Begriff", "noun_gender": "masculine"},
+        {"text": "Ausdruck", "noun_gender": "masculine"},
+    ]
+
+    saved = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(synonyms=synonyms),
+    )
+
+    assert saved.status_code == 200
+    item = saved.json()["item"]
+    assert item["synonyms"] == synonyms
+    assert client.get("/api/vocabulary").json()[0]["synonyms"] == synonyms
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        rows = connection.execute(
+            """
+            SELECT text, canonical_text, noun_gender, position
+            FROM vocabulary_synonyms
+            WHERE vocabulary_item_id = ?
+            ORDER BY position
+            """,
+            (item["id"],),
+        ).fetchall()
+    assert rows == [
+        ("Begriff", "begriff", "masculine", 0),
+        ("Ausdruck", "ausdruck", "masculine", 1),
+    ]
+
+
+def test_vocabulary_excludes_self_and_duplicate_synonyms(vocabulary_database) -> None:
+    self_synonym = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(synonyms=[{"text": " wort "}]),
+    ).json()["item"]
+    assert self_synonym["synonyms"] == []
+
+    client.delete(f"/api/vocabulary/{self_synonym['id']}")
+    duplicate_synonyms = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(
+            synonyms=[{"text": "Begriff"}, {"text": " BEGRIFF "}],
+        ),
+    ).json()["item"]
+    assert duplicate_synonyms["synonyms"] == [
+        {"text": "Begriff", "noun_gender": None}
+    ]
 
 
 def test_vocabulary_deduplicates_normalized_form(vocabulary_database) -> None:
@@ -2113,6 +2164,7 @@ def test_legacy_vocabulary_table_is_migrated(vocabulary_database) -> None:
     assert client.get("/api/vocabulary/languages").json() == ["German"]
     items = client.get("/api/vocabulary", params={"language": "German"}).json()
     assert [item["id"] for item in items] == ["legacy-id"]
+    assert items[0]["synonyms"] == []
     with sqlite3.connect(vocabulary_database / "margin.db") as connection:
         tables = {
             row[0]
@@ -2125,10 +2177,18 @@ def test_legacy_vocabulary_table_is_migrated(vocabulary_database) -> None:
 
 
 def test_vocabulary_can_be_deleted(vocabulary_database) -> None:
-    item_id = client.post("/api/vocabulary", json=vocabulary_payload()).json()["item"]["id"]
+    item_id = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(synonyms=[{"text": "Begriff"}]),
+    ).json()["item"]["id"]
 
     assert client.delete(f"/api/vocabulary/{item_id}").status_code == 204
     assert client.get("/api/vocabulary").json() == []
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        synonym_count = connection.execute(
+            "SELECT COUNT(*) FROM vocabulary_synonyms"
+        ).fetchone()[0]
+    assert synonym_count == 0
     assert client.delete(f"/api/vocabulary/{item_id}").status_code == 404
 
 

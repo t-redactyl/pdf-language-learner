@@ -718,8 +718,16 @@ class LanguageDetectionResult(BaseModel):
 
 
 class SynonymValue(BaseModel):
-    text: str
+    text: str = Field(min_length=1, max_length=2_000)
     noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+
+    @field_validator("text")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
 
 
 class TranslationResult(BaseModel):
@@ -811,6 +819,10 @@ class VocabularyCreate(BaseModel):
     context: str = Field(default="", max_length=2_000)
     document_key: str = Field(default="", max_length=1_000)
     noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+    synonyms: list[SynonymValue] = Field(
+        default_factory=list,
+        max_length=MAX_SYNONYMS,
+    )
 
     @field_validator(
         "original_source",
@@ -850,6 +862,7 @@ class VocabularyItem(BaseModel):
     context: str
     document_key: str
     noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+    synonyms: list[SynonymValue] = Field(default_factory=list)
     saved_at: str
     review: ReviewState
 
@@ -2161,6 +2174,18 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vocabulary_synonyms (
+                vocabulary_item_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                canonical_text TEXT NOT NULL,
+                noun_gender TEXT,
+                position INTEGER NOT NULL,
+                PRIMARY KEY (vocabulary_item_id, canonical_text)
+            )
+            """
+        )
         migrate_legacy_vocabulary(connection)
         migrate_vocabulary_gender(connection)
         yield connection
@@ -2169,7 +2194,29 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
-def vocabulary_item(row: sqlite3.Row) -> VocabularyItem:
+def vocabulary_synonyms(
+    connection: sqlite3.Connection,
+    item_id: str,
+) -> list[SynonymValue]:
+    rows = connection.execute(
+        """
+        SELECT text, noun_gender
+        FROM vocabulary_synonyms
+        WHERE vocabulary_item_id = ?
+        ORDER BY position, canonical_text
+        """,
+        (item_id,),
+    ).fetchall()
+    return [
+        SynonymValue(text=row["text"], noun_gender=row["noun_gender"])
+        for row in rows
+    ]
+
+
+def vocabulary_item(
+    row: sqlite3.Row,
+    synonyms: list[SynonymValue] | None = None,
+) -> VocabularyItem:
     return VocabularyItem(
         id=row["id"],
         schema_version=row["schema_version"],
@@ -2181,6 +2228,7 @@ def vocabulary_item(row: sqlite3.Row) -> VocabularyItem:
         context=row["context"],
         document_key=row["document_key"],
         noun_gender=row["noun_gender"],
+        synonyms=synonyms or [],
         saved_at=row["saved_at"],
         review=ReviewState(
             last_reviewed_at=row["last_reviewed_at"],
@@ -2431,7 +2479,14 @@ def list_vocabulary(language: str | None = None) -> list[VocabularyItem]:
                 ).fetchall()
             ]
             rows.sort(key=lambda row: row["saved_at"], reverse=True)
-    return [vocabulary_item(row) for row in rows]
+        items = [
+            vocabulary_item(
+                row,
+                vocabulary_synonyms(connection, row["id"]),
+            )
+            for row in rows
+        ]
+    return items
 
 
 @app.post("/api/vocabulary", response_model=VocabularySaveResult)
@@ -2479,9 +2534,35 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
             """,
             (canonical_source,),
         ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=500, detail="Vocabulary could not be saved")
-    return VocabularySaveResult(item=vocabulary_item(row), created=created)
+        if row is None:
+            raise HTTPException(status_code=500, detail="Vocabulary could not be saved")
+        if created:
+            seen = {canonical_source}
+            for position, synonym in enumerate(request.synonyms):
+                canonical_synonym = canonicalize(synonym.text)
+                if canonical_synonym in seen:
+                    continue
+                seen.add(canonical_synonym)
+                connection.execute(
+                    """
+                    INSERT INTO vocabulary_synonyms (
+                        vocabulary_item_id, text, canonical_text,
+                        noun_gender, position
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row["id"],
+                        synonym.text,
+                        canonical_synonym,
+                        synonym.noun_gender,
+                        position,
+                    ),
+                )
+        item = vocabulary_item(
+            row,
+            vocabulary_synonyms(connection, row["id"]),
+        )
+    return VocabularySaveResult(item=item, created=created)
 
 
 @app.delete("/api/vocabulary/{item_id}", status_code=204)
@@ -2495,6 +2576,11 @@ def delete_vocabulary(item_id: str) -> Response:
             if cursor.rowcount:
                 deleted = True
                 break
+        if deleted:
+            connection.execute(
+                "DELETE FROM vocabulary_synonyms WHERE vocabulary_item_id = ?",
+                (item_id,),
+            )
     if not deleted:
         raise HTTPException(status_code=404, detail="Saved vocabulary item not found")
     return Response(status_code=204)
@@ -2589,12 +2675,13 @@ def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResu
         updated_row = connection.execute(
             f"SELECT * FROM {table_name} WHERE id = ?", (item_id,)
         ).fetchone()
+        stored_synonyms = vocabulary_synonyms(connection, item_id)
 
     return RevisionAnswerResult(
         correct=correct,
         correct_answer=correct_answer,
         category=revision_category(updated),
-        item=vocabulary_item(updated_row),
+        item=vocabulary_item(updated_row, stored_synonyms),
     )
 
 

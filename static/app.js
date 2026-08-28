@@ -945,6 +945,7 @@ function vocabularyRequest(translation) {
     context: translation.context || "",
     documentKey: translation.documentKey || activeDocumentKey,
     nounGender: nounGenderFor(translation),
+    synonyms: Array.isArray(translation.synonyms) ? translation.synonyms : [],
   };
 }
 
@@ -959,6 +960,13 @@ function vocabularyApiPayload(translation) {
     context: item.context,
     document_key: item.documentKey,
     noun_gender: item.nounGender,
+    synonyms: item.synonyms.map(entry => {
+      const synonym = typeof entry === "string" ? { text: entry } : entry;
+      return {
+        text: synonym.text,
+        noun_gender: synonym.noun_gender || synonym.nounGender || null,
+      };
+    }),
   };
 }
 
@@ -975,6 +983,7 @@ function vocabularyFromApi(item) {
     context: item.context,
     documentKey: item.document_key,
     nounGender: nounGenderFor(item),
+    synonyms: item.synonyms || [],
     savedAt: item.saved_at,
     review: item.review,
   };
