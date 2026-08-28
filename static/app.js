@@ -1,5 +1,5 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
-import { sentenceContext } from "./text.js?v=4";
+import { sentenceContext } from "./text.js?v=5";
 import { initI18n, languageName, t } from "./i18n.js?v=9";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
@@ -889,7 +889,7 @@ $("#translate-button").addEventListener("click", async () => {
     showCurrentHighlight(pendingHighlight);
     saveTranslation({
       source: data.normalized_source,
-      originalSource: selectedText,
+      originalSource: data.original_source || selectedText,
       normalizedSource: data.normalized_source,
       translation: data.translation,
       detectedLanguage: data.detected_language,

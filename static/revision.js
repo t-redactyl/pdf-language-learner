@@ -2,7 +2,7 @@ import {
   renderClozeSentence,
   renderHighlightedSentence,
   sentenceContaining,
-} from "./text.js?v=4";
+} from "./text.js?v=5";
 import { languageName, t } from "./i18n.js?v=9";
 
 const $ = selector => document.querySelector(selector);
@@ -295,9 +295,12 @@ function renderNextCard() {
   setNounGender(prompt, null);
   const promptContext = $("#revision-prompt-context");
   const dictionaryForm = $("#revision-dictionary-form");
+  const contextNeedle = [...String(
+    currentCard.original_source || currentCard.normalized_source,
+  ).split(/\s+/)].sort((left, right) => right.length - left.length)[0];
   const context = sentenceContaining(
     currentCard.context,
-    currentCard.original_source || currentCard.normalized_source,
+    contextNeedle,
   );
   if (sourceFirst && context) {
     renderHighlightedSentence(
@@ -807,17 +810,8 @@ async function submitAnswer(selectedAnswer) {
     $("#revision-feedback-title").textContent = data.correct
       ? t("revision.correct")
       : t("revision.incorrect", { answer: data.correct_answer });
-    const context = sentenceContaining(
-      data.item.context,
-      data.item.original_source || data.item.normalized_source,
-    );
-    renderHighlightedSentence(
-      $("#revision-context"),
-      context,
-      [data.item.original_source, data.item.normalized_source],
-      t("revision.fromText"),
-    );
-    $("#revision-context").hidden = !context;
+    $("#revision-context").replaceChildren();
+    $("#revision-context").hidden = true;
     $("#revision-feedback-dictionary").hidden = false;
     $("#revision-feedback-dictionary-value").textContent = data.item.normalized_source;
     $("#revision-feedback").hidden = false;

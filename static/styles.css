@@ -195,7 +195,7 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-matching-status { min-height:20px; margin:16px 0 0; color:#686d65; text-align:center; font-size:13px; }
 .revision-feedback { margin-top:24px; padding-top:20px; border-top:1px solid var(--line); }
 .revision-feedback-title { font-weight:700; }
-#revision-feedback-title { margin:0; font-weight:700; }
+#revision-feedback-title { margin:0 0 14px; font-size:clamp(20px,3vw,24px); font-weight:700; }
 .revision-context { margin:8px 0 18px; color:#686d65; font:italic 15px/1.5 Georgia,serif; }
 .revision-context mark { padding:0 .1em; background:var(--gold); color:var(--ink); font-weight:700; }
 .revision-feedback-dictionary { margin:0 0 18px; color:#686d65; font-size:13px; }

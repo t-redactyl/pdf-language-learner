@@ -96,9 +96,9 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-connector-hint"' in response.text
     assert 'id="revision-exercise-selector"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/styles.css?v=26' in response.text
-    assert '/static/revision.js?v=16' in response.text
-    assert '/static/app.js?v=27' in response.text
+    assert '/static/styles.css?v=27' in response.text
+    assert '/static/revision.js?v=18' in response.text
+    assert '/static/app.js?v=28' in response.text
 
 
 def test_frontend_entry_points_share_current_dependency_versions() -> None:
@@ -106,11 +106,14 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     revision_script = client.get("/static/revision.js").text
     text_script = client.get("/static/text.js").text
 
-    assert './text.js?v=4' in app_script
-    assert './text.js?v=4' in revision_script
+    assert './text.js?v=5' in app_script
+    assert './text.js?v=5' in revision_script
     assert './i18n.js?v=9' in app_script
     assert './i18n.js?v=9' in revision_script
     assert "export function renderClozeSentence" in text_script
+    assert "originalSource: data.original_source || selectedText" in app_script
+    assert "findWholeWordIgnoringCase" in text_script
+    assert '$("#revision-context").hidden = true' in revision_script
 
 
 def test_narrow_library_keeps_history_and_saved_vocabulary_independently_scrollable() -> None:
@@ -495,6 +498,7 @@ def test_translate_uses_contextual_pos_to_normalize_words(
     expected = {
         "detected_language": source_language,
         "is_word": True,
+        "original_source": source,
         "normalized_source": normalized_source,
         "translation": translation,
     }
@@ -592,6 +596,7 @@ def test_translate_combines_translation_and_synonyms(monkeypatch) -> None:
     assert response.json() == {
         "detected_language": "German",
         "is_word": True,
+        "original_source": "vermutlich",
         "normalized_source": "vermutlich",
         "translation": "probably / presumably",
         "synonyms": [
@@ -853,6 +858,7 @@ def test_translate_semantically_decides_which_clitics_enter_verb_lemma(
 
     assert response.status_code == 200
     assert response.json()["normalized_source"] == normalized_source
+    assert response.json()["original_source"] == analysis.token
     assert response.json()["translation"] == translation
     assert len(prompts) == 2
 
@@ -901,6 +907,7 @@ def test_translate_uses_confident_reflexive_lemma_without_classifier(
 
     assert response.status_code == 200
     assert response.json()["normalized_source"] == "prepararse"
+    assert response.json()["original_source"] == "Me preparo"
     assert response.json()["translation"] == "to get ready"
 
 
@@ -948,6 +955,7 @@ def test_translate_uses_confident_german_sich_lemma_without_classifier(
 
     assert response.status_code == 200
     assert response.json()["normalized_source"] == "sich erinnern"
+    assert response.json()["original_source"] == "erinnerte sich"
     assert response.json()["translation"] == "to remember"
 
 
@@ -1035,6 +1043,7 @@ def test_translate_phrase_without_normalizing_or_word_validation(monkeypatch) ->
     assert response.json() == {
         "detected_language": "German",
         "is_word": False,
+        "original_source": phrase,
         "normalized_source": phrase,
         "translation": translated_phrase,
     }
@@ -1158,6 +1167,7 @@ def test_translate_expands_selected_word_to_known_expression(
     assert response.json() == {
         "detected_language": "Spanish",
         "is_word": True,
+        "original_source": resolved_term,
         "normalized_source": resolved_term,
         "translation": translation,
     }

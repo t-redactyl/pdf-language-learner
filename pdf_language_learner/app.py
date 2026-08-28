@@ -1058,6 +1058,12 @@ class TranslationResult(BaseModel):
             "term, including a recognized multi-word expression"
         )
     )
+    original_source: str = Field(
+        description=(
+            "The complete source-language surface form, including any "
+            "syntax-linked particles or clitics"
+        )
+    )
     normalized_source: str = Field(
         description=(
             "The source text in dictionary form for a word lookup, or the unchanged "
@@ -3959,9 +3965,14 @@ def translate(request: TranslationRequest) -> TranslationResult:
                 )
                 synonym_values = []
 
+        original_source = source_text
+        if word_analysis is not None and len(word_analysis.token.split()) > 1:
+            original_source = word_analysis.token
+
         return TranslationResult(
             detected_language=request.source_language,
             is_word=is_term,
+            original_source=original_source,
             normalized_source=normalized_source,
             translation=translation,
             noun_gender=noun_gender,
