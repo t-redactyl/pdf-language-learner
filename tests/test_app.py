@@ -93,9 +93,10 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-reader-meta"' in response.text
     assert 'id="synonyms-result"' in response.text
     assert 'id="revision-matching"' in response.text
+    assert 'id="revision-connector-hint"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/revision.js?v=13' in response.text
-    assert '/static/app.js?v=23' in response.text
+    assert '/static/revision.js?v=14' in response.text
+    assert '/static/app.js?v=24' in response.text
 
 
 def test_frontend_entry_points_share_current_dependency_versions() -> None:
@@ -105,8 +106,8 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=3' in app_script
     assert './text.js?v=3' in revision_script
-    assert './i18n.js?v=7' in app_script
-    assert './i18n.js?v=7' in revision_script
+    assert './i18n.js?v=8' in app_script
+    assert './i18n.js?v=8' in revision_script
     assert "export function renderClozeSentence" in text_script
 
 
@@ -2157,7 +2158,7 @@ def test_legacy_vocabulary_table_is_migrated(vocabulary_database) -> None:
             """,
             (
                 "legacy-id", "Wörter", "Wort", "wort", "word", "German",
-                "german", "English", "Viele Wörter.", "legacy-document",
+                "german", "English", "Obwohl es regnet, lesen wir.", "legacy-document",
                 "2026-08-23T12:00:00+00:00",
             ),
         )
@@ -2175,6 +2176,10 @@ def test_legacy_vocabulary_table_is_migrated(vocabulary_database) -> None:
         }
     assert "vocabulary" not in tables
     assert "vocabulary_german" in tables
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        assert connection.execute(
+            "SELECT connector_key FROM connector_occurrences"
+        ).fetchone()[0] == "obwohl"
 
 
 def test_vocabulary_can_be_deleted(vocabulary_database) -> None:
@@ -2193,6 +2198,148 @@ def test_vocabulary_can_be_deleted(vocabulary_database) -> None:
     assert client.delete(f"/api/vocabulary/{item_id}").status_code == 404
 
 
+def test_saved_sentences_are_indexed_with_connector_occurrences(
+    vocabulary_database,
+) -> None:
+    sentence = (
+        "Obwohl es regnet, gehe ich hinaus; trotzdem nehme ich einen Schirm mit. "
+        "Daraufhin gehe ich nach Hause."
+    )
+    item = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(context=sentence),
+    ).json()["item"]
+
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.row_factory = sqlite3.Row
+        saved_sentences = connection.execute(
+            "SELECT * FROM connector_sentences"
+        ).fetchall()
+        occurrences = connection.execute(
+            """
+            SELECT connector_key, surface_text, start_offset, end_offset
+            FROM connector_occurrences ORDER BY start_offset
+            """
+        ).fetchall()
+        links = connection.execute(
+            "SELECT vocabulary_item_id FROM vocabulary_sentence_links"
+        ).fetchall()
+
+    assert len(saved_sentences) == 1
+    assert [row["connector_key"] for row in occurrences] == ["obwohl", "trotzdem"]
+    assert [sentence[row["start_offset"]:row["end_offset"]] for row in occurrences] == [
+        "Obwohl",
+        "trotzdem",
+    ]
+    assert [row["vocabulary_item_id"] for row in links] == [item["id"]]
+
+
+def test_duplicate_vocabulary_saves_preserve_additional_sentence_contexts(
+    vocabulary_database,
+) -> None:
+    first = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(context="Obwohl es regnet, gehen wir."),
+    ).json()
+    duplicate = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(context="Deshalb bleiben wir später zu Hause."),
+    ).json()
+
+    assert first["created"] is True
+    assert duplicate["created"] is False
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM connector_sentences"
+        ).fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT COUNT(*) FROM vocabulary_sentence_links"
+        ).fetchone()[0] == 2
+
+
+def test_connector_revision_card_uses_sentence_gloss_and_choices(
+    vocabulary_database,
+) -> None:
+    sentence = "Obwohl es regnet, gehen wir spazieren."
+    client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(context=sentence),
+    )
+
+    session = client.get(
+        "/api/revision/session", params={"language": "German"}
+    ).json()
+
+    assert session["connector_due_count"] == 1
+    assert len(session["connector_cards"]) == 1
+    card = session["connector_cards"][0]
+    assert card["exercise"] == "connector_cloze"
+    assert card["sentence"] == sentence
+    assert sentence[card["start_offset"]:card["end_offset"]] == "Obwohl"
+    assert card["connector"] == "Obwohl"
+    assert card["glosses"] == ["although", "even though"]
+    assert card["category"] == "new"
+    assert "subordinating conjunction" in card["connector_categories"]
+    assert "obwohl" in card["choices"]
+    assert len(card["choices"]) == 4
+
+
+def test_connector_answers_have_independent_review_state(
+    vocabulary_database,
+) -> None:
+    item = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(context="Obwohl es regnet, gehen wir spazieren."),
+    ).json()["item"]
+    card = client.get(
+        "/api/revision/session", params={"language": "German"}
+    ).json()["connector_cards"][0]
+
+    response = client.post(
+        f"/api/revision/connectors/{card['occurrence_id']}/answer",
+        json={"selected_answer": "OBWOHL"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "correct": True,
+        "correct_answer": "obwohl",
+        "category": "usually_correct",
+    }
+    next_session = client.get(
+        "/api/revision/session", params={"language": "German"}
+    ).json()
+    assert next_session["connector_due_count"] == 0
+    assert next_session["connector_cards"] == []
+    saved_item = next(
+        entry for entry in client.get("/api/vocabulary").json()
+        if entry["id"] == item["id"]
+    )
+    assert saved_item["review"]["repetitions"] == 0
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        assert connection.execute(
+            "SELECT repetitions FROM connector_reviews WHERE connector_key = 'obwohl'"
+        ).fetchone()[0] == 1
+
+
+def test_deleting_last_sentence_link_removes_connector_examples(
+    vocabulary_database,
+) -> None:
+    item_id = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(context="Obwohl es regnet, gehen wir spazieren."),
+    ).json()["item"]["id"]
+
+    assert client.delete(f"/api/vocabulary/{item_id}").status_code == 204
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM connector_sentences"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM connector_occurrences"
+        ).fetchone()[0] == 0
+
+
 def test_deleted_vocabulary_is_removed_from_revision(vocabulary_database) -> None:
     item_id = client.post(
         "/api/vocabulary", json=vocabulary_payload()
@@ -2204,6 +2351,8 @@ def test_deleted_vocabulary_is_removed_from_revision(vocabulary_database) -> Non
         "cards": [],
         "due_count": 0,
         "synonym_round": None,
+        "connector_cards": [],
+        "connector_due_count": 0,
     }
 
 

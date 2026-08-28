@@ -3,7 +3,7 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=3";
-import { languageName, t } from "./i18n.js?v=7";
+import { languageName, t } from "./i18n.js?v=8";
 
 const $ = selector => document.querySelector(selector);
 
@@ -19,6 +19,8 @@ let removed = 0;
 let documentLanguage = "";
 let synonymPairsAnswered = 0;
 let synonymPairsFirstTry = 0;
+let connectorAnswers = 0;
+let connectorCorrectAnswers = 0;
 let matchingPairs = new Map();
 let matchedPairIds = new Set();
 let missedPairIds = new Set();
@@ -88,7 +90,9 @@ document.addEventListener("keydown", event => {
 });
 document.addEventListener("margin:locale-changed", () => {
   localizeRevisionLanguageOptions();
-  if (currentCard?.exercise === "synonym_matching") {
+  if (currentCard?.exercise === "connector_cloze") {
+    renderConnectorDirection();
+  } else if (currentCard?.exercise === "synonym_matching") {
     renderMatchingDirection();
   } else if (currentCard) {
     renderCardDirection();
@@ -138,6 +142,8 @@ async function loadRevisionSession() {
   removed = 0;
   synonymPairsAnswered = 0;
   synonymPairsFirstTry = 0;
+  connectorAnswers = 0;
+  connectorCorrectAnswers = 0;
 
   const language = $("#revision-language").value;
   if (!language) {
@@ -158,6 +164,7 @@ async function loadRevisionSession() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || t("revision.loadError"));
     queue = data.cards.map(card => ({ ...card, retryCount: 0 }));
+    queue.push(...(data.connector_cards || []));
     if (data.synonym_round) queue.push(data.synonym_round);
     loading.hidden = true;
     if (!queue.length) {
@@ -202,6 +209,12 @@ function showEmptySession(finished = false) {
       total: synonymPairsAnswered,
     }));
   }
+  if (connectorAnswers) {
+    summaries.push(t("revision.connectorAnswers", {
+      correct: connectorCorrectAnswers,
+      answered: connectorAnswers,
+    }));
+  }
   if (!summaries.length) summaries.push(t("revision.noAnswers"));
   const removalSummary = removed
     ? t(`revision.removal.${removed === 1 ? "one" : "other"}`, { count: removed })
@@ -213,6 +226,7 @@ function showEmptySession(finished = false) {
 function renderNextCard() {
   $("#revision-feedback").hidden = true;
   $("#revision-matching").hidden = true;
+  $("#revision-connector-hint").hidden = true;
   if (!queue.length) {
     currentCard = null;
     showEmptySession(true);
@@ -220,6 +234,10 @@ function renderNextCard() {
   }
 
   currentCard = queue.shift();
+  if (currentCard.exercise === "connector_cloze") {
+    renderConnectorCard();
+    return;
+  }
   if (currentCard.exercise === "synonym_matching") {
     renderSynonymMatchingRound();
     return;
@@ -308,6 +326,110 @@ function renderNextCard() {
     setupLetterTiles(currentCard.normalized_source);
   }
   if (currentCard.exercise === "typed_recall") recallAnswer.focus();
+}
+
+function renderConnectorCard() {
+  setNounGender(document.querySelector(".revision-card"), null, false);
+  renderConnectorDirection();
+  $("#revision-card-actions").hidden = true;
+  $("#revision-dictionary-form").hidden = true;
+  $("#revision-prompt").hidden = true;
+  $("#revision-recall").hidden = true;
+  $("#revision-tiles").hidden = true;
+  $("#revision-matching").hidden = true;
+
+  $("#revision-connector-hint").hidden = false;
+  $("#revision-connector-meanings").textContent = currentCard.glosses.join(" / ");
+  const context = $("#revision-prompt-context");
+  renderConnectorSentence(context, currentCard, false);
+  context.hidden = false;
+
+  const choices = $("#revision-choices");
+  choices.replaceChildren();
+  choices.hidden = false;
+  currentCard.choices.forEach(choice => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "revision-choice";
+    button.textContent = choice;
+    button.addEventListener("click", () => submitConnectorAnswer(choice));
+    choices.append(button);
+  });
+  updateProgress();
+}
+
+function renderConnectorDirection() {
+  const category = t(`revision.category.${currentCard.category}`);
+  const types = currentCard.connector_categories
+    .map(value => t(`revision.connectorCategory.${value}`))
+    .join(" / ");
+  $("#revision-direction").textContent = [
+    languageName(currentCard.source_language),
+    t("revision.connectorPractice"),
+    types,
+    category,
+  ].join(" · ");
+}
+
+function renderConnectorSentence(element, card, reveal) {
+  element.replaceChildren();
+  const start = Math.max(0, Math.min(card.start_offset, card.sentence.length));
+  const end = Math.max(start, Math.min(card.end_offset, card.sentence.length));
+  element.append(document.createTextNode(card.sentence.slice(0, start)));
+  if (reveal) {
+    const mark = document.createElement("mark");
+    mark.textContent = card.sentence.slice(start, end);
+    element.append(mark);
+  } else {
+    const blank = document.createElement("span");
+    blank.className = "revision-cloze revision-connector-cloze";
+    blank.textContent = card.sentence.slice(start, end);
+    blank.setAttribute("aria-label", t("revision.missingConnector"));
+    element.append(blank);
+  }
+  element.append(document.createTextNode(card.sentence.slice(end)));
+}
+
+async function submitConnectorAnswer(selectedAnswer) {
+  const card = currentCard;
+  const buttons = [...document.querySelectorAll(".revision-choice")];
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    const response = await fetch(
+      `/api/revision/connectors/${encodeURIComponent(card.occurrence_id)}/answer`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selected_answer: selectedAnswer }),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || t("revision.answerSaveError"));
+    connectorAnswers += 1;
+    if (data.correct) connectorCorrectAnswers += 1;
+    buttons.forEach(button => {
+      if (normalize(button.textContent) === normalize(data.correct_answer)) {
+        button.classList.add("is-correct");
+      } else if (button.textContent === selectedAnswer) {
+        button.classList.add("is-incorrect");
+      }
+    });
+    $("#revision-feedback-title").textContent = data.correct
+      ? t("revision.correct")
+      : t("revision.incorrect", { answer: data.correct_answer });
+    renderConnectorSentence($("#revision-context"), card, true);
+    $("#revision-context").hidden = false;
+    $("#revision-feedback-dictionary").hidden = true;
+    $("#revision-feedback").hidden = false;
+    currentCard = null;
+    updateProgress();
+  } catch (error) {
+    buttons.forEach(button => { button.disabled = false; });
+    $("#revision-feedback-title").textContent = error.message;
+    $("#revision-context").hidden = true;
+    $("#revision-feedback-dictionary").hidden = true;
+    $("#revision-feedback").hidden = false;
+  }
 }
 
 function renderSynonymMatchingRound() {
@@ -693,8 +815,11 @@ function updateProgress() {
   const synonymScore = synonymPairsAnswered
     ? t("revision.synonymScore", { count: synonymPairsFirstTry })
     : "";
+  const connectorScore = connectorAnswers
+    ? t("revision.connectorScore", { count: connectorCorrectAnswers })
+    : "";
   const removals = removed ? t("revision.removedCount", { count: removed }) : "";
-  $("#revision-score").textContent = [score, synonymScore, removals]
+  $("#revision-score").textContent = [score, connectorScore, synonymScore, removals]
     .filter(Boolean).join(" · ");
 }
 

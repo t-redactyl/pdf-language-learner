@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
-  <link rel="stylesheet" href="/static/styles.css?v=21">
+  <link rel="stylesheet" href="/static/styles.css?v=22">
 </head>
 <body>
   <header class="topbar">
@@ -51,6 +51,10 @@
           </div>
           <article class="revision-card">
             <p id="revision-direction" class="eyebrow"></p>
+            <div id="revision-connector-hint" class="revision-connector-hint" hidden>
+              <p data-i18n="revision.connectorMeanings">English meanings</p>
+              <strong id="revision-connector-meanings"></strong>
+            </div>
             <p id="revision-prompt-context" class="revision-prompt-context" hidden></p>
             <div id="revision-dictionary-form" class="revision-dictionary-form" hidden>
               <p data-i18n="revision.dictionaryForm">Dictionary form</p>
@@ -193,7 +197,7 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="/static/revision.js?v=13"></script>
-  <script type="module" src="/static/app.js?v=23"></script>
+  <script type="module" src="/static/revision.js?v=14"></script>
+  <script type="module" src="/static/app.js?v=24"></script>
 </body>
 </html>

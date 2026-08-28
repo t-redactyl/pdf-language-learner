@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import os
 import random
@@ -102,6 +103,170 @@ MAX_SYNONYMS = 2
 MAX_SYNONYM_CANDIDATES = 32
 MIN_SYNONYM_ZIPF = 2.5
 MAX_SYNONYM_ZIPF_DROP = 2.0
+CONNECTOR_REVISION_LIMIT = 8
+CONNECTOR_BACKFILL_VERSION = "connector-sentences-v1"
+GERMAN_CONNECTORS = {
+    "obwohl": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("although", "even though"),
+    },
+    "obgleich": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("although", "even though"),
+    },
+    "obschon": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("although", "even though"),
+    },
+    "während": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("while", "whereas", "during"),
+    },
+    "sofern": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("provided that", "as long as"),
+    },
+    "falls": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("if", "in case"),
+    },
+    "sodass": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("so that", "with the result that"),
+    },
+    "so dass": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("so that", "with the result that"),
+    },
+    "solange": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("as long as", "while"),
+    },
+    "sobald": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("as soon as",),
+    },
+    "nachdem": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("after",),
+    },
+    "bevor": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("before",),
+    },
+    "weil": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("because",),
+    },
+    "wohingegen": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("whereas", "in contrast"),
+    },
+    "trotzdem": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("nevertheless", "despite that"),
+    },
+    "dennoch": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("nevertheless", "nonetheless"),
+    },
+    "deshalb": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("therefore", "for that reason"),
+    },
+    "deswegen": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("therefore", "because of that"),
+    },
+    "daher": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("therefore", "hence"),
+    },
+    "allerdings": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("however", "admittedly"),
+    },
+    "folglich": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("consequently",),
+    },
+    "somit": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("thus", "therefore"),
+    },
+    "hingegen": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("on the other hand", "by contrast"),
+    },
+    "außerdem": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("besides", "in addition"),
+    },
+    "damit": {
+        "categories": ("subordinating conjunction", "da-compound"),
+        "glosses": ("so that", "with it"),
+    },
+    "darum": {
+        "categories": ("conjunctive adverb", "da-compound"),
+        "glosses": ("therefore", "about it"),
+    },
+    "dabei": {
+        "categories": ("da-compound",),
+        "glosses": ("in doing so", "with it", "at the same time"),
+    },
+    "dafür": {
+        "categories": ("da-compound",),
+        "glosses": ("for it", "in favour of it", "in return"),
+    },
+    "dagegen": {
+        "categories": ("da-compound",),
+        "glosses": ("against it", "on the other hand"),
+    },
+    "danach": {
+        "categories": ("da-compound",),
+        "glosses": ("after it", "afterwards"),
+    },
+    "daran": {
+        "categories": ("da-compound",),
+        "glosses": ("on it", "about it"),
+    },
+    "darauf": {
+        "categories": ("da-compound",),
+        "glosses": ("on it", "after that"),
+    },
+    "daraus": {
+        "categories": ("da-compound",),
+        "glosses": ("from it", "out of it"),
+    },
+    "darin": {
+        "categories": ("da-compound",),
+        "glosses": ("in it", "therein"),
+    },
+    "darüber": {
+        "categories": ("da-compound",),
+        "glosses": ("about it", "above it"),
+    },
+    "darunter": {
+        "categories": ("da-compound",),
+        "glosses": ("under it", "among them"),
+    },
+    "davon": {
+        "categories": ("da-compound",),
+        "glosses": ("of it", "from it"),
+    },
+    "davor": {
+        "categories": ("da-compound",),
+        "glosses": ("before it", "in front of it"),
+    },
+    "dazu": {
+        "categories": ("da-compound",),
+        "glosses": ("to it", "in addition"),
+    },
+    "dazwischen": {
+        "categories": ("da-compound",),
+        "glosses": ("between them", "in between"),
+    },
+}
 WORD_FREQUENCY_LANGUAGES = {
     "german": "de",
     "spanish": "es",
@@ -904,10 +1069,26 @@ class SynonymMatchingRound(BaseModel):
     pairs: list[SynonymMatchingPair] = Field(min_length=4, max_length=5)
 
 
+class ConnectorRevisionCard(BaseModel):
+    occurrence_id: str
+    exercise: Literal["connector_cloze"] = "connector_cloze"
+    sentence: str
+    connector: str
+    start_offset: int
+    end_offset: int
+    glosses: list[str]
+    choices: list[str] = Field(min_length=2, max_length=4)
+    connector_categories: list[str]
+    category: RevisionCategory
+    source_language: str
+
+
 class RevisionSession(BaseModel):
     cards: list[RevisionCard]
     due_count: int
     synonym_round: SynonymMatchingRound | None = None
+    connector_cards: list[ConnectorRevisionCard] = Field(default_factory=list)
+    connector_due_count: int = 0
 
 
 class RevisionAnswer(BaseModel):
@@ -928,6 +1109,24 @@ class RevisionAnswerResult(BaseModel):
     correct_answer: str
     category: RevisionCategory
     item: VocabularyItem
+
+
+class ConnectorRevisionAnswer(BaseModel):
+    selected_answer: str = Field(min_length=1, max_length=200)
+
+    @field_validator("selected_answer")
+    @classmethod
+    def strip_connector_answer(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+
+class ConnectorRevisionAnswerResult(BaseModel):
+    correct: bool
+    correct_answer: str
+    category: RevisionCategory
 
 
 @dataclass(frozen=True)
@@ -2173,6 +2372,205 @@ def migrate_legacy_vocabulary(connection: sqlite3.Connection) -> None:
     connection.execute("DROP TABLE vocabulary")
 
 
+def create_connector_tables(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS connector_sentences (
+            id TEXT PRIMARY KEY,
+            source_language TEXT NOT NULL,
+            canonical_source_language TEXT NOT NULL,
+            text TEXT NOT NULL,
+            canonical_text TEXT NOT NULL,
+            document_key TEXT NOT NULL DEFAULT '',
+            saved_at TEXT NOT NULL,
+            UNIQUE (canonical_source_language, canonical_text)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vocabulary_sentence_links (
+            vocabulary_item_id TEXT NOT NULL,
+            sentence_id TEXT NOT NULL,
+            PRIMARY KEY (vocabulary_item_id, sentence_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS connector_occurrences (
+            id TEXT PRIMARY KEY,
+            sentence_id TEXT NOT NULL,
+            connector_key TEXT NOT NULL,
+            surface_text TEXT NOT NULL,
+            start_offset INTEGER NOT NULL,
+            end_offset INTEGER NOT NULL,
+            categories_json TEXT NOT NULL,
+            glosses_json TEXT NOT NULL,
+            UNIQUE (sentence_id, connector_key, start_offset)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS connector_reviews (
+            canonical_source_language TEXT NOT NULL,
+            connector_key TEXT NOT NULL,
+            last_reviewed_at TEXT,
+            next_review_at TEXT,
+            repetitions INTEGER NOT NULL DEFAULT 0,
+            lapses INTEGER NOT NULL DEFAULT 0,
+            consecutive_correct INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (canonical_source_language, connector_key)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            name TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def connector_catalogue(language: str) -> dict[str, dict[str, tuple[str, ...]]]:
+    return GERMAN_CONNECTORS if canonicalize(language) in {"german", "deutsch"} else {}
+
+
+def connector_occurrences_in_sentence(
+    sentence: str,
+    language: str,
+) -> list[tuple[str, re.Match[str]]]:
+    matches: list[tuple[str, re.Match[str]]] = []
+    occupied: list[tuple[int, int]] = []
+    for connector in sorted(connector_catalogue(language), key=len, reverse=True):
+        pattern = re.escape(connector).replace(r"\ ", r"\s+")
+        for match in re.finditer(
+            rf"(?<!\w){pattern}(?!\w)", sentence, flags=re.IGNORECASE
+        ):
+            span = match.span()
+            if any(span[0] < end and start < span[1] for start, end in occupied):
+                continue
+            occupied.append(span)
+            matches.append((connector, match))
+    return sorted(matches, key=lambda entry: entry[1].start())
+
+
+def index_saved_sentence(
+    connection: sqlite3.Connection,
+    *,
+    vocabulary_item_id: str,
+    source_language: str,
+    context: str,
+    document_key: str,
+    saved_at: str,
+) -> None:
+    sentence = context.strip()
+    if not sentence:
+        return
+    canonical_language = canonicalize(source_language)
+    canonical_sentence = canonicalize(sentence)
+    sentence_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"margin-sentence\0{canonical_language}\0{canonical_sentence}",
+        )
+    )
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO connector_sentences (
+            id, source_language, canonical_source_language, text,
+            canonical_text, document_key, saved_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            sentence_id,
+            source_language,
+            canonical_language,
+            sentence,
+            canonical_sentence,
+            document_key,
+            saved_at,
+        ),
+    )
+    stored = connection.execute(
+        """
+        SELECT * FROM connector_sentences
+        WHERE canonical_source_language = ? AND canonical_text = ?
+        """,
+        (canonical_language, canonical_sentence),
+    ).fetchone()
+    if stored is None:
+        return
+    sentence_id = stored["id"]
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO vocabulary_sentence_links (
+            vocabulary_item_id, sentence_id
+        ) VALUES (?, ?)
+        """,
+        (vocabulary_item_id, sentence_id),
+    )
+    catalogue = connector_catalogue(stored["source_language"])
+    for connector, match in connector_occurrences_in_sentence(
+        stored["text"], stored["source_language"]
+    ):
+        definition = catalogue[connector]
+        occurrence_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"margin-connector\0{sentence_id}\0{connector}\0{match.start()}",
+            )
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO connector_occurrences (
+                id, sentence_id, connector_key, surface_text,
+                start_offset, end_offset, categories_json, glosses_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                occurrence_id,
+                sentence_id,
+                connector,
+                match.group(),
+                match.start(),
+                match.end(),
+                json.dumps(definition["categories"], ensure_ascii=False),
+                json.dumps(definition["glosses"], ensure_ascii=False),
+            ),
+        )
+
+
+def backfill_connector_sentences(connection: sqlite3.Connection) -> None:
+    applied = connection.execute(
+        "SELECT 1 FROM schema_migrations WHERE name = ?",
+        (CONNECTOR_BACKFILL_VERSION,),
+    ).fetchone()
+    if applied is not None:
+        return
+    for registered in registered_language_tables(connection):
+        rows = connection.execute(
+            f"SELECT id, source_language, context, document_key, saved_at "
+            f"FROM {registered['table_name']}"
+        ).fetchall()
+        for row in rows:
+            index_saved_sentence(
+                connection,
+                vocabulary_item_id=row["id"],
+                source_language=row["source_language"],
+                context=row["context"],
+                document_key=row["document_key"],
+                saved_at=row["saved_at"],
+            )
+    connection.execute(
+        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+        (CONNECTOR_BACKFILL_VERSION, datetime.now(UTC).isoformat()),
+    )
+
+
 @contextmanager
 def vocabulary_database() -> Iterator[sqlite3.Connection]:
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -2201,8 +2599,10 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
             )
             """
         )
+        create_connector_tables(connection)
         migrate_legacy_vocabulary(connection)
         migrate_vocabulary_gender(connection)
+        backfill_connector_sentences(connection)
         yield connection
         connection.commit()
     finally:
@@ -2505,6 +2905,81 @@ def synonym_matching_round(
     return None
 
 
+def connector_revision_cards(
+    connection: sqlite3.Connection,
+    *,
+    language: str | None,
+    now: datetime,
+    limit: int = CONNECTOR_REVISION_LIMIT,
+) -> tuple[list[ConnectorRevisionCard], int]:
+    parameters: tuple[str, ...] = ()
+    language_filter = ""
+    if language is not None:
+        language_filter = "WHERE s.canonical_source_language = ?"
+        parameters = (canonicalize(language),)
+    rows = connection.execute(
+        f"""
+        SELECT o.*, s.text AS sentence, s.source_language,
+            s.canonical_source_language,
+            r.last_reviewed_at, r.next_review_at,
+            COALESCE(r.repetitions, 0) AS repetitions,
+            COALESCE(r.lapses, 0) AS lapses,
+            COALESCE(r.consecutive_correct, 0) AS consecutive_correct
+        FROM connector_occurrences o
+        JOIN connector_sentences s ON s.id = o.sentence_id
+        LEFT JOIN connector_reviews r
+          ON r.canonical_source_language = s.canonical_source_language
+         AND r.connector_key = o.connector_key
+        {language_filter}
+        """,
+        parameters,
+    ).fetchall()
+    due_by_connector: dict[tuple[str, str], list[sqlite3.Row]] = {}
+    for row in rows:
+        if is_due(schedule_state(row), at=now):
+            key = (row["canonical_source_language"], row["connector_key"])
+            due_by_connector.setdefault(key, []).append(row)
+    generator = random.SystemRandom()
+    connector_groups = list(due_by_connector.values())
+    generator.shuffle(connector_groups)
+    cards: list[ConnectorRevisionCard] = []
+    for occurrences in connector_groups[:limit]:
+        row = generator.choice(occurrences)
+        categories = json.loads(row["categories_json"])
+        connector = row["connector_key"]
+        catalogue = connector_catalogue(row["source_language"])
+        preferred = [
+            candidate
+            for candidate, definition in catalogue.items()
+            if candidate != connector
+            and set(definition["categories"]).intersection(categories)
+        ]
+        fallback = [
+            candidate
+            for candidate in catalogue
+            if candidate != connector and candidate not in preferred
+        ]
+        generator.shuffle(preferred)
+        generator.shuffle(fallback)
+        choices = [connector, *(preferred + fallback)[:3]]
+        generator.shuffle(choices)
+        cards.append(
+            ConnectorRevisionCard(
+                occurrence_id=row["id"],
+                sentence=row["sentence"],
+                connector=row["surface_text"],
+                start_offset=row["start_offset"],
+                end_offset=row["end_offset"],
+                glosses=json.loads(row["glosses_json"]),
+                choices=choices,
+                connector_categories=categories,
+                category=revision_category(schedule_state(row)),
+                source_language=row["source_language"],
+            )
+        )
+    return cards, len(due_by_connector)
+
+
 app = FastAPI(title="PDF Language Learner", lifespan=application_lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
@@ -2641,6 +3116,14 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
                         position,
                     ),
                 )
+        index_saved_sentence(
+            connection,
+            vocabulary_item_id=row["id"],
+            source_language=request.source_language,
+            context=request.context,
+            document_key=request.document_key,
+            saved_at=saved_at,
+        )
         item = vocabulary_item(
             row,
             vocabulary_synonyms(connection, row["id"]),
@@ -2651,6 +3134,16 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
 @app.delete("/api/vocabulary/{item_id}", status_code=204)
 def delete_vocabulary(item_id: str) -> Response:
     with vocabulary_database() as connection:
+        linked_sentence_ids = [
+            row["sentence_id"]
+            for row in connection.execute(
+                """
+                SELECT sentence_id FROM vocabulary_sentence_links
+                WHERE vocabulary_item_id = ?
+                """,
+                (item_id,),
+            ).fetchall()
+        ]
         deleted = False
         for registered in registered_language_tables(connection):
             cursor = connection.execute(
@@ -2664,6 +3157,28 @@ def delete_vocabulary(item_id: str) -> Response:
                 "DELETE FROM vocabulary_synonyms WHERE vocabulary_item_id = ?",
                 (item_id,),
             )
+            connection.execute(
+                "DELETE FROM vocabulary_sentence_links WHERE vocabulary_item_id = ?",
+                (item_id,),
+            )
+            for sentence_id in linked_sentence_ids:
+                still_linked = connection.execute(
+                    """
+                    SELECT 1 FROM vocabulary_sentence_links
+                    WHERE sentence_id = ? LIMIT 1
+                    """,
+                    (sentence_id,),
+                ).fetchone()
+                if still_linked is not None:
+                    continue
+                connection.execute(
+                    "DELETE FROM connector_occurrences WHERE sentence_id = ?",
+                    (sentence_id,),
+                )
+                connection.execute(
+                    "DELETE FROM connector_sentences WHERE id = ?",
+                    (sentence_id,),
+                )
     if not deleted:
         raise HTTPException(status_code=404, detail="Saved vocabulary item not found")
     return Response(status_code=204)
@@ -2694,6 +3209,11 @@ def revision_session(
                 ).fetchall()
             ]
         synonym_round = synonym_matching_round(connection, rows)
+        connector_cards, connector_due_count = connector_revision_cards(
+            connection,
+            language=language,
+            now=now,
+        )
 
     due_count = sum(is_due(schedule_state(row), at=now) for row in rows)
     selected = select_session_rows(rows, now=now, limit=limit)
@@ -2708,6 +3228,8 @@ def revision_session(
         ],
         due_count=due_count,
         synonym_round=synonym_round,
+        connector_cards=connector_cards,
+        connector_due_count=connector_due_count,
     )
 
 
@@ -2767,6 +3289,73 @@ def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResu
         correct_answer=correct_answer,
         category=revision_category(updated),
         item=vocabulary_item(updated_row, stored_synonyms),
+    )
+
+
+@app.post(
+    "/api/revision/connectors/{occurrence_id}/answer",
+    response_model=ConnectorRevisionAnswerResult,
+)
+def answer_connector_revision(
+    occurrence_id: str,
+    request: ConnectorRevisionAnswer,
+) -> ConnectorRevisionAnswerResult:
+    reviewed_at = datetime.now(UTC)
+    with vocabulary_database() as connection:
+        row = connection.execute(
+            """
+            SELECT o.connector_key, s.canonical_source_language,
+                r.last_reviewed_at, r.next_review_at,
+                COALESCE(r.repetitions, 0) AS repetitions,
+                COALESCE(r.lapses, 0) AS lapses,
+                COALESCE(r.consecutive_correct, 0) AS consecutive_correct
+            FROM connector_occurrences o
+            JOIN connector_sentences s ON s.id = o.sentence_id
+            LEFT JOIN connector_reviews r
+              ON r.canonical_source_language = s.canonical_source_language
+             AND r.connector_key = o.connector_key
+            WHERE o.id = ?
+            """,
+            (occurrence_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Saved connector occurrence not found",
+            )
+        correct_answer = row["connector_key"]
+        correct = canonicalize(request.selected_answer) == canonicalize(correct_answer)
+        updated = schedule_review(
+            schedule_state(row), correct=correct, reviewed_at=reviewed_at
+        )
+        connection.execute(
+            """
+            INSERT INTO connector_reviews (
+                canonical_source_language, connector_key,
+                last_reviewed_at, next_review_at, repetitions,
+                lapses, consecutive_correct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(canonical_source_language, connector_key) DO UPDATE SET
+                last_reviewed_at = excluded.last_reviewed_at,
+                next_review_at = excluded.next_review_at,
+                repetitions = excluded.repetitions,
+                lapses = excluded.lapses,
+                consecutive_correct = excluded.consecutive_correct
+            """,
+            (
+                row["canonical_source_language"],
+                correct_answer,
+                updated.last_reviewed_at.isoformat(),
+                updated.next_review_at.isoformat(),
+                updated.repetitions,
+                updated.lapses,
+                updated.consecutive_correct,
+            ),
+        )
+    return ConnectorRevisionAnswerResult(
+        correct=correct,
+        correct_answer=correct_answer,
+        category=revision_category(updated),
     )
 
 
