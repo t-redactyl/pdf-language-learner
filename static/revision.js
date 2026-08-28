@@ -2,7 +2,7 @@ import {
   renderClozeSentence,
   renderHighlightedSentence,
   sentenceContaining,
-} from "./text.js?v=3";
+} from "./text.js?v=4";
 import { languageName, t } from "./i18n.js?v=9";
 
 const $ = selector => document.querySelector(selector);

@@ -463,6 +463,7 @@ OPEN_THESAURUS_METADATA_MARKERS = (
     "verb",
     "vulg",
 )
+OPEN_THESAURUS_NON_LEXICAL_MARKERS = ("spruch", "slogan", "beispielsatz")
 MODEL_CALL_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="ollama-call",
@@ -2050,9 +2051,20 @@ def clean_open_thesaurus_term(raw_term: str) -> str:
     term = re.sub(r"^\(sich\)\s+", "sich ", raw_term.strip())
     while match := re.search(r"\s+\(([^()]*)\)$", term):
         note = match.group(1).casefold()
+        if any(marker in note for marker in OPEN_THESAURUS_NON_LEXICAL_MARKERS):
+            return ""
         if not any(marker in note for marker in OPEN_THESAURUS_METADATA_MARKERS):
             break
         term = term[:match.start()].rstrip()
+    # OpenThesaurus groups occasionally include example sentences alongside
+    # lexical alternatives. They express a related idea but cannot substitute
+    # for the selected word, so they must not enter the synonym candidate pool.
+    if re.search(r"[.!?…][”’\"')\]]*$", term):
+        # Periods are part of valid dictionary abbreviations such as ``bspw.``
+        # and ``z. B.``; retain those while excluding punctuated prose.
+        abbreviation = re.fullmatch(r"(?:[^\W\d_]{1,5}\.\s*)+", term)
+        if abbreviation is None:
+            return ""
     return term
 
 

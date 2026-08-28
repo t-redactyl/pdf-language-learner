@@ -1,5 +1,5 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
-import { sentenceContext } from "./text.js?v=3";
+import { sentenceContext } from "./text.js?v=4";
 import { initI18n, languageName, t } from "./i18n.js?v=9";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
@@ -470,6 +470,8 @@ function selectionContext(range, selectedText) {
   const end = spans.indexOf(endElement.closest("span"));
   if (start < 0 || end < 0) return { context: "", contextOffset: null };
   const selectedStart = Math.min(start, end);
+  const selectedEnd = Math.max(start, end);
+  const contextSpans = pdfContextSpans(spans, selectedStart, selectedEnd);
   const spanText = span => textItemForSpan.get(span)?.str || span.textContent;
   const offsetWithinSpan = range.startContainer.nodeType === Node.TEXT_NODE
     ? range.startOffset
@@ -477,18 +479,52 @@ function selectionContext(range, selectedText) {
   let context = "";
   let approximateOffset = 0;
   let previousRect = null;
-  spans.forEach((span, index) => {
+  contextSpans.forEach(({ span, index }) => {
     const rect = span.getBoundingClientRect();
     const value = spanText(span);
     context = appendPdfText(context, value, rect, previousRect);
     if (index === selectedStart) approximateOffset = context.length - value.length + offsetWithinSpan;
     previousRect = rect;
   });
-  const sentence = sentenceContext(context, selectedText, approximateOffset);
+  const sentence = sentenceContext(context, selectedText, approximateOffset, true);
   return {
     context: sentence.text.slice(0, 2000),
     contextOffset: sentence.offset,
   };
+}
+
+// A PDF content stream does not necessarily follow the visual reading order.
+// Magazine sidebars and glossaries are commonly interleaved with the article's
+// text items, producing one enormous "sentence" with unrelated fragments. Use
+// the typography of the selected run to keep the context in the same text flow;
+// sentence segmentation can then operate on coherent input.
+function pdfContextSpans(spans, selectedStart, selectedEnd) {
+  const selectedStyles = new Map();
+  for (let index = selectedStart; index <= selectedEnd; index += 1) {
+    const item = textItemForSpan.get(spans[index]);
+    if (!item?.fontName) continue;
+    const height = pdfTextItemHeight(item, spans[index]);
+    const heights = selectedStyles.get(item.fontName) || [];
+    heights.push(height);
+    selectedStyles.set(item.fontName, heights);
+  }
+  if (!selectedStyles.size) return spans.map((span, index) => ({ span, index }));
+
+  return spans.flatMap((span, index) => {
+    const item = textItemForSpan.get(span);
+    const selectedHeights = selectedStyles.get(item?.fontName);
+    if (!selectedHeights) return [];
+    const height = pdfTextItemHeight(item, span);
+    const sameTextSize = selectedHeights.some(selectedHeight =>
+      selectedHeight > 0 && Math.abs(height - selectedHeight) / selectedHeight <= 0.15
+    );
+    return sameTextSize ? [{ span, index }] : [];
+  });
+}
+
+function pdfTextItemHeight(item, span) {
+  const transformHeight = Math.hypot(item?.transform?.[2] || 0, item?.transform?.[3] || 0);
+  return transformHeight || span.getBoundingClientRect().height;
 }
 
 function selectionGeometry(range, drag) {

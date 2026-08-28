@@ -2,7 +2,12 @@ export function sentenceContaining(text, needle, approximateOffset = null) {
   return sentenceContext(text, needle, approximateOffset).text;
 }
 
-export function sentenceContext(text, needle, approximateOffset = null) {
+export function sentenceContext(
+  text,
+  needle,
+  approximateOffset = null,
+  requireComplete = false,
+) {
   const cleanText = String(text || "").replace(/\s+/g, " ").trim();
   if (!cleanText) return { text: "", offset: null };
 
@@ -17,11 +22,28 @@ export function sentenceContext(text, needle, approximateOffset = null) {
     offset >= segment.index && offset < segment.index + segment.text.length
   );
   if (!segment) return { text: cleanText, offset };
+  if (requireComplete && !isCompleteSentence(segment)) {
+    return { text: "", offset: null };
+  }
   const leadingWhitespace = segment.text.length - segment.text.trimStart().length;
   return {
     text: segment.text.trim(),
     offset: Math.max(0, offset - segment.index - leadingWhitespace),
   };
+}
+
+function isCompleteSentence(segment) {
+  const text = segment.text.trim();
+  if (!/[.!?…][”’"')\]]*$/u.test(text)) return false;
+
+  // A first segment that starts in lower case is usually a continuation from
+  // the preceding PDF page. Upper-case, numeric, and caseless-script starts are
+  // retained because a sentence may legitimately begin at the top of a page.
+  if (segment.index === 0) {
+    const openingRemoved = text.replace(/^[¿¡“‘"'([\s]+/u, "");
+    if (/^\p{Ll}/u.test(openingRemoved)) return false;
+  }
+  return true;
 }
 
 export function renderHighlightedSentence(element, text, needles, prefix = "") {

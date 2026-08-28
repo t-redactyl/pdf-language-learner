@@ -96,8 +96,8 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-connector-hint"' in response.text
     assert 'id="revision-exercise-selector"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/revision.js?v=15' in response.text
-    assert '/static/app.js?v=25' in response.text
+    assert '/static/revision.js?v=16' in response.text
+    assert '/static/app.js?v=27' in response.text
 
 
 def test_frontend_entry_points_share_current_dependency_versions() -> None:
@@ -105,8 +105,8 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     revision_script = client.get("/static/revision.js").text
     text_script = client.get("/static/text.js").text
 
-    assert './text.js?v=3' in app_script
-    assert './text.js?v=3' in revision_script
+    assert './text.js?v=4' in app_script
+    assert './text.js?v=4' in revision_script
     assert './i18n.js?v=9' in app_script
     assert './i18n.js?v=9' in revision_script
     assert "export function renderClozeSentence" in text_script
@@ -1665,6 +1665,21 @@ def test_open_thesaurus_parser_indexes_terms_and_removes_usage_labels() -> None:
     assert index["schnell"] == (("schnell", "rasch", "flink"),)
     assert index["flink"] == (("schnell", "rasch", "flink"),)
     assert index["sich sputen"] == (("sich beeilen", "sich sputen"),)
+
+
+def test_open_thesaurus_parser_rejects_sentences_and_sayings() -> None:
+    index = parse_open_thesaurus(
+        "vorbei;Die Zeiten sind vorbei. (ugs., Spruch);vorüber\n"
+        "irrelevant;Deine Sorgen möchte ich haben! (ugs.);belanglos\n"
+        "egoistisch;Unterm Strich komm ich. (Slogan);selbstsüchtig\n"
+        "beispielsweise;bspw.;z. B.\n"
+    )
+
+    assert index["vorbei"] == (("vorbei", "vorüber"),)
+    assert index["irrelevant"] == (("irrelevant", "belanglos"),)
+    assert index["egoistisch"] == (("egoistisch", "selbstsüchtig"),)
+    assert index["beispielsweise"] == (("beispielsweise", "bspw.", "z. B."),)
+    assert "die zeiten sind vorbei." not in index
 
 
 def test_german_dictionary_candidates_merge_odenet_and_open_thesaurus(
