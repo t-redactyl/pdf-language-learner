@@ -1,3 +1,4 @@
+import io
 import logging
 import os
 import random
@@ -7,6 +8,7 @@ import threading
 import time
 import unicodedata
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
@@ -15,6 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
+import httpx
 import simplemma
 import stanza
 import wn
@@ -45,6 +48,16 @@ ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 DATABASE_PATH = Path(
     os.getenv("MARGIN_DATABASE_PATH", ROOT / "data" / "margin.db")
+)
+OPEN_THESAURUS_PATH = Path(
+    os.getenv(
+        "MARGIN_OPEN_THESAURUS_PATH",
+        ROOT / "data" / "openthesaurus.txt",
+    )
+)
+OPEN_THESAURUS_EXPORT_URL = os.getenv(
+    "MARGIN_OPEN_THESAURUS_URL",
+    "https://www.openthesaurus.de/export/OpenThesaurus-Textversion.zip",
 )
 
 LEMMATIZER_LANGUAGES = {
@@ -86,6 +99,7 @@ LOCAL_NOUN_GRAMMAR_CACHE: dict[tuple[str, str], "SourceNounGrammar | None"] = {}
 LOCAL_NOUN_GRAMMAR_CACHE_LOCK = threading.Lock()
 RUNTIME_CACHE_SIZE = 512
 MAX_SYNONYMS = 2
+MAX_SYNONYM_CANDIDATES = 32
 MIN_SYNONYM_ZIPF = 2.5
 MAX_SYNONYM_ZIPF_DROP = 2.0
 WORD_FREQUENCY_LANGUAGES = {
@@ -99,6 +113,37 @@ SYNONYM_POS_COMPATIBILITY = {
     "ADJ": {"ADJ"},
     "ADV": {"ADV"},
 }
+OPEN_THESAURUS_METADATA_MARKERS = (
+    "abwert",
+    "adjektiv",
+    "adverb",
+    "altertüm",
+    "bildungsspr",
+    "derb",
+    "fachspr",
+    "geh.",
+    "hauptform",
+    "iron",
+    "kindersprache",
+    "literar",
+    "norddt",
+    "österr",
+    "regional",
+    "religiös",
+    "salopp",
+    "scherz",
+    "schweiz",
+    "selten",
+    "subst",
+    "süddt",
+    "technisch",
+    "ugs.",
+    "umgangssprach",
+    "variabel",
+    "veraltet",
+    "verb",
+    "vulg",
+)
 MODEL_CALL_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="ollama-call",
@@ -116,6 +161,8 @@ wn.config.allow_multithreading = True
 WORDNETS: dict[str, wn.Wordnet] = {}
 WORDNET_LOCK = threading.RLock()
 WORDNET_PREPARING: set[str] = set()
+OPEN_THESAURUS_LOCK = threading.Lock()
+OPEN_THESAURUS_INDEX: dict[str, tuple[tuple[str, ...], ...]] | None = None
 
 
 @lru_cache(maxsize=1)
@@ -1608,11 +1655,105 @@ def synonym_ranking_messages(
                 f"Source lemma: {source}\n"
                 f"Part of speech (Universal POS): {part_of_speech}\n"
                 f"Surrounding context: {context or '(not available)'}\n"
-                f"Allowed WordNet candidates: {', '.join(candidates)}\n"
+                f"Allowed dictionary candidates: {', '.join(candidates)}\n"
                 "Return only suitable items from the allowed candidate list."
             ),
         },
     ]
+
+
+def clean_open_thesaurus_term(raw_term: str) -> str:
+    term = re.sub(r"^\(sich\)\s+", "sich ", raw_term.strip())
+    while match := re.search(r"\s+\(([^()]*)\)$", term):
+        note = match.group(1).casefold()
+        if not any(marker in note for marker in OPEN_THESAURUS_METADATA_MARKERS):
+            break
+        term = term[:match.start()].rstrip()
+    return term
+
+
+def parse_open_thesaurus(
+    text: str,
+) -> dict[str, tuple[tuple[str, ...], ...]]:
+    index: dict[str, list[tuple[str, ...]]] = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        terms = tuple(dict.fromkeys(
+            cleaned
+            for raw_term in line.split(";")
+            if (cleaned := clean_open_thesaurus_term(raw_term))
+        ))
+        if len(terms) < 2:
+            continue
+        for term in terms:
+            index.setdefault(canonicalize(term), []).append(terms)
+    return {key: tuple(groups) for key, groups in index.items()}
+
+
+def download_open_thesaurus() -> str:
+    response = httpx.get(
+        OPEN_THESAURUS_EXPORT_URL,
+        follow_redirects=True,
+        timeout=30,
+    )
+    response.raise_for_status()
+    if len(response.content) > 10_000_000:
+        raise ValueError("OpenThesaurus archive is unexpectedly large")
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        info = archive.getinfo("openthesaurus.txt")
+        if info.file_size > 10_000_000:
+            raise ValueError("OpenThesaurus text export is unexpectedly large")
+        text = archive.read(info).decode("utf-8")
+    OPEN_THESAURUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = OPEN_THESAURUS_PATH.with_suffix(".tmp")
+    try:
+        temporary_path.write_text(text, encoding="utf-8")
+        temporary_path.replace(OPEN_THESAURUS_PATH)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return text
+
+
+def open_thesaurus_index() -> dict[str, tuple[tuple[str, ...], ...]]:
+    global OPEN_THESAURUS_INDEX
+    with OPEN_THESAURUS_LOCK:
+        if OPEN_THESAURUS_INDEX is not None:
+            return OPEN_THESAURUS_INDEX
+        try:
+            text = (
+                OPEN_THESAURUS_PATH.read_text(encoding="utf-8")
+                if OPEN_THESAURUS_PATH.exists()
+                else download_open_thesaurus()
+            )
+            OPEN_THESAURUS_INDEX = parse_open_thesaurus(text)
+        except Exception:
+            # Avoid making every lookup repeat a slow failed download.
+            OPEN_THESAURUS_INDEX = {}
+            raise
+        return OPEN_THESAURUS_INDEX
+
+
+@lru_cache(maxsize=RUNTIME_CACHE_SIZE)
+def open_thesaurus_synonym_candidates(lemma: str) -> SynonymCandidateSet:
+    groups = open_thesaurus_index().get(canonicalize(lemma), ())
+    excluded = canonicalize(lemma)
+    candidates: dict[str, str] = {}
+    sense_count = 0
+    for group in groups:
+        has_alternative = False
+        for candidate in group:
+            key = canonicalize(candidate)
+            if key and key != excluded:
+                has_alternative = True
+                candidates.setdefault(key, candidate)
+        if has_alternative:
+            sense_count += 1
+    return SynonymCandidateSet(
+        values=tuple(candidates.values()),
+        sense_count=sense_count,
+        used_pos_fallback=bool(candidates),
+    )
 
 
 def wordnet_for_language(source_language: str) -> wn.Wordnet:
@@ -1644,9 +1785,15 @@ def _prepare_wordnet_language(source_language: str) -> None:
             source_language,
             exc,
         )
-    finally:
-        with WORDNET_LOCK:
-            WORDNET_PREPARING.discard(language)
+    if language == "german":
+        try:
+            open_thesaurus_index()
+        except Exception as exc:
+            logger.warning(
+                "Background OpenThesaurus preparation failed: %s", exc
+            )
+    with WORDNET_LOCK:
+        WORDNET_PREPARING.discard(language)
 
 
 def start_wordnet_preparation(source_language: str) -> None:
@@ -1724,6 +1871,40 @@ def wordnet_synonym_candidates(
     return SynonymCandidateSet(tuple(candidates.values()), sense_count)
 
 
+def dictionary_synonym_candidates(
+    lemma: str,
+    source_language: str,
+    part_of_speech: str,
+) -> SynonymCandidateSet:
+    wordnet_candidates = wordnet_synonym_candidates(
+        lemma, source_language, part_of_speech
+    )
+    if source_language.casefold() != "german":
+        return wordnet_candidates
+    try:
+        open_thesaurus_candidates = open_thesaurus_synonym_candidates(lemma)
+    except Exception as exc:
+        logger.warning("OpenThesaurus lookup failed; using OdeNet only: %s", exc)
+        return wordnet_candidates
+    merged: dict[str, str] = {}
+    for candidate in (
+        *wordnet_candidates.values,
+        *open_thesaurus_candidates.values,
+    ):
+        merged.setdefault(canonicalize(candidate), candidate)
+    return SynonymCandidateSet(
+        values=tuple(merged.values()),
+        sense_count=(
+            wordnet_candidates.sense_count
+            + open_thesaurus_candidates.sense_count
+        ),
+        used_pos_fallback=(
+            wordnet_candidates.used_pos_fallback
+            or open_thesaurus_candidates.used_pos_fallback
+        ),
+    )
+
+
 def canonicalize(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
@@ -1743,13 +1924,13 @@ def frequency_ranked_synonym_candidates(
     ]
     if not any(score > 0 for _, score in scored):
         # Preserve WordNet's result if wordfreq has no evidence either way.
-        return candidates
+        return candidates[:MAX_SYNONYM_CANDIDATES]
     source_score = zipf_frequency(source, language_code)
     threshold = max(
         MIN_SYNONYM_ZIPF,
         source_score - MAX_SYNONYM_ZIPF_DROP,
     )
-    return tuple(
+    filtered = tuple(
         candidate
         for candidate, score in sorted(
             scored,
@@ -1758,6 +1939,7 @@ def frequency_ranked_synonym_candidates(
         )
         if score >= threshold
     )
+    return filtered[:MAX_SYNONYM_CANDIDATES]
 
 
 @lru_cache(maxsize=RUNTIME_CACHE_SIZE)
@@ -2489,7 +2671,7 @@ def contextual_synonyms(
     source_language: str,
     context: str,
 ) -> list[SynonymValue]:
-    candidate_set = wordnet_synonym_candidates(
+    candidate_set = dictionary_synonym_candidates(
         analysis.lemma, source_language, analysis.pos
     )
     candidates = frequency_ranked_synonym_candidates(

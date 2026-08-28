@@ -21,16 +21,20 @@ word is tagged inside its sentence before it is sent to the local translation
 model.
 
 Single-word lookups show the normalized word, its translation, and up to two
-context-aware synonyms together. Synonyms are available for German and Spanish
-words. Margin obtains
-same-part-of-speech candidates from Open-de-WordNet or Open Multilingual
-WordNet, then asks Ollama to keep and rank only candidates matching the selected
-word's meaning in its sentence. Candidates are first ordered using local
+context-aware synonyms together. Spanish candidates come from Open Multilingual
+WordNet. German candidates combine Open-de-WordNet with the richer
+[OpenThesaurus](https://www.openthesaurus.de/) export, which is downloaded once
+to `data/openthesaurus.txt` and reused locally. OpenThesaurus data is used under
+the LGPL 2.1 option offered by its publisher. Margin asks Ollama to keep and rank
+only candidates matching the selected word's meaning in its sentence.
+Candidates are first ordered using local
 `wordfreq` corpus data; words below Zipf 2.5 or roughly 100 times less frequent
 than the source word are discarded. When WordNet has to fall back from a strict
 part-of-speech query, a batched local Stanza check rejects grammatically
 incompatible candidates. Once the document language is known, Margin prepares
-the relevant WordNet lexicon in the background and reuses it locally.
+the relevant dictionaries in the background and reuses them locally. Set
+`MARGIN_OPEN_THESAURUS_PATH` to store the German export elsewhere; if it cannot
+be downloaded, German lookups continue with OdeNet.
 Single-sense lookups bypass Ollama, while ambiguous candidate sets are cached
 after contextual ranking. Synonym ranking runs alongside translation so the
 combined result does not add unnecessary sequential model latency.

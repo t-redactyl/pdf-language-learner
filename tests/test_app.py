@@ -23,10 +23,13 @@ from pdf_language_learner.app import (
     cached_ranked_synonyms,
     cached_source_noun_grammar,
     cached_verb_lemma_decision,
+    dictionary_synonym_candidates,
     frequency_ranked_synonym_candidates,
     multi_word_term_in_context,
     ollama_client,
     ollama_keep_alive,
+    open_thesaurus_synonym_candidates,
+    parse_open_thesaurus,
     part_of_speech_filtered_synonym_candidates,
     stanza_pipeline,
     warm_translation_model,
@@ -37,7 +40,7 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def clear_runtime_caches():
+def clear_runtime_caches(monkeypatch):
     # Tests replace model and NLP dependencies with purpose-built fakes. Ensure
     # cached results and clients cannot leak from one test into the next.
     for cached_function in (
@@ -48,10 +51,12 @@ def clear_runtime_caches():
         cached_model_translation,
         cached_ranked_synonyms,
         frequency_ranked_synonym_candidates,
+        open_thesaurus_synonym_candidates,
         part_of_speech_filtered_synonym_candidates,
         wordnet_synonym_candidates,
     ):
         cached_function.cache_clear()
+    monkeypatch.setattr("pdf_language_learner.app.OPEN_THESAURUS_INDEX", {})
     LOCAL_NOUN_GRAMMAR_CACHE.clear()
     yield
     for cached_function in (
@@ -62,6 +67,7 @@ def clear_runtime_caches():
         cached_model_translation,
         cached_ranked_synonyms,
         frequency_ranked_synonym_candidates,
+        open_thesaurus_synonym_candidates,
         part_of_speech_filtered_synonym_candidates,
         wordnet_synonym_candidates,
     ):
@@ -1633,6 +1639,67 @@ def test_wordnet_candidates_recover_from_an_overly_strict_pos(monkeypatch) -> No
     )
 
 
+def test_open_thesaurus_parser_indexes_terms_and_removes_usage_labels() -> None:
+    index = parse_open_thesaurus(
+        "# OpenThesaurus export\n"
+        "schnell (Adverb);rasch;flink (ugs.)\n"
+        "sich beeilen;(sich) sputen (geh.)\n"
+    )
+
+    assert index["schnell"] == (("schnell", "rasch", "flink"),)
+    assert index["flink"] == (("schnell", "rasch", "flink"),)
+    assert index["sich sputen"] == (("sich beeilen", "sich sputen"),)
+
+
+def test_german_dictionary_candidates_merge_odenet_and_open_thesaurus(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "pdf_language_learner.app.wordnet_synonym_candidates",
+        lambda *args: SynonymCandidateSet(
+            values=("rasch", "flink"), sense_count=1
+        ),
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.open_thesaurus_synonym_candidates",
+        lambda lemma: SynonymCandidateSet(
+            values=("flink", "zügig", "rapid"),
+            sense_count=2,
+            used_pos_fallback=True,
+        ),
+    )
+
+    assert dictionary_synonym_candidates(
+        "schnell", "German", "ADJ"
+    ) == SynonymCandidateSet(
+        values=("rasch", "flink", "zügig", "rapid"),
+        sense_count=3,
+        used_pos_fallback=True,
+    )
+
+
+def test_german_dictionary_candidates_fall_back_to_odenet(monkeypatch) -> None:
+    wordnet_candidates = SynonymCandidateSet(
+        values=("rasch",), sense_count=1
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.wordnet_synonym_candidates",
+        lambda *args: wordnet_candidates,
+    )
+
+    def unavailable_open_thesaurus(lemma):
+        raise OSError("offline")
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.open_thesaurus_synonym_candidates",
+        unavailable_open_thesaurus,
+    )
+
+    assert dictionary_synonym_candidates(
+        "schnell", "German", "ADJ"
+    ) is wordnet_candidates
+
+
 def test_synonym_candidates_are_frequency_sorted_and_rare_words_removed(
     monkeypatch,
 ) -> None:
@@ -1702,7 +1769,7 @@ def test_synonym_candidates_reject_an_incompatible_part_of_speech(
     ]
 
 
-def test_synonyms_are_ranked_by_context_and_restricted_to_wordnet(
+def test_synonyms_are_ranked_by_context_and_restricted_to_dictionaries(
     monkeypatch,
 ) -> None:
     class FakeClient:
