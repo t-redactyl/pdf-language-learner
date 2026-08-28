@@ -1,3 +1,13 @@
+---
+title: Margin — PDF Language Learner
+emoji: 📖
+colorFrom: yellow
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Margin — PDF Language Learner
 
 A local-first language reader that lets you select text, detect its language, and translate it. It supports browser-local PDFs and public web pages that contain an article or transcript, optionally with audio.
@@ -10,6 +20,34 @@ uv run python main.py
 ```
 
 Open <http://127.0.0.1:8000>, choose a text-based PDF or paste a public article URL, select text, choose a target language, and translate. Starred vocabulary is saved to `data/margin.db` by default and remains available across documents and browser sessions. Set `MARGIN_DATABASE_PATH` to use a different SQLite file.
+
+## Deploy on Hugging Face Spaces
+
+Create a private Docker Space and push this repository to it. Start with CPU
+Basic hardware; Ollama will use a supported GPU automatically if the Space is
+upgraded later.
+
+The container includes `translategemma:4b` and serves the app on the port that
+Hugging Face expects. Its changeable files use `/data` by default:
+
+- `/data/margin.db` stores saved vocabulary and revision history.
+- `/data/stanza` stores downloaded language-analysis models.
+- `/data/openthesaurus.txt` stores the downloaded German thesaurus.
+
+To retain these files across restarts, create a private Hugging Face Storage
+Bucket and attach it to the Space as a read-write volume mounted at `/data`.
+Without that volume, the app still runs, but these files can disappear whenever
+the Space stops or restarts.
+
+The defaults can be changed in the Space's **Settings → Variables** page:
+
+| Variable                       | Default                    | Purpose                                      |
+|--------------------------------|----------------------------|----------------------------------------------|
+| `OLLAMA_MODEL`                 | `translategemma:4b`        | Ollama model used for translation            |
+| `OLLAMA_KEEP_ALIVE`            | `-1`                       | Keep the model loaded while the Space runs   |
+| `MARGIN_DATABASE_PATH`         | `/data/margin.db`          | Vocabulary database location                 |
+| `MARGIN_OPEN_THESAURUS_PATH`   | `/data/openthesaurus.txt`  | German thesaurus location                    |
+| `STANZA_RESOURCES_DIR`         | `/data/stanza`             | Stanza model directory                       |
 
 URL imports are downloaded by the local FastAPI server and reduced to plain transcript paragraphs plus a direct audio URL when the publisher exposes one. Dynamic sites are supported through embedded transcript data (including DW lesson manuscripts), and linked transcript PDFs such as Deutsch-to-go's “Text (PDF)” attachments are detected and extracted automatically. Some publishers keep audio behind their own JavaScript player; in that case Margin links to the original player while still making the extracted article text selectable.
 
