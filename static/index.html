@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20">
+  <link rel="stylesheet" href="/static/styles.css?v=21">
 </head>
 <body>
   <header class="topbar">
@@ -57,7 +57,7 @@
               <strong id="revision-dictionary-value"></strong>
             </div>
             <h3 id="revision-prompt"></h3>
-            <div class="revision-card-actions">
+            <div id="revision-card-actions" class="revision-card-actions">
               <button id="revision-remove" class="text-button" type="button" data-i18n="revision.remove">Remove from revision</button>
               <p id="revision-action-error" role="alert"></p>
             </div>
@@ -78,6 +78,21 @@
                 <button id="revision-tile-check" class="primary-button" type="submit" data-i18n="revision.check" disabled>Check answer</button>
               </div>
             </form>
+            <section id="revision-matching" class="revision-matching" aria-labelledby="revision-matching-title" hidden>
+              <h3 id="revision-matching-title" data-i18n="revision.matchSynonyms">Match the synonyms</h3>
+              <p class="revision-matching-instructions" data-i18n="revision.matchSynonymsInstructions">Select a dictionary form, then select its synonym.</p>
+              <div class="revision-matching-columns">
+                <div>
+                  <p class="revision-matching-label" data-i18n="revision.dictionaryForms">Dictionary forms</p>
+                  <div id="revision-matching-sources" class="revision-matching-options"></div>
+                </div>
+                <div>
+                  <p class="revision-matching-label" data-i18n="revision.synonyms">Synonyms</p>
+                  <div id="revision-matching-synonyms" class="revision-matching-options"></div>
+                </div>
+              </div>
+              <p id="revision-matching-status" class="revision-matching-status" role="status"></p>
+            </section>
             <div id="revision-feedback" class="revision-feedback" aria-live="polite" hidden>
               <p id="revision-feedback-title"></p>
               <p id="revision-context" class="revision-context"></p>
@@ -178,7 +193,7 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="/static/revision.js?v=12"></script>
-  <script type="module" src="/static/app.js?v=22"></script>
+  <script type="module" src="/static/revision.js?v=13"></script>
+  <script type="module" src="/static/app.js?v=23"></script>
 </body>
 </html>

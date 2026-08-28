@@ -3,7 +3,7 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=3";
-import { languageName, t } from "./i18n.js?v=6";
+import { languageName, t } from "./i18n.js?v=7";
 
 const $ = selector => document.querySelector(selector);
 
@@ -17,6 +17,13 @@ let answered = 0;
 let correctAnswers = 0;
 let removed = 0;
 let documentLanguage = "";
+let synonymPairsAnswered = 0;
+let synonymPairsFirstTry = 0;
+let matchingPairs = new Map();
+let matchedPairIds = new Set();
+let missedPairIds = new Set();
+let selectedMatchingSource = null;
+let selectedMatchingSynonym = null;
 let tilePattern = [];
 let tileOptions = [];
 let selectedTileIds = [];
@@ -81,7 +88,11 @@ document.addEventListener("keydown", event => {
 });
 document.addEventListener("margin:locale-changed", () => {
   localizeRevisionLanguageOptions();
-  if (currentCard) renderCardDirection();
+  if (currentCard?.exercise === "synonym_matching") {
+    renderMatchingDirection();
+  } else if (currentCard) {
+    renderCardDirection();
+  }
   const prompt = $("#revision-prompt");
   const gender = [...NOUN_GENDERS].find(value => prompt?.classList.contains(`noun-${value}`));
   if (gender) setNounGender(prompt, gender);
@@ -125,6 +136,8 @@ async function loadRevisionSession() {
   answered = 0;
   correctAnswers = 0;
   removed = 0;
+  synonymPairsAnswered = 0;
+  synonymPairsFirstTry = 0;
 
   const language = $("#revision-language").value;
   if (!language) {
@@ -145,6 +158,7 @@ async function loadRevisionSession() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || t("revision.loadError"));
     queue = data.cards.map(card => ({ ...card, retryCount: 0 }));
+    if (data.synonym_round) queue.push(data.synonym_round);
     loading.hidden = true;
     if (!queue.length) {
       showEmptySession();
@@ -178,17 +192,27 @@ function showEmptySession(finished = false) {
     $("#revision-empty-copy").textContent = t("revision.caughtUp");
     return;
   }
-  const answerSummary = answered
-    ? t("revision.answers", { correct: correctAnswers, answered })
-    : t("revision.noAnswers");
+  const summaries = [];
+  if (answered) {
+    summaries.push(t("revision.answers", { correct: correctAnswers, answered }));
+  }
+  if (synonymPairsAnswered) {
+    summaries.push(t("revision.synonymRoundComplete", {
+      correct: synonymPairsFirstTry,
+      total: synonymPairsAnswered,
+    }));
+  }
+  if (!summaries.length) summaries.push(t("revision.noAnswers"));
   const removalSummary = removed
     ? t(`revision.removal.${removed === 1 ? "one" : "other"}`, { count: removed })
     : "";
-  $("#revision-empty-copy").textContent = answerSummary + removalSummary;
+  if (removalSummary) summaries.push(removalSummary.trim());
+  $("#revision-empty-copy").textContent = summaries.join(" ");
 }
 
 function renderNextCard() {
   $("#revision-feedback").hidden = true;
+  $("#revision-matching").hidden = true;
   if (!queue.length) {
     currentCard = null;
     showEmptySession(true);
@@ -196,6 +220,11 @@ function renderNextCard() {
   }
 
   currentCard = queue.shift();
+  if (currentCard.exercise === "synonym_matching") {
+    renderSynonymMatchingRound();
+    return;
+  }
+  $("#revision-card-actions").hidden = false;
   const sourceFirst = currentCard.direction === "source_to_translation";
   const category = t(`revision.category.${currentCard.category}`);
   const promptGender = sourceFirst
@@ -279,6 +308,138 @@ function renderNextCard() {
     setupLetterTiles(currentCard.normalized_source);
   }
   if (currentCard.exercise === "typed_recall") recallAnswer.focus();
+}
+
+function renderSynonymMatchingRound() {
+  setNounGender(document.querySelector(".revision-card"), null, false);
+  renderMatchingDirection();
+  $("#revision-prompt-context").hidden = true;
+  $("#revision-dictionary-form").hidden = true;
+  $("#revision-prompt").hidden = true;
+  $("#revision-card-actions").hidden = true;
+  $("#revision-choices").hidden = true;
+  $("#revision-recall").hidden = true;
+  $("#revision-tiles").hidden = true;
+  $("#revision-matching").hidden = false;
+  $("#revision-matching-status").textContent = "";
+
+  matchingPairs = new Map(currentCard.pairs.map(pair => [pair.item_id, pair]));
+  matchedPairIds = new Set();
+  missedPairIds = new Set();
+  selectedMatchingSource = null;
+  selectedMatchingSynonym = null;
+
+  const sources = [...currentCard.pairs];
+  const synonyms = [...currentCard.pairs];
+  shuffle(sources);
+  shuffle(synonyms);
+  renderMatchingOptions("source", sources, $("#revision-matching-sources"));
+  renderMatchingOptions("synonym", synonyms, $("#revision-matching-synonyms"));
+  updateProgress();
+}
+
+function renderMatchingDirection() {
+  $("#revision-direction").textContent = [
+    languageName(currentCard.source_language),
+    t("revision.synonymMatching"),
+  ].join(" · ");
+}
+
+function renderMatchingOptions(side, pairs, container) {
+  container.replaceChildren();
+  pairs.forEach(pair => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "revision-matching-option";
+    button.dataset.pairId = pair.item_id;
+    button.dataset.side = side;
+    button.setAttribute("aria-pressed", "false");
+    button.textContent = side === "source" ? pair.normalized_source : pair.synonym;
+    setNounGender(
+      button,
+      side === "source" ? pair.noun_gender : pair.synonym_gender,
+    );
+    button.addEventListener("click", () => selectMatchingOption(button));
+    container.append(button);
+  });
+}
+
+function selectMatchingOption(button) {
+  const side = button.dataset.side;
+  const pairId = button.dataset.pairId;
+  const selectedId = side === "source"
+    ? selectedMatchingSource
+    : selectedMatchingSynonym;
+  document.querySelectorAll(`.revision-matching-option[data-side="${side}"]`)
+    .forEach(option => {
+      option.classList.remove("is-selected");
+      option.setAttribute("aria-pressed", "false");
+    });
+  const nextId = selectedId === pairId ? null : pairId;
+  if (side === "source") selectedMatchingSource = nextId;
+  else selectedMatchingSynonym = nextId;
+  if (nextId) {
+    button.classList.add("is-selected");
+    button.setAttribute("aria-pressed", "true");
+  }
+  if (selectedMatchingSource && selectedMatchingSynonym) checkMatchingPair();
+}
+
+function checkMatchingPair() {
+  const sourceId = selectedMatchingSource;
+  const synonymId = selectedMatchingSynonym;
+  const sourceButton = matchingButton("source", sourceId);
+  const synonymButton = matchingButton("synonym", synonymId);
+  sourceButton.classList.remove("is-selected");
+  synonymButton.classList.remove("is-selected");
+  sourceButton.setAttribute("aria-pressed", "false");
+  synonymButton.setAttribute("aria-pressed", "false");
+  selectedMatchingSource = null;
+  selectedMatchingSynonym = null;
+
+  if (sourceId === synonymId) {
+    matchedPairIds.add(sourceId);
+    synonymPairsAnswered += 1;
+    if (!missedPairIds.has(sourceId)) synonymPairsFirstTry += 1;
+    sourceButton.classList.add("is-matched");
+    synonymButton.classList.add("is-matched");
+    sourceButton.disabled = true;
+    synonymButton.disabled = true;
+    $("#revision-matching-status").textContent = t("revision.matchingCorrect");
+    updateProgress();
+    if (matchedPairIds.size === matchingPairs.size) finishSynonymMatchingRound();
+    return;
+  }
+
+  missedPairIds.add(sourceId);
+  sourceButton.classList.add("is-incorrect");
+  synonymButton.classList.add("is-incorrect");
+  $("#revision-matching-status").textContent = t("revision.matchingIncorrect");
+  setTimeout(() => {
+    sourceButton.classList.remove("is-incorrect");
+    synonymButton.classList.remove("is-incorrect");
+  }, 500);
+}
+
+function matchingButton(side, pairId) {
+  return [...document.querySelectorAll(
+    `.revision-matching-option[data-side="${side}"]`,
+  )].find(button => button.dataset.pairId === pairId);
+}
+
+function finishSynonymMatchingRound() {
+  const total = matchingPairs.size;
+  const roundFirstTry = [...matchingPairs.keys()]
+    .filter(pairId => !missedPairIds.has(pairId)).length;
+  $("#revision-feedback-title").textContent = t("revision.synonymRoundComplete", {
+    correct: roundFirstTry,
+    total,
+  });
+  $("#revision-context").hidden = true;
+  $("#revision-feedback-dictionary").hidden = true;
+  $("#revision-feedback").hidden = false;
+  currentCard = null;
+  updateProgress();
 }
 
 function setupLetterTiles(answer) {
@@ -516,11 +677,25 @@ async function submitAnswer(selectedAnswer) {
 }
 
 function updateProgress() {
+  if (currentCard?.exercise === "synonym_matching") {
+    $("#revision-progress-text").textContent = t("revision.matchingProgress", {
+      matched: matchedPairIds.size,
+      total: matchingPairs.size,
+    });
+    $("#revision-score").textContent = t("revision.synonymScore", {
+      count: synonymPairsFirstTry,
+    });
+    return;
+  }
   const remaining = queue.length + (currentCard ? 1 : 0);
   $("#revision-progress-text").textContent = t("revision.progress", { answered, remaining });
   const score = answered ? t("revision.score", { count: correctAnswers }) : "";
+  const synonymScore = synonymPairsAnswered
+    ? t("revision.synonymScore", { count: synonymPairsFirstTry })
+    : "";
   const removals = removed ? t("revision.removedCount", { count: removed }) : "";
-  $("#revision-score").textContent = [score, removals].filter(Boolean).join(" · ");
+  $("#revision-score").textContent = [score, synonymScore, removals]
+    .filter(Boolean).join(" · ");
 }
 
 function renderCardDirection(category = null) {

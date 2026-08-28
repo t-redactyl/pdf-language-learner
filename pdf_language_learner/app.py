@@ -890,9 +890,24 @@ class RevisionCard(BaseModel):
     noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
 
 
+class SynonymMatchingPair(BaseModel):
+    item_id: str
+    normalized_source: str
+    synonym: str
+    noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+    synonym_gender: Literal["masculine", "feminine", "neutral"] | None = None
+
+
+class SynonymMatchingRound(BaseModel):
+    exercise: Literal["synonym_matching"] = "synonym_matching"
+    source_language: str
+    pairs: list[SynonymMatchingPair] = Field(min_length=4, max_length=5)
+
+
 class RevisionSession(BaseModel):
     cards: list[RevisionCard]
     due_count: int
+    synonym_round: SynonymMatchingRound | None = None
 
 
 class RevisionAnswer(BaseModel):
@@ -2422,6 +2437,74 @@ def revision_card(
     )
 
 
+def synonym_matching_round(
+    connection: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+) -> SynonymMatchingRound | None:
+    groups: dict[str, list[tuple[sqlite3.Row, list[SynonymValue]]]] = {}
+    for row in rows:
+        synonyms = vocabulary_synonyms(connection, row["id"])
+        if synonyms:
+            groups.setdefault(canonicalize(row["source_language"]), []).append(
+                (row, synonyms)
+            )
+
+    generator = random.SystemRandom()
+    candidates_by_language = list(groups.values())
+    generator.shuffle(candidates_by_language)
+    for candidates in candidates_by_language:
+        if len(candidates) < 4:
+            continue
+        best: list[SynonymMatchingPair] = []
+        for _ in range(20):
+            shuffled_candidates = list(candidates)
+            generator.shuffle(shuffled_candidates)
+            selected_sources: set[str] = set()
+            selected_synonyms: set[str] = set()
+            pairs: list[SynonymMatchingPair] = []
+            for row, stored_synonyms in shuffled_candidates:
+                source_key = canonicalize(row["normalized_source"])
+                if source_key in selected_sources or source_key in selected_synonyms:
+                    continue
+                available = [
+                    synonym
+                    for synonym in stored_synonyms
+                    if canonicalize(synonym.text) not in {
+                        source_key,
+                        *selected_sources,
+                        *selected_synonyms,
+                    }
+                ]
+                if not available:
+                    continue
+                generator.shuffle(available)
+                synonym = available[0]
+                synonym_key = canonicalize(synonym.text)
+                selected_sources.add(source_key)
+                selected_synonyms.add(synonym_key)
+                pairs.append(
+                    SynonymMatchingPair(
+                        item_id=row["id"],
+                        normalized_source=row["normalized_source"],
+                        synonym=synonym.text,
+                        noun_gender=row["noun_gender"],
+                        synonym_gender=synonym.noun_gender,
+                    )
+                )
+                if len(pairs) == 5:
+                    break
+            if len(pairs) > len(best):
+                best = pairs
+            if len(best) == 5:
+                break
+        if len(best) >= 4:
+            return SynonymMatchingRound(
+                source_language=candidates[0][0]["source_language"],
+                pairs=best[:5],
+            )
+    return None
+
+
 app = FastAPI(title="PDF Language Learner", lifespan=application_lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
@@ -2610,6 +2693,7 @@ def revision_session(
                     f"SELECT * FROM {registered['table_name']}"
                 ).fetchall()
             ]
+        synonym_round = synonym_matching_round(connection, rows)
 
     due_count = sum(is_due(schedule_state(row), at=now) for row in rows)
     selected = select_session_rows(rows, now=now, limit=limit)
@@ -2623,6 +2707,7 @@ def revision_session(
             for row in selected
         ],
         due_count=due_count,
+        synonym_round=synonym_round,
     )
 
 

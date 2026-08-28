@@ -92,9 +92,10 @@ def test_home_serves_reader() -> None:
     assert 'id="interface-language"' in response.text
     assert 'id="toggle-reader-meta"' in response.text
     assert 'id="synonyms-result"' in response.text
+    assert 'id="revision-matching"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/revision.js?v=12' in response.text
-    assert '/static/app.js?v=22' in response.text
+    assert '/static/revision.js?v=13' in response.text
+    assert '/static/app.js?v=23' in response.text
 
 
 def test_frontend_entry_points_share_current_dependency_versions() -> None:
@@ -104,8 +105,8 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=3' in app_script
     assert './text.js?v=3' in revision_script
-    assert './i18n.js?v=6' in app_script
-    assert './i18n.js?v=6' in revision_script
+    assert './i18n.js?v=7' in app_script
+    assert './i18n.js?v=7' in revision_script
     assert "export function renderClozeSentence" in text_script
 
 
@@ -2202,6 +2203,7 @@ def test_deleted_vocabulary_is_removed_from_revision(vocabulary_database) -> Non
     assert client.get("/api/revision/session").json() == {
         "cards": [],
         "due_count": 0,
+        "synonym_round": None,
     }
 
 
@@ -2223,6 +2225,98 @@ def save_revision_vocabulary() -> list[dict]:
         ).json()["item"]
         for source, translation in words
     ]
+
+
+SYNONYM_REVISION_PAIRS = (
+    ("schnell", "rasch"),
+    ("klug", "schlau"),
+    ("beginnen", "starten"),
+    ("ruhig", "still"),
+    ("schwierig", "schwer"),
+    ("häufig", "oft"),
+)
+
+
+def save_synonym_revision_vocabulary(count: int) -> list[dict]:
+    return [
+        client.post(
+            "/api/vocabulary",
+            json=vocabulary_payload(
+                original_source=source,
+                normalized_source=source,
+                translation=f"translation of {source}",
+                noun_gender=None,
+                synonyms=[{"text": synonym}],
+            ),
+        ).json()["item"]
+        for source, synonym in SYNONYM_REVISION_PAIRS[:count]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("count", "expected_pair_count"),
+    [(3, None), (4, 4), (6, 5)],
+)
+def test_revision_session_builds_synonym_round_with_four_or_five_pairs(
+    vocabulary_database,
+    count: int,
+    expected_pair_count: int | None,
+) -> None:
+    saved = save_synonym_revision_vocabulary(count)
+
+    synonym_round = client.get(
+        "/api/revision/session",
+        params={"language": "German"},
+    ).json()["synonym_round"]
+
+    if expected_pair_count is None:
+        assert synonym_round is None
+        return
+    assert synonym_round["exercise"] == "synonym_matching"
+    assert synonym_round["source_language"] == "German"
+    assert len(synonym_round["pairs"]) == expected_pair_count
+    expected = {
+        item["id"]: (item["normalized_source"], item["synonyms"][0]["text"])
+        for item in saved
+    }
+    assert {
+        pair["item_id"]: (pair["normalized_source"], pair["synonym"])
+        for pair in synonym_round["pairs"]
+    }.items() <= expected.items()
+
+
+def test_synonym_round_avoids_cross_column_text_collisions(
+    vocabulary_database,
+) -> None:
+    pairs = (
+        ("alpha", "beta"),
+        ("beta", "alpha"),
+        ("gamma", "one"),
+        ("delta", "two"),
+        ("epsilon", "three"),
+    )
+    for source, synonym in pairs:
+        client.post(
+            "/api/vocabulary",
+            json=vocabulary_payload(
+                original_source=source,
+                normalized_source=source,
+                translation=source,
+                synonyms=[{"text": synonym}],
+            ),
+        )
+
+    synonym_round = client.get(
+        "/api/revision/session",
+        params={"language": "German"},
+    ).json()["synonym_round"]
+
+    assert synonym_round is not None
+    assert len(synonym_round["pairs"]) == 4
+    sources = {pair["normalized_source"].casefold() for pair in synonym_round["pairs"]}
+    synonyms = {pair["synonym"].casefold() for pair in synonym_round["pairs"]}
+    assert sources.isdisjoint(synonyms)
+    assert len(synonyms) == len(synonym_round["pairs"])
 
 
 def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:
