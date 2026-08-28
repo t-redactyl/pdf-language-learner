@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
-  <link rel="stylesheet" href="/static/styles.css?v=23">
+  <link rel="stylesheet" href="/static/styles.css?v=25">
 </head>
 <body>
   <header class="topbar">
@@ -32,10 +32,20 @@
           <div>
             <p class="eyebrow" data-i18n="revision.eyebrow">Spaced repetition</p>
             <h2 id="revision-title" data-i18n="revision.title">Vocabulary revision</h2>
-            <label class="revision-language-label" for="revision-language" data-i18n="revision.language">Language</label>
-            <select id="revision-language" aria-label="Vocabulary language" data-i18n-aria-label="revision.languageAria">
-              <option value="" data-i18n="revision.selectLanguage">Select language</option>
-            </select>
+            <div class="revision-filters">
+              <div class="revision-language-control">
+                <label class="revision-language-label" for="revision-language" data-i18n="revision.language">Language</label>
+                <select id="revision-language" aria-label="Vocabulary language" data-i18n-aria-label="revision.languageAria">
+                  <option value="" data-i18n="revision.selectLanguage">Select language</option>
+                </select>
+              </div>
+              <fieldset id="revision-exercise-selector" class="revision-exercise-selector">
+                <legend data-i18n="revision.exerciseTypes">Exercises</legend>
+                <label><input type="checkbox" value="vocabulary" checked><span data-i18n="revision.exerciseVocabulary">Vocabulary</span></label>
+                <label><input type="checkbox" value="connectors" checked><span data-i18n="revision.exerciseConnectors">Connectors</span></label>
+                <label><input type="checkbox" value="synonyms" checked><span data-i18n="revision.exerciseSynonyms">Synonyms</span></label>
+              </fieldset>
+            </div>
           </div>
           <button id="close-revision" class="text-button" type="button" data-i18n="revision.close">Close</button>
         </div>
@@ -197,7 +207,7 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="/static/revision.js?v=14"></script>
-  <script type="module" src="/static/app.js?v=24"></script>
+  <script type="module" src="/static/revision.js?v=15"></script>
+  <script type="module" src="/static/app.js?v=25"></script>
 </body>
 </html>

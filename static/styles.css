@@ -121,8 +121,15 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:28px; }
 .revision-heading .eyebrow { margin:0 0 6px; }
 .revision-heading h2 { margin:0; font:500 clamp(32px,5vw,48px)/1.1 Georgia,serif; letter-spacing:-.035em; }
-.revision-language-label { display:inline-block; margin:18px 8px 0 0; color:#777c74; font-size:12px; font-weight:700; }
-#revision-language { min-width:190px; padding:8px 10px; border:1px solid var(--line); background:white; }
+.revision-filters { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-top:18px; }
+.revision-language-control { display:flex; align-items:center; gap:8px; }
+.revision-language-label { color:#777c74; font-size:12px; font-weight:700; }
+#revision-language { min-width:190px; height:38px; padding:8px 10px; border:1px solid var(--line); background:white; }
+.revision-exercise-selector { display:flex; align-items:center; margin:0; padding:0; border:0; gap:7px; }
+.revision-exercise-selector legend { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.revision-exercise-selector label { display:inline-flex; align-items:center; gap:5px; padding:6px 9px; border:1px solid var(--line); border-radius:16px; background:var(--card); color:#676c64; cursor:pointer; font-size:12px; }
+.revision-exercise-selector label:has(input:checked) { border-color:var(--sage); background:#78907b14; color:var(--ink); }
+.revision-exercise-selector input { width:13px; height:13px; margin:0; accent-color:var(--sage); }
 .revision-message { padding:34px; border:1px solid var(--line); background:var(--card); text-align:center; }
 .revision-message h3 { margin:0 0 8px; font:500 27px/1.2 Georgia,serif; }
 .revision-message p { margin:0; color:#6a6e67; }
@@ -196,6 +203,6 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 [hidden] { display:none !important; }
 @media (max-width:1050px) { .reader { grid-template-columns:minmax(0,820px) minmax(200px,240px); gap:clamp(18px,2.5vw,26px); padding-inline:clamp(14px,2.5vw,26px); } .reader-meta { display:none; } .reader-meta-toggle { display:inline-flex; } .translation-panel { padding:clamp(18px,2.5vw,24px); } }
 @media (max-width:900px) { .topbar-url-form { display:none; } }
-@media (max-width:760px) { .topbar { padding:0 10px; } .reader { display:block; padding:0 12px; } .translation-panel { position:fixed; z-index:10; top:auto; bottom:0; left:50%; right:auto; width:100%; max-height:46vh; overflow:auto; transform:translateX(-50%); } .translation-panel #translation-content { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr)); gap:16px clamp(16px,2vw,28px); align-items:start; } .translation-panel .translation-original .form-label,.translation-panel .translation-controls > label:first-child { margin-top:0; } .translation-panel .result { margin-top:0; padding-top:0; border-top:0; } .pages { padding-bottom:300px; } .brand small { display:none; } .topbar-actions { gap:4px; } .language-switcher { padding:9px 24px 9px 8px; } .secondary-button,.file-button { padding:9px 9px; font-size:12px; } .revision-choices,.revision-matching-columns { grid-template-columns:1fr; } .revision-recall-controls { flex-direction:column; } .revision-shell { margin:24px auto; } .revision-card { padding:26px 20px; } .revision-prompt-context { font-size:17px; } .url-controls { flex-direction:column; } }
+@media (max-width:760px) { .topbar { padding:0 10px; } .reader { display:block; padding:0 12px; } .translation-panel { position:fixed; z-index:10; top:auto; bottom:0; left:50%; right:auto; width:100%; max-height:46vh; overflow:auto; transform:translateX(-50%); } .translation-panel #translation-content { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr)); gap:16px clamp(16px,2vw,28px); align-items:start; } .translation-panel .translation-original .form-label,.translation-panel .translation-controls > label:first-child { margin-top:0; } .translation-panel .result { margin-top:0; padding-top:0; border-top:0; } .pages { padding-bottom:300px; } .brand small { display:none; } .topbar-actions { gap:4px; } .language-switcher { padding:9px 24px 9px 8px; } .secondary-button,.file-button { padding:9px 9px; font-size:12px; } .revision-filters { align-items:flex-start; flex-direction:column; } .revision-exercise-selector { flex-wrap:wrap; } .revision-choices,.revision-matching-columns { grid-template-columns:1fr; } .revision-recall-controls { flex-direction:column; } .revision-shell { margin:24px auto; } .revision-card { padding:26px 20px; } .revision-prompt-context { font-size:17px; } .url-controls { flex-direction:column; } }
 @media (max-width:760px) { .translation-panel #translation-content { grid-template-columns:repeat(2,minmax(0,1fr)); } .translation-panel .translation-outcome { grid-column:1/-1; } }
 @media (max-width:480px) { .translation-panel #translation-content { grid-template-columns:minmax(0,1fr); } }

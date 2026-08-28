@@ -104,7 +104,7 @@ MAX_SYNONYM_CANDIDATES = 32
 MIN_SYNONYM_ZIPF = 2.5
 MAX_SYNONYM_ZIPF_DROP = 2.0
 CONNECTOR_REVISION_LIMIT = 8
-CONNECTOR_BACKFILL_VERSION = "connector-sentences-v1"
+CONNECTOR_BACKFILL_VERSION = "connector-sentences-v2"
 GERMAN_CONNECTORS = {
     "obwohl": {
         "categories": ("subordinating conjunction",),
@@ -265,6 +265,160 @@ GERMAN_CONNECTORS = {
     "dazwischen": {
         "categories": ("da-compound",),
         "glosses": ("between them", "in between"),
+    },
+}
+SPANISH_CONNECTORS = {
+    "aunque": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("although", "even though"),
+    },
+    "para que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("so that", "in order that"),
+    },
+    "mientras": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("while", "whereas"),
+    },
+    "mientras que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("whereas", "while"),
+    },
+    "siempre que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("provided that", "as long as"),
+    },
+    "a condición de que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("provided that", "on condition that"),
+    },
+    "a menos que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("unless",),
+    },
+    "en caso de que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("in case",),
+    },
+    "ya que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("since", "because"),
+    },
+    "puesto que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("since", "given that"),
+    },
+    "dado que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("given that", "since"),
+    },
+    "porque": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("because",),
+    },
+    "si": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("if",),
+    },
+    "antes de que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("before",),
+    },
+    "después de que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("after",),
+    },
+    "hasta que": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("until",),
+    },
+    "tan pronto como": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("as soon as",),
+    },
+    "en cuanto": {
+        "categories": ("subordinating conjunction",),
+        "glosses": ("as soon as", "regarding"),
+    },
+    "sin embargo": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("however", "nevertheless"),
+    },
+    "no obstante": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("nevertheless", "however"),
+    },
+    "aun así": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("even so", "nevertheless"),
+    },
+    "con todo": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("nevertheless", "all the same"),
+    },
+    "por eso": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("therefore", "that is why"),
+    },
+    "por lo tanto": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("therefore", "consequently"),
+    },
+    "por consiguiente": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("consequently", "therefore"),
+    },
+    "en consecuencia": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("consequently", "as a result"),
+    },
+    "así que": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("so", "therefore"),
+    },
+    "de ahí que": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("hence", "which is why"),
+    },
+    "además": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("furthermore", "besides"),
+    },
+    "asimismo": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("likewise", "furthermore"),
+    },
+    "en cambio": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("on the other hand", "instead"),
+    },
+    "por el contrario": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("on the contrary", "by contrast"),
+    },
+    "por un lado": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("on the one hand",),
+    },
+    "por otro lado": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("on the other hand",),
+    },
+    "es decir": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("that is", "in other words"),
+    },
+    "o sea": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("that is", "in other words"),
+    },
+    "de hecho": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("in fact",),
+    },
+    "por último": {
+        "categories": ("conjunctive adverb",),
+        "glosses": ("finally", "lastly"),
     },
 }
 WORD_FREQUENCY_LANGUAGES = {
@@ -2436,7 +2590,12 @@ def create_connector_tables(connection: sqlite3.Connection) -> None:
 
 
 def connector_catalogue(language: str) -> dict[str, dict[str, tuple[str, ...]]]:
-    return GERMAN_CONNECTORS if canonicalize(language) in {"german", "deutsch"} else {}
+    normalized_language = canonicalize(language)
+    if normalized_language in {"german", "deutsch"}:
+        return GERMAN_CONNECTORS
+    if normalized_language in {"spanish", "español", "espanol"}:
+        return SPANISH_CONNECTORS
+    return {}
 
 
 def connector_occurrences_in_sentence(

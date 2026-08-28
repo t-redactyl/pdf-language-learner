@@ -94,9 +94,10 @@ def test_home_serves_reader() -> None:
     assert 'id="synonyms-result"' in response.text
     assert 'id="revision-matching"' in response.text
     assert 'id="revision-connector-hint"' in response.text
+    assert 'id="revision-exercise-selector"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/revision.js?v=14' in response.text
-    assert '/static/app.js?v=24' in response.text
+    assert '/static/revision.js?v=15' in response.text
+    assert '/static/app.js?v=25' in response.text
 
 
 def test_frontend_entry_points_share_current_dependency_versions() -> None:
@@ -106,8 +107,8 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=3' in app_script
     assert './text.js?v=3' in revision_script
-    assert './i18n.js?v=8' in app_script
-    assert './i18n.js?v=8' in revision_script
+    assert './i18n.js?v=9' in app_script
+    assert './i18n.js?v=9' in revision_script
     assert "export function renderClozeSentence" in text_script
 
 
@@ -2282,6 +2283,45 @@ def test_connector_revision_card_uses_sentence_gloss_and_choices(
     assert "subordinating conjunction" in card["connector_categories"]
     assert "obwohl" in card["choices"]
     assert len(card["choices"]) == 4
+
+
+def test_spanish_connector_revision_uses_longest_phrase_and_english_glosses(
+    vocabulary_database,
+) -> None:
+    sentence = (
+        "Mientras que Ana trabaja, yo estudio; sin embargo, después descansamos."
+    )
+    client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(
+            original_source="trabaja",
+            normalized_source="trabajar",
+            translation="to work",
+            source_language="Spanish",
+            context=sentence,
+            noun_gender=None,
+        ),
+    )
+
+    session = client.get(
+        "/api/revision/session", params={"language": "Spanish"}
+    ).json()
+
+    assert session["connector_due_count"] == 2
+    assert len(session["connector_cards"]) == 2
+    cards = {card["connector"].casefold(): card for card in session["connector_cards"]}
+    assert set(cards) == {"mientras que", "sin embargo"}
+    assert cards["mientras que"]["glosses"] == ["whereas", "while"]
+    assert cards["sin embargo"]["glosses"] == ["however", "nevertheless"]
+    assert "mientras que" in cards["mientras que"]["choices"]
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        stored = {
+            row[0]
+            for row in connection.execute(
+                "SELECT connector_key FROM connector_occurrences"
+            )
+        }
+    assert stored == {"mientras que", "sin embargo"}
 
 
 def test_connector_answers_have_independent_review_state(

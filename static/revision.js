@@ -3,7 +3,7 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=3";
-import { languageName, t } from "./i18n.js?v=8";
+import { languageName, t } from "./i18n.js?v=9";
 
 const $ = selector => document.querySelector(selector);
 
@@ -11,6 +11,8 @@ const view = $("#revision-view");
 const loading = $("#revision-loading");
 const empty = $("#revision-empty");
 const session = $("#revision-session");
+const EXERCISE_PREFERENCE_KEY = "margin-revision-exercises";
+const DEFAULT_EXERCISES = ["vocabulary", "connectors", "synonyms"];
 let queue = [];
 let currentCard = null;
 let answered = 0;
@@ -72,6 +74,19 @@ $("#revision-tile-clear")?.addEventListener("click", () => {
   renderLetterTiles();
 });
 $("#revision-language")?.addEventListener("change", loadRevisionSession);
+$("#revision-exercise-selector")?.addEventListener("change", event => {
+  const selected = selectedRevisionExercises();
+  if (!selected.size) {
+    event.target.checked = true;
+    return;
+  }
+  try {
+    localStorage.setItem(EXERCISE_PREFERENCE_KEY, JSON.stringify([...selected]));
+  } catch {
+    // The selector still works for this session when storage is unavailable.
+  }
+  if (!view.hidden && $("#revision-language").value) loadRevisionSession();
+});
 document.addEventListener("margin:document-language", event => {
   const nextLanguage = event.detail?.language || "";
   if (normalize(nextLanguage) === normalize(documentLanguage)) return;
@@ -114,6 +129,28 @@ async function openRevision() {
     return;
   }
   await loadRevisionSession();
+}
+
+function restoreRevisionExercisePreferences() {
+  let selected = new Set(DEFAULT_EXERCISES);
+  try {
+    const stored = JSON.parse(localStorage.getItem(EXERCISE_PREFERENCE_KEY));
+    if (Array.isArray(stored) && stored.some(value => DEFAULT_EXERCISES.includes(value))) {
+      selected = new Set(stored);
+    }
+  } catch {
+    // Retain the inclusive defaults when local storage is unavailable or invalid.
+  }
+  document.querySelectorAll("#revision-exercise-selector input").forEach(input => {
+    input.checked = selected.has(input.value);
+  });
+}
+
+function selectedRevisionExercises() {
+  return new Set(
+    [...document.querySelectorAll("#revision-exercise-selector input:checked")]
+      .map(input => input.value),
+  );
 }
 
 async function populateLanguageSelector() {
@@ -163,9 +200,12 @@ async function loadRevisionSession() {
     const response = await fetch(`/api/revision/session?${params}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || t("revision.loadError"));
-    queue = data.cards.map(card => ({ ...card, retryCount: 0 }));
-    queue.push(...(data.connector_cards || []));
-    if (data.synonym_round) queue.push(data.synonym_round);
+    const exercises = selectedRevisionExercises();
+    queue = exercises.has("vocabulary")
+      ? data.cards.map(card => ({ ...card, retryCount: 0 }))
+      : [];
+    if (exercises.has("connectors")) queue.push(...(data.connector_cards || []));
+    if (exercises.has("synonyms") && data.synonym_round) queue.push(data.synonym_round);
     loading.hidden = true;
     if (!queue.length) {
       showEmptySession();
@@ -845,3 +885,5 @@ function localizeRevisionLanguageOptions() {
 function normalize(value) {
   return value.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/g, " ");
 }
+
+restoreRevisionExercisePreferences();
