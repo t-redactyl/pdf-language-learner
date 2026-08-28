@@ -26,8 +26,13 @@ same-part-of-speech candidates from Open-de-WordNet or Open Multilingual
 WordNet, then asks Ollama to keep and rank only candidates matching the selected
 word's meaning in its sentence. Once the document language is known, Margin
 prepares the relevant WordNet lexicon in the background and reuses it locally.
-Single-candidate lookups bypass Ollama, while ambiguous candidate sets are
+Single-sense lookups bypass Ollama, while ambiguous candidate sets are
 cached after contextual ranking.
+For German and Spanish nouns, the existing Stanza morphology supplies gender
+locally. Margin derives definite articles from that gender for normalized
+sources, translations, and synonym results; Spanish stressed-a nouns such as
+`agua` use the singular article `el`. Other source languages retain the model
+grammar fallback.
 
 At startup the server warms the Ollama translation model in the background and
 keeps it loaded by default. Set `OLLAMA_WARMUP=false` to disable that request or

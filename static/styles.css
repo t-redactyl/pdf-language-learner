@@ -110,6 +110,7 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .noun-feminine { --noun-colour:#f2adc9; }
 .noun-neutral { --noun-colour:#ead36c; }
 .result #normalized-text.noun-masculine,.result #normalized-text.noun-feminine,.result #normalized-text.noun-neutral { width:fit-content; padding-left:9px; border-left:4px solid var(--noun-colour); }
+.synonym-result.noun-masculine,.synonym-result.noun-feminine,.synonym-result.noun-neutral { display:inline-block; padding-left:7px; border-left:3px solid var(--noun-colour); }
 .error { color:#a23e35; font-size:13px; }
 .reader.reader-stacked { display:block; max-width:calc(820px + 6vw); }
 .reader-stacked .reader-meta { display:none; }

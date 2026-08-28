@@ -10,8 +10,11 @@ import wn
 from fastapi.testclient import TestClient
 
 from pdf_language_learner.app import (
+    LOCAL_NOUN_GRAMMAR_CACHE,
     MULTI_WORD_TERMS,
+    SourceNounGrammar,
     STANZA_PIPELINES,
+    SynonymCandidateSet,
     WordAnalysis,
     analyze_word_in_context,
     app,
@@ -44,6 +47,7 @@ def clear_runtime_caches():
         wordnet_synonym_candidates,
     ):
         cached_function.cache_clear()
+    LOCAL_NOUN_GRAMMAR_CACHE.clear()
     yield
     for cached_function in (
         ollama_client,
@@ -55,6 +59,7 @@ def clear_runtime_caches():
         wordnet_synonym_candidates,
     ):
         cached_function.cache_clear()
+    LOCAL_NOUN_GRAMMAR_CACHE.clear()
 
 
 def test_health() -> None:
@@ -75,7 +80,7 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-reader-meta"' in response.text
     assert 'name="lookup-mode"' in response.text
     assert 'data-i18n="hero.title"' in response.text
-    assert '/static/app.js?v=16' in response.text
+    assert '/static/app.js?v=17' in response.text
 
 
 def test_spanish_interface_catalog_is_served() -> None:
@@ -433,6 +438,10 @@ def test_translate_uses_contextual_pos_to_normalize_words(
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context", fake_analysis
     )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.local_noun_grammars",
+        lambda lemmas, language: tuple(None for _ in lemmas),
+    )
     monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
     response = client.post(
         "/api/translate",
@@ -455,6 +464,89 @@ def test_translate_uses_contextual_pos_to_normalize_words(
     if model_response.get("source_gender") not in {None, "none"}:
         expected["noun_gender"] = model_response["source_gender"]
     assert response.json() == expected
+
+
+def test_contextual_gender_removes_source_noun_model_lookup(monkeypatch) -> None:
+    calls = []
+
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            calls.append(kwargs)
+            assert set(kwargs["format"]["required"]) == {
+                "target_lemma",
+                "target_definite_article",
+            }
+            return SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "target_lemma": "house",
+                "target_definite_article": "the",
+            })))
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: WordAnalysis(
+            "Häuser", "Haus", "NOUN", noun_gender="neutral"
+        ),
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": "Häuser",
+            "source_language": "German",
+            "target_language": "English",
+            "context": "Viele Häuser stehen hier.",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["normalized_source"] == "das Haus"
+    assert response.json()["noun_gender"] == "neutral"
+    assert len(calls) == 1
+
+
+def test_local_target_grammar_overrides_model_article(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self, host: str) -> None:
+            self.host = host
+
+        def chat(self, **kwargs):
+            required = set(kwargs["format"]["required"])
+            data = (
+                {"article": "the", "gender": "none"}
+                if required == {"article", "gender"}
+                else {"target_lemma": "agua", "target_definite_article": "la"}
+            )
+            return SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(data))
+            )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: WordAnalysis("water", "water", "NOUN"),
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.local_noun_grammars",
+        lambda lemmas, language: (
+            SourceNounGrammar(article="el", gender="feminine"),
+        ),
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+
+    response = client.post(
+        "/api/translate",
+        json={
+            "text": "water",
+            "source_language": "English",
+            "target_language": "Spanish",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["translation"] == "el agua"
 
 
 def test_source_noun_grammar_is_cached_across_target_languages(monkeypatch) -> None:
@@ -1435,10 +1527,9 @@ def test_wordnet_candidates_keep_same_part_of_speech_and_remove_source(
         lambda language: FakeWordnet(),
     )
 
-    assert wordnet_synonym_candidates("schnell", "German", "ADJ") == (
-        "rasch",
-        "flink",
-        "geschwind",
+    assert wordnet_synonym_candidates("schnell", "German", "ADJ") == SynonymCandidateSet(
+        values=("rasch", "flink", "geschwind"),
+        sense_count=2,
     )
 
 
@@ -1464,7 +1555,9 @@ def test_wordnet_candidates_recover_from_an_overly_strict_pos(monkeypatch) -> No
         lambda language: FakeWordnet(),
     )
 
-    assert wordnet_synonym_candidates("schnell", "German", "ADJ") == ("rasch",)
+    assert wordnet_synonym_candidates(
+        "schnell", "German", "ADJ"
+    ) == SynonymCandidateSet(values=("rasch",), sense_count=1)
 
 
 def test_synonyms_are_ranked_by_context_and_restricted_to_wordnet(
@@ -1492,7 +1585,9 @@ def test_synonyms_are_ranked_by_context_and_restricted_to_wordnet(
     )
     monkeypatch.setattr(
         "pdf_language_learner.app.wordnet_synonym_candidates",
-        lambda *args: ("rasch", "flink", "eilig"),
+        lambda *args: SynonymCandidateSet(
+            values=("rasch", "flink", "eilig"), sense_count=2
+        ),
     )
     monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
 
@@ -1510,7 +1605,11 @@ def test_synonyms_are_ranked_by_context_and_restricted_to_wordnet(
     assert response.json() == {
         "detected_language": "German",
         "normalized_source": "schnell",
-        "synonyms": ["rasch", "flink"],
+        "noun_gender": None,
+        "synonyms": [
+            {"text": "rasch", "noun_gender": None},
+            {"text": "flink", "noun_gender": None},
+        ],
     }
 
 
@@ -1521,10 +1620,13 @@ def test_synonyms_skip_ollama_when_wordnet_has_no_candidates(monkeypatch) -> Non
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
-        lambda *args: WordAnalysis("Wort", "Wort", "NOUN"),
+        lambda *args: WordAnalysis(
+            "Wort", "Wort", "NOUN", noun_gender="neutral"
+        ),
     )
     monkeypatch.setattr(
-        "pdf_language_learner.app.wordnet_synonym_candidates", lambda *args: ()
+        "pdf_language_learner.app.wordnet_synonym_candidates",
+        lambda *args: SynonymCandidateSet(values=(), sense_count=0),
     )
     monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
 
@@ -1537,10 +1639,52 @@ def test_synonyms_skip_ollama_when_wordnet_has_no_candidates(monkeypatch) -> Non
     assert response.json()["synonyms"] == []
 
 
-def test_synonyms_skip_ollama_for_a_single_wordnet_candidate(monkeypatch) -> None:
+def test_noun_synonyms_include_local_articles_and_gender(monkeypatch) -> None:
     class UnexpectedClient:
         def __init__(self, host: str) -> None:
-            raise AssertionError("One unambiguous candidate does not need ranking")
+            raise AssertionError("A single WordNet sense should stay model-free")
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.analyze_word_in_context",
+        lambda *args: WordAnalysis(
+            "Haus", "Haus", "NOUN", noun_gender="neutral"
+        ),
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.wordnet_synonym_candidates",
+        lambda *args: SynonymCandidateSet(
+            values=("Gebäude", "Heim"), sense_count=1
+        ),
+    )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.local_noun_grammars",
+        lambda lemmas, language: tuple(
+            SourceNounGrammar(article="das", gender="neutral") for _ in lemmas
+        ),
+    )
+    monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
+
+    response = client.post(
+        "/api/synonyms",
+        json={"text": "Haus", "source_language": "German"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "detected_language": "German",
+        "normalized_source": "das Haus",
+        "noun_gender": "neutral",
+        "synonyms": [
+            {"text": "das Gebäude", "noun_gender": "neutral"},
+            {"text": "das Heim", "noun_gender": "neutral"},
+        ],
+    }
+
+
+def test_synonyms_skip_ollama_for_a_single_wordnet_sense(monkeypatch) -> None:
+    class UnexpectedClient:
+        def __init__(self, host: str) -> None:
+            raise AssertionError("One unambiguous sense does not need ranking")
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
@@ -1548,7 +1692,9 @@ def test_synonyms_skip_ollama_for_a_single_wordnet_candidate(monkeypatch) -> Non
     )
     monkeypatch.setattr(
         "pdf_language_learner.app.wordnet_synonym_candidates",
-        lambda *args: ("rápido",),
+        lambda *args: SynonymCandidateSet(
+            values=("rápido", "ligero", "acelerado"), sense_count=1
+        ),
     )
     monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
 
@@ -1562,7 +1708,11 @@ def test_synonyms_skip_ollama_for_a_single_wordnet_candidate(monkeypatch) -> Non
     )
 
     assert response.status_code == 200
-    assert response.json()["synonyms"] == ["rápido"]
+    assert response.json()["synonyms"] == [
+        {"text": "rápido", "noun_gender": None},
+        {"text": "ligero", "noun_gender": None},
+        {"text": "acelerado", "noun_gender": None},
+    ]
 
 
 @pytest.mark.parametrize(

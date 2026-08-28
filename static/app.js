@@ -846,10 +846,22 @@ $("#translate-button").addEventListener("click", async () => {
     $("#detected-language").dataset.language = data.detected_language;
     $("#detected-language").textContent = t("translation.source", { language: languageName(data.detected_language) });
     if (synonymMode) {
-      showNormalizedResult(data.normalized_source, true);
-      $("#translated-text").textContent = data.synonyms.length
-        ? data.synonyms.join(" · ")
-        : t("synonyms.none");
+      showNormalizedResult(data.normalized_source, true, data.noun_gender);
+      const synonymResult = $("#translated-text");
+      synonymResult.replaceChildren();
+      if (data.synonyms.length) {
+        data.synonyms.forEach((entry, index) => {
+          if (index) synonymResult.append(document.createTextNode(" · "));
+          const value = typeof entry === "string" ? { text: entry } : entry;
+          const synonym = document.createElement("span");
+          synonym.className = "synonym-result";
+          synonym.textContent = value.text;
+          setNounGender(synonym, value.noun_gender);
+          synonymResult.append(synonym);
+        });
+      } else {
+        synonymResult.textContent = t("synonyms.none");
+      }
       $("#result").hidden = false;
       showCurrentHighlight(pendingHighlight);
       return;

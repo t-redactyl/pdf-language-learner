@@ -81,6 +81,8 @@ STANZA_PIPELINE_INIT_LOCKS = {
 STANZA_PIPELINES: dict[str, Any] = {}
 STANZA_PREPARATION_LOCK = threading.Lock()
 STANZA_PREPARING: set[str] = set()
+LOCAL_NOUN_GRAMMAR_CACHE: dict[tuple[str, str], "SourceNounGrammar | None"] = {}
+LOCAL_NOUN_GRAMMAR_CACHE_LOCK = threading.Lock()
 RUNTIME_CACHE_SIZE = 512
 MODEL_CALL_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
@@ -675,10 +677,16 @@ class TranslationResult(BaseModel):
     )
 
 
+class SynonymValue(BaseModel):
+    text: str
+    noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+
+
 class SynonymResult(BaseModel):
     detected_language: str = Field(description="The source language in English")
     normalized_source: str = Field(description="The source word in dictionary form")
-    synonyms: list[str] = Field(
+    noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+    synonyms: list[SynonymValue] = Field(
         description="Context-appropriate synonyms ranked by usefulness"
     )
 
@@ -831,6 +839,13 @@ class WordAnalysis:
     pos: str
     associated_clitics: tuple[str, ...] = ()
     confident_verb_lemma: str | None = None
+    noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+
+
+@dataclass(frozen=True)
+class SynonymCandidateSet:
+    values: tuple[str, ...]
+    sense_count: int
 
 
 def stanza_pipeline(source_language: str):
@@ -961,6 +976,31 @@ def morphological_features(word) -> dict[str, str]:
         if "=" in feature
         for key, value in [feature.split("=", 1)]
     }
+
+
+def noun_gender_from_word(
+    word,
+) -> Literal["masculine", "feminine", "neutral"] | None:
+    return {
+        "Masc": "masculine",
+        "Fem": "feminine",
+        "Neut": "neutral",
+    }.get(morphological_features(word).get("Gender"))
+
+
+def preserve_spanish_feminine_lemma(
+    surface: str,
+    lemma: str,
+    gender: Literal["masculine", "feminine", "neutral"] | None,
+) -> str:
+    if gender != "feminine":
+        return lemma
+    surface = surface.strip()
+    if surface.casefold().endswith("as") and len(surface) > 2:
+        return surface[:-1]
+    if surface.casefold().endswith("a"):
+        return surface
+    return lemma
 
 
 def is_confident_spanish_reflexive(clitic, verb) -> bool:
@@ -1193,6 +1233,13 @@ def analyze_word_in_context(
     stanza_lemma = selected.lemma or selected.text
     simplemma_lemma = normalize_source(selected.text, source_language)
     lemma = simplemma_lemma if selected.upos in NOUN_POS else stanza_lemma
+    noun_gender = (
+        noun_gender_from_word(selected) if selected.upos in NOUN_POS else None
+    )
+    if selected.upos in NOUN_POS and source_language.casefold() == "spanish":
+        lemma = preserve_spanish_feminine_lemma(
+            selected.text, lemma, noun_gender
+        )
     if selected.upos in VERB_POS:
         if (
             source_language.casefold() == "spanish"
@@ -1210,6 +1257,7 @@ def analyze_word_in_context(
         token=selected.text,
         lemma=lemma,
         pos=selected.upos or "X",
+        noun_gender=noun_gender,
     )
 
 
@@ -1338,6 +1386,93 @@ def article_and_lemma(article: str, lemma: str) -> str:
     if not article:
         return lemma
     return f"{article}{lemma}" if article.endswith("'") else f"{article} {lemma}"
+
+
+SPANISH_FEMININE_EL_NOUNS = {
+    "acta", "águila", "ala", "alma", "ama", "ancla", "ánfora", "arca",
+    "área", "arma", "arpa", "aula", "ave", "agua", "hada", "hacha",
+    "hambre",
+}
+
+
+def local_article_for_gender(
+    lemma: str,
+    language: str,
+    gender: Literal["masculine", "feminine", "neutral"],
+) -> str:
+    language = language.casefold()
+    if language == "german":
+        return {
+            "masculine": "der",
+            "feminine": "die",
+            "neutral": "das",
+        }[gender]
+    if language == "spanish":
+        if gender == "masculine":
+            return "el"
+        word = canonicalize(lemma).split()[-1]
+        return "el" if word in SPANISH_FEMININE_EL_NOUNS else "la"
+    raise ValueError(f"local noun articles are not supported for {language}")
+
+
+def grammar_from_gender(
+    lemma: str,
+    language: str,
+    gender: Literal["masculine", "feminine", "neutral"] | None,
+) -> SourceNounGrammar | None:
+    if gender is None or language.casefold() not in {"german", "spanish"}:
+        return None
+    return SourceNounGrammar(
+        article=local_article_for_gender(lemma, language, gender),
+        gender=gender,
+    )
+
+
+def local_noun_grammars(
+    lemmas: tuple[str, ...], source_language: str
+) -> tuple[SourceNounGrammar | None, ...]:
+    language = source_language.casefold()
+    if language not in {"german", "spanish"} or not lemmas:
+        return tuple(None for _ in lemmas)
+    keys = [(language, canonicalize(lemma)) for lemma in lemmas]
+    with LOCAL_NOUN_GRAMMAR_CACHE_LOCK:
+        missing = [
+            (key, lemma)
+            for key, lemma in zip(keys, lemmas, strict=True)
+            if key not in LOCAL_NOUN_GRAMMAR_CACHE
+        ]
+        if missing:
+            prefix = "Ich sehe" if language == "german" else "Veo"
+            text = " ".join(f"{prefix} {lemma}." for _, lemma in missing)
+            pipeline = stanza_pipeline(source_language)
+            started = time.perf_counter()
+            with STANZA_PIPELINE_LOCK:
+                document = pipeline(text)
+            logger.info(
+                "Local noun morphology for %s completed in %.1fms",
+                source_language,
+                (time.perf_counter() - started) * 1_000,
+            )
+            for index, (key, lemma) in enumerate(missing):
+                sentence = (
+                    document.sentences[index]
+                    if index < len(document.sentences)
+                    else None
+                )
+                words = getattr(sentence, "words", ())
+                analyzed = next(
+                    (
+                        word
+                        for word in reversed(words)
+                        if noun_gender_from_word(word) is not None
+                    ),
+                    None,
+                )
+                gender = noun_gender_from_word(analyzed) if analyzed else None
+                LOCAL_NOUN_GRAMMAR_CACHE[key] = grammar_from_gender(
+                    lemma, source_language, gender
+                )
+        return tuple(LOCAL_NOUN_GRAMMAR_CACHE[key] for key in keys)
 
 
 def translation_messages(
@@ -1512,7 +1647,7 @@ def start_wordnet_preparation(source_language: str) -> None:
 @lru_cache(maxsize=RUNTIME_CACHE_SIZE)
 def wordnet_synonym_candidates(
     lemma: str, source_language: str, part_of_speech: str
-) -> tuple[str, ...]:
+) -> SynonymCandidateSet:
     wordnet_pos = {
         "NOUN": "n",
         "VERB": "v",
@@ -1527,24 +1662,32 @@ def wordnet_synonym_candidates(
     elif source_language.casefold() == "spanish" and lemma.casefold().endswith("se"):
         lookup_forms.append(lemma[:-2])
     excluded = {canonicalize(value) for value in lookup_forms}
+    sense_count = 0
     with WORDNET_LOCK:
         wordnet = wordnet_for_language(source_language)
 
         def add_synsets(synsets: list[wn.Synset]) -> bool:
+            nonlocal sense_count
             for synset in synsets:
+                has_alternative = False
                 for candidate in synset.lemmas():
                     candidate = candidate.replace("_", " ").strip()
                     key = canonicalize(candidate)
                     if key and key not in excluded:
+                        has_alternative = True
                         candidates.setdefault(key, candidate)
                     if len(candidates) >= 32:
+                        if has_alternative:
+                            sense_count += 1
                         return True
+                if has_alternative:
+                    sense_count += 1
             return False
 
         for lookup in lookup_forms:
             synsets = wordnet.synsets(lookup, pos=wordnet_pos) if wordnet_pos else []
             if add_synsets(synsets):
-                return tuple(candidates.values())
+                return SynonymCandidateSet(tuple(candidates.values()), sense_count)
             # Recover from an unknown/mistagged POS, a source-only synset, or
             # lexicons whose adjective categories do not map exactly to UPOS.
             if (
@@ -1552,10 +1695,10 @@ def wordnet_synonym_candidates(
                 and wordnet_pos
                 and add_synsets(wordnet.synsets(lookup))
             ):
-                return tuple(candidates.values())
+                return SynonymCandidateSet(tuple(candidates.values()), sense_count)
             if candidates:
                 break
-    return tuple(candidates.values())
+    return SynonymCandidateSet(tuple(candidates.values()), sense_count)
 
 
 def canonicalize(value: str) -> str:
@@ -2271,9 +2414,10 @@ def synonyms(request: SynonymRequest) -> SynonymResult:
             request.context_offset,
         )
         source = analysis.lemma
-        candidates = wordnet_synonym_candidates(
+        candidate_set = wordnet_synonym_candidates(
             source, request.source_language, analysis.pos
         )
+        candidates = candidate_set.values
         ranked = (
             cached_ranked_synonyms(
                 translation_model(),
@@ -2283,15 +2427,54 @@ def synonyms(request: SynonymRequest) -> SynonymResult:
                 analysis.pos,
                 candidates,
             )
-            if len(candidates) > 1
-            else ()
+            if candidate_set.sense_count > 1
+            else candidates[:5]
         )
-        if len(candidates) == 1:
-            ranked = candidates
+        source_grammar = None
+        synonym_grammars: tuple[SourceNounGrammar | None, ...] = tuple(
+            None for _ in ranked
+        )
+        if analysis.pos in NOUN_POS:
+            source_grammar = grammar_from_gender(
+                source, request.source_language, analysis.noun_gender
+            )
+            if source_grammar is None:
+                source_grammar = local_noun_grammars(
+                    (source,), request.source_language
+                )[0]
+            synonym_grammars = local_noun_grammars(
+                tuple(ranked), request.source_language
+            )
+        normalized_source = (
+            article_and_lemma(source_grammar.article, source)
+            if source_grammar is not None
+            else source
+        )
         return SynonymResult(
             detected_language=request.source_language,
-            normalized_source=source,
-            synonyms=list(ranked),
+            normalized_source=normalized_source,
+            noun_gender=(
+                source_grammar.gender
+                if source_grammar is not None and source_grammar.gender != "none"
+                else None
+            ),
+            synonyms=[
+                SynonymValue(
+                    text=(
+                        article_and_lemma(grammar.article, synonym)
+                        if grammar is not None
+                        else synonym
+                    ),
+                    noun_gender=(
+                        grammar.gender
+                        if grammar is not None and grammar.gender != "none"
+                        else None
+                    ),
+                )
+                for synonym, grammar in zip(
+                    ranked, synonym_grammars, strict=True
+                )
+            ],
         )
     except Exception as exc:
         raise HTTPException(
@@ -2363,23 +2546,33 @@ def translate(request: TranslationRequest) -> TranslationResult:
         source_article = ""
         noun_gender = None
         if word_analysis is not None and word_analysis.pos in NOUN_POS:
-            # Populate the shared client before both worker threads enter its
-            # cached accessor simultaneously on the first noun lookup.
-            ollama_client()
-            grammar_future = MODEL_CALL_EXECUTOR.submit(
-                cached_source_noun_grammar,
-                model, word_analysis.lemma, request.source_language,
+            noun_grammar = grammar_from_gender(
+                word_analysis.lemma,
+                request.source_language,
+                word_analysis.noun_gender,
             )
-            translation_future = MODEL_CALL_EXECUTOR.submit(
-                request_translation, request.context
-            )
-            try:
-                noun_grammar = grammar_future.result()
-                translated = translation_future.result()
-            except Exception:
-                grammar_future.cancel()
-                translation_future.cancel()
-                raise
+            if noun_grammar is not None:
+                # Stanza already produced this gender while locating the source
+                # word, so supported languages need no second model request.
+                translated = request_translation(request.context)
+            else:
+                # Retain the model fallback for languages whose Stanza model
+                # does not expose noun gender.
+                ollama_client()
+                grammar_future = MODEL_CALL_EXECUTOR.submit(
+                    cached_source_noun_grammar,
+                    model, word_analysis.lemma, request.source_language,
+                )
+                translation_future = MODEL_CALL_EXECUTOR.submit(
+                    request_translation, request.context
+                )
+                try:
+                    noun_grammar = grammar_future.result()
+                    translated = translation_future.result()
+                except Exception:
+                    grammar_future.cancel()
+                    translation_future.cancel()
+                    raise
             source_article = normalized_article(
                 noun_grammar.article, request.source_language
             )
@@ -2422,14 +2615,22 @@ def translate(request: TranslationRequest) -> TranslationResult:
                     translation = english_infinitive(translation)
             elif word_analysis.pos in NOUN_POS:
                 assert isinstance(translated, NounTranslation)
-                target_article = normalized_article(
-                    translated.target_definite_article, request.target_language
-                )
                 normalized_source = article_and_lemma(
                     source_article, word_analysis.lemma
                 )
                 target_lemma = normalize_source(
                     translated.target_lemma, request.target_language
+                )
+                target_grammar = local_noun_grammars(
+                    (target_lemma,), request.target_language
+                )[0]
+                target_article = normalized_article(
+                    (
+                        target_grammar.article
+                        if target_grammar is not None
+                        else translated.target_definite_article
+                    ),
+                    request.target_language,
                 )
                 translation = article_and_lemma(target_article, target_lemma)
             else:
