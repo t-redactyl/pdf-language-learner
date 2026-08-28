@@ -23,9 +23,11 @@ from pdf_language_learner.app import (
     cached_ranked_synonyms,
     cached_source_noun_grammar,
     cached_verb_lemma_decision,
+    frequency_ranked_synonym_candidates,
     multi_word_term_in_context,
     ollama_client,
     ollama_keep_alive,
+    part_of_speech_filtered_synonym_candidates,
     stanza_pipeline,
     warm_translation_model,
     wordnet_synonym_candidates,
@@ -45,6 +47,8 @@ def clear_runtime_caches():
         cached_source_noun_grammar,
         cached_model_translation,
         cached_ranked_synonyms,
+        frequency_ranked_synonym_candidates,
+        part_of_speech_filtered_synonym_candidates,
         wordnet_synonym_candidates,
     ):
         cached_function.cache_clear()
@@ -57,6 +61,8 @@ def clear_runtime_caches():
         cached_source_noun_grammar,
         cached_model_translation,
         cached_ranked_synonyms,
+        frequency_ranked_synonym_candidates,
+        part_of_speech_filtered_synonym_candidates,
         wordnet_synonym_candidates,
     ):
         cached_function.cache_clear()
@@ -1622,7 +1628,78 @@ def test_wordnet_candidates_recover_from_an_overly_strict_pos(monkeypatch) -> No
 
     assert wordnet_synonym_candidates(
         "schnell", "German", "ADJ"
-    ) == SynonymCandidateSet(values=("rasch",), sense_count=1)
+    ) == SynonymCandidateSet(
+        values=("rasch",), sense_count=1, used_pos_fallback=True
+    )
+
+
+def test_synonym_candidates_are_frequency_sorted_and_rare_words_removed(
+    monkeypatch,
+) -> None:
+    frequencies = {
+        "schnell": 5.0,
+        "alltäglich": 4.7,
+        "gebräuchlich": 3.1,
+        "veraltet": 2.9,
+        "verschollen": 0.0,
+    }
+    monkeypatch.setattr(
+        "pdf_language_learner.app.zipf_frequency",
+        lambda word, language: frequencies[word],
+    )
+
+    assert frequency_ranked_synonym_candidates(
+        "schnell",
+        "German",
+        ("verschollen", "gebräuchlich", "alltäglich", "veraltet"),
+    ) == ("alltäglich", "gebräuchlich")
+
+
+def test_synonym_frequency_filter_preserves_candidates_without_corpus_data(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "pdf_language_learner.app.zipf_frequency",
+        lambda word, language: 0.0,
+    )
+    candidates = ("unbekanntes Wort", "weiteres Wort")
+
+    assert frequency_ranked_synonym_candidates(
+        "Ausgangswort", "German", candidates
+    ) == candidates
+
+
+def test_synonym_candidates_reject_an_incompatible_part_of_speech(
+    monkeypatch,
+) -> None:
+    pipeline_calls = []
+
+    def pipeline(text):
+        pipeline_calls.append(text)
+        return SimpleNamespace(sentences=[
+            SimpleNamespace(words=[SimpleNamespace(text="eventuell", upos="ADV")]),
+            SimpleNamespace(words=[SimpleNamespace(text="mögen", upos="VERB")]),
+            SimpleNamespace(
+                words=[SimpleNamespace(text="möglicherweise", upos="ADV")]
+            ),
+            SimpleNamespace(
+                words=[SimpleNamespace(text="wahrscheinlich", upos="ADJ")]
+            ),
+        ])
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.stanza_pipeline", lambda language: pipeline
+    )
+
+    assert part_of_speech_filtered_synonym_candidates(
+        "German",
+        "ADV",
+        ("eventuell", "mögen", "möglicherweise", "wahrscheinlich"),
+    ) == ("eventuell", "möglicherweise", "wahrscheinlich")
+    assert pipeline_calls == [
+        "Das ist eventuell richtig. Das ist mögen richtig. "
+        "Das ist möglicherweise richtig. Das ist wahrscheinlich richtig."
+    ]
 
 
 def test_synonyms_are_ranked_by_context_and_restricted_to_wordnet(
@@ -1639,7 +1716,8 @@ def test_synonyms_are_ranked_by_context_and_restricted_to_wordnet(
             prompt = kwargs["messages"][1]["content"]
             assert "Source lemma: schnell" in prompt
             assert "Das Auto ist sehr schnell." in prompt
-            assert "rasch, flink, eilig" in prompt
+            assert "flink, rasch" in prompt
+            assert "eilig" not in prompt
             return SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                 "synonyms": ["rasch", "erfunden", "RASCH", "flink"]
             })))
@@ -1653,6 +1731,16 @@ def test_synonyms_are_ranked_by_context_and_restricted_to_wordnet(
         lambda *args: SynonymCandidateSet(
             values=("rasch", "flink", "eilig"), sense_count=2
         ),
+    )
+    frequencies = {
+        "schnell": 5.0,
+        "rasch": 4.2,
+        "flink": 4.5,
+        "eilig": 2.0,
+    }
+    monkeypatch.setattr(
+        "pdf_language_learner.app.zipf_frequency",
+        lambda word, language: frequencies[word],
     )
     monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
 

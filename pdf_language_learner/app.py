@@ -18,6 +18,7 @@ from typing import Any, Iterator, Literal
 import simplemma
 import stanza
 import wn
+from wordfreq import zipf_frequency
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -85,6 +86,19 @@ LOCAL_NOUN_GRAMMAR_CACHE: dict[tuple[str, str], "SourceNounGrammar | None"] = {}
 LOCAL_NOUN_GRAMMAR_CACHE_LOCK = threading.Lock()
 RUNTIME_CACHE_SIZE = 512
 MAX_SYNONYMS = 2
+MIN_SYNONYM_ZIPF = 2.5
+MAX_SYNONYM_ZIPF_DROP = 2.0
+WORD_FREQUENCY_LANGUAGES = {
+    "german": "de",
+    "spanish": "es",
+}
+SYNONYM_POS_COMPATIBILITY = {
+    "NOUN": {"NOUN", "PROPN"},
+    "VERB": {"VERB", "AUX"},
+    "AUX": {"VERB", "AUX"},
+    "ADJ": {"ADJ"},
+    "ADV": {"ADV"},
+}
 MODEL_CALL_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="ollama-call",
@@ -852,6 +866,7 @@ class WordAnalysis:
 class SynonymCandidateSet:
     values: tuple[str, ...]
     sense_count: int
+    used_pos_fallback: bool = False
 
 
 def stanza_pipeline(source_language: str):
@@ -1696,12 +1711,14 @@ def wordnet_synonym_candidates(
                 return SynonymCandidateSet(tuple(candidates.values()), sense_count)
             # Recover from an unknown/mistagged POS, a source-only synset, or
             # lexicons whose adjective categories do not map exactly to UPOS.
-            if (
-                not candidates
-                and wordnet_pos
-                and add_synsets(wordnet.synsets(lookup))
-            ):
-                return SynonymCandidateSet(tuple(candidates.values()), sense_count)
+            if not candidates and wordnet_pos:
+                add_synsets(wordnet.synsets(lookup))
+                if candidates:
+                    return SynonymCandidateSet(
+                        tuple(candidates.values()),
+                        sense_count,
+                        used_pos_fallback=True,
+                    )
             if candidates:
                 break
     return SynonymCandidateSet(tuple(candidates.values()), sense_count)
@@ -1709,6 +1726,101 @@ def wordnet_synonym_candidates(
 
 def canonicalize(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+@lru_cache(maxsize=RUNTIME_CACHE_SIZE)
+def frequency_ranked_synonym_candidates(
+    source: str,
+    source_language: str,
+    candidates: tuple[str, ...],
+) -> tuple[str, ...]:
+    language_code = WORD_FREQUENCY_LANGUAGES.get(source_language.casefold())
+    if language_code is None or not candidates:
+        return candidates
+    scored = [
+        (candidate, zipf_frequency(candidate, language_code))
+        for candidate in candidates
+    ]
+    if not any(score > 0 for _, score in scored):
+        # Preserve WordNet's result if wordfreq has no evidence either way.
+        return candidates
+    source_score = zipf_frequency(source, language_code)
+    threshold = max(
+        MIN_SYNONYM_ZIPF,
+        source_score - MAX_SYNONYM_ZIPF_DROP,
+    )
+    return tuple(
+        candidate
+        for candidate, score in sorted(
+            scored,
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if score >= threshold
+    )
+
+
+@lru_cache(maxsize=RUNTIME_CACHE_SIZE)
+def part_of_speech_filtered_synonym_candidates(
+    source_language: str,
+    part_of_speech: str,
+    candidates: tuple[str, ...],
+) -> tuple[str, ...]:
+    language = source_language.casefold()
+    compatible = SYNONYM_POS_COMPATIBILITY.get(part_of_speech)
+    if language == "german" and part_of_speech in {"ADJ", "ADV"}:
+        # German uninflected adjectives regularly function adverbially.
+        compatible = {"ADJ", "ADV"}
+    templates = {
+        "german": {
+            "NOUN": "Ich sehe {}.",
+            "VERB": "Wir wollen {}.",
+            "AUX": "Wir wollen {}.",
+            "ADJ": "Das ist {}.",
+            "ADV": "Das ist {} richtig.",
+        },
+        "spanish": {
+            "NOUN": "Veo {}.",
+            "VERB": "Quiero {}.",
+            "AUX": "Quiero {}.",
+            "ADJ": "Es {}.",
+            "ADV": "Es {} correcto.",
+        },
+    }
+    template = templates.get(language, {}).get(part_of_speech)
+    if compatible is None or template is None or not candidates:
+        return candidates
+    analyzable = [
+        (index, candidate)
+        for index, candidate in enumerate(candidates)
+        if re.fullmatch(r"[^\W\d_]+(?:-[^\W\d_]+)*", candidate)
+    ]
+    if not analyzable:
+        return candidates
+    pipeline = stanza_pipeline(source_language)
+    text = " ".join(template.format(candidate) for _, candidate in analyzable)
+    with STANZA_PIPELINE_LOCK:
+        document = pipeline(text)
+    rejected: set[int] = set()
+    for (index, candidate), sentence in zip(
+        analyzable, document.sentences, strict=False
+    ):
+        candidate_key = canonicalize(candidate)
+        analyzed = next(
+            (
+                word
+                for word in sentence.words
+                if canonicalize(word.text) == candidate_key
+            ),
+            None,
+        )
+        if analyzed is not None and analyzed.upos not in compatible:
+            rejected.add(index)
+    return tuple(
+        candidate
+        for index, candidate in enumerate(candidates)
+        if index not in rejected
+    )
 
 
 def vocabulary_table_slug(language: str) -> str:
@@ -2380,9 +2492,21 @@ def contextual_synonyms(
     candidate_set = wordnet_synonym_candidates(
         analysis.lemma, source_language, analysis.pos
     )
-    candidates = candidate_set.values
-    ranked = (
-        cached_ranked_synonyms(
+    candidates = frequency_ranked_synonym_candidates(
+        analysis.lemma,
+        source_language,
+        candidate_set.values,
+    )
+    if candidate_set.used_pos_fallback:
+        candidates = part_of_speech_filtered_synonym_candidates(
+            source_language,
+            analysis.pos,
+            candidates,
+        )
+    if not candidates:
+        ranked = ()
+    elif candidate_set.sense_count > 1:
+        ranked = cached_ranked_synonyms(
             model,
             analysis.lemma,
             source_language,
@@ -2390,9 +2514,9 @@ def contextual_synonyms(
             analysis.pos,
             candidates,
         )
-        if candidate_set.sense_count > 1
-        else candidates
-    )[:MAX_SYNONYMS]
+    else:
+        ranked = candidates
+    ranked = ranked[:MAX_SYNONYMS]
     synonym_grammars: tuple[SourceNounGrammar | None, ...] = tuple(
         None for _ in ranked
     )
