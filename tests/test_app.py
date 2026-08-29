@@ -118,9 +118,11 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-toolbar"' in response.text
     assert 'id="pdf-zoom-out"' in response.text
     assert 'id="pdf-zoom-in"' in response.text
-    assert '/static/styles.css?v=29' in response.text
+    assert 'id="toggle-translation-panel"' in response.text
+    assert 'aria-controls="translation-panel-body"' in response.text
+    assert '/static/styles.css?v=31' in response.text
     assert '/static/revision.js?v=19' in response.text
-    assert '/static/app.js?v=30' in response.text
+    assert '/static/app.js?v=32' in response.text
 
 
 def test_favicon_is_served() -> None:
@@ -138,8 +140,8 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=10' in app_script
-    assert './i18n.js?v=10' in revision_script
+    assert './i18n.js?v=11' in app_script
+    assert './i18n.js?v=11' in revision_script
     assert "export function renderClozeSentence" in text_script
     assert "originalSource: data.original_source || selectedText" in app_script
     assert "findWholeWordIgnoringCase" in text_script
@@ -159,6 +161,17 @@ def test_tablet_translation_panel_keeps_all_three_sections_on_one_row() -> None:
     assert "@media (max-width:760px)" in styles
     assert "grid-template-columns:repeat(3,minmax(0,1fr))" in styles
     assert "@media (max-width:600px)" in styles
+
+
+def test_mobile_translation_panel_can_collapse_to_a_reading_handle() -> None:
+    script = client.get("/static/app.js").text
+    styles = client.get("/static/styles.css").text
+
+    assert 'setTranslationPanelCollapsed(!$(".translation-panel").classList.contains("is-collapsed"))' in script
+    assert '.translation-panel.is-collapsed .translation-panel-body { display:none; }' in styles
+    assert '.translation-panel-collapsed .pages { padding-bottom:68px; }' in styles
+    assert 'viewBox="0 0 20 20"' in client.get("/").text
+    assert '.translation-panel.is-collapsed .translation-panel-toggle-icon { transform:rotate(180deg); }' in styles
 
 
 def test_pdf_zoom_scales_only_the_document_and_keeps_highlights_relative() -> None:

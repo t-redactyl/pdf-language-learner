@@ -94,7 +94,9 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .highlight-layer { z-index:2; pointer-events:none; }
 .highlight-layer span { position:absolute; background:rgba(229,208,119,.48); border-radius:2px; }
 .translation-panel { padding:24px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px #28261f0c; }
-.translation-panel > .eyebrow { margin-top:0; }
+.translation-panel-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.translation-panel-heading > .eyebrow { margin:0; }
+.translation-panel-toggle { display:none; }
 .translation-panel .form-label,.result .result-label { margin:18px 0 6px; color:#777c74; font:700 10px/1.3 Inter,ui-sans-serif,system-ui,sans-serif; letter-spacing:.12em; text-transform:uppercase; }
 .translation-panel blockquote { margin:0 0 18px; padding-left:14px; border-left:2px solid var(--gold); max-height:135px; overflow:auto; font:italic 17px/1.45 Georgia,serif; }
 .translation-panel label { display:block; margin:18px 0 6px; font-size:12px; font-weight:700; }
@@ -119,6 +121,13 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .reader-stacked .reader-meta { display:none; }
 .reader-stacked .pages { padding-bottom:300px; }
 .reader-stacked .translation-panel { position:fixed; z-index:10; top:auto; bottom:0; left:50%; right:auto; width:min(calc(100% - 24px),1180px); max-height:46vh; overflow:auto; transform:translateX(-50%); }
+.reader-stacked .translation-panel-toggle { display:inline-grid; width:36px; height:32px; flex:none; place-items:center; padding:0; border:0; border-radius:50%; background:#78907b18; color:var(--ink); cursor:pointer; }
+.reader-stacked .translation-panel-toggle:hover,.reader-stacked .translation-panel-toggle:focus-visible { background:#78907b2b; }
+.reader-stacked .translation-panel-toggle-icon { display:block; width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2.5; stroke-linecap:round; stroke-linejoin:round; transition:transform .15s ease; }
+.reader-stacked .translation-panel.is-collapsed .translation-panel-toggle-icon { transform:rotate(180deg); }
+.reader-stacked .translation-panel.is-collapsed { padding-block:10px; overflow:hidden; }
+.reader-stacked .translation-panel.is-collapsed .translation-panel-body { display:none; }
+.reader-stacked.translation-panel-collapsed .pages { padding-bottom:68px; }
 .reader-stacked #translation-content { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr)); gap:16px clamp(16px,2vw,28px); align-items:start; }
 .reader-stacked .translation-original .form-label,.reader-stacked .translation-controls > label:first-child { margin-top:0; }
 .reader-stacked .result { margin-top:0; padding-top:0; border-top:0; }
@@ -215,3 +224,12 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 @media (max-width:760px) { .translation-panel { padding:16px; } .translation-panel #translation-content { grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; } .translation-panel blockquote { margin-bottom:12px; padding-left:10px; font-size:15px; } .translation-panel label { margin-top:12px; font-size:11px; } .translation-panel select { padding:7px; margin-bottom:7px; font-size:13px; } .translation-panel .language-status,.result span { font-size:11px; } .result #normalized-text,.result #translated-text { font-size:18px; } .synonym-result { padding:5px 8px; font-size:15px; } }
 @media (max-width:600px) { .translation-panel #translation-content { grid-template-columns:repeat(2,minmax(0,1fr)); } .translation-panel .translation-outcome { grid-column:1/-1; } }
 @media (max-width:480px) { .translation-panel #translation-content { grid-template-columns:minmax(0,1fr); } }
+@media (max-width:760px) {
+  .translation-panel .translation-panel-toggle { display:inline-grid; width:36px; height:32px; flex:none; place-items:center; padding:0; border:0; border-radius:50%; background:#78907b18; color:var(--ink); cursor:pointer; }
+  .translation-panel .translation-panel-toggle:hover,.translation-panel .translation-panel-toggle:focus-visible { background:#78907b2b; }
+  .translation-panel .translation-panel-toggle-icon { display:block; width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2.5; stroke-linecap:round; stroke-linejoin:round; transition:transform .15s ease; }
+  .translation-panel.is-collapsed .translation-panel-toggle-icon { transform:rotate(180deg); }
+  .translation-panel.is-collapsed { padding-block:10px; overflow:hidden; }
+  .translation-panel.is-collapsed .translation-panel-body { display:none; }
+  .reader.translation-panel-collapsed .pages { padding-bottom:68px; }
+}

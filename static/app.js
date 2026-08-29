@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=5";
-import { initI18n, languageName, t } from "./i18n.js?v=10";
+import { initI18n, languageName, t } from "./i18n.js?v=11";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -118,6 +118,22 @@ function schedulePdfReaderLayout() {
 
 window.addEventListener("resize", schedulePdfReaderLayout);
 
+function setTranslationPanelCollapsed(collapsed) {
+  const panel = $(".translation-panel");
+  const toggle = $("#toggle-translation-panel");
+  panel.classList.toggle("is-collapsed", collapsed);
+  $("#reader").classList.toggle("translation-panel-collapsed", collapsed);
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  const label = t(collapsed ? "translation.expand" : "translation.collapse");
+  toggle.setAttribute("aria-label", label);
+  toggle.title = label;
+  toggle.querySelector(".visually-hidden").textContent = label;
+}
+
+$("#toggle-translation-panel").addEventListener("click", () => {
+  setTranslationPanelCollapsed(!$(".translation-panel").classList.contains("is-collapsed"));
+});
+
 function setReaderMetaOpen(open, returnFocus = false) {
   const reader = $("#reader");
   const toggle = $("#toggle-reader-meta");
@@ -141,6 +157,7 @@ document.addEventListener("keydown", event => {
 
 initI18n();
 localizeLanguageOptions();
+setTranslationPanelCollapsed(false);
 
 document.addEventListener("margin:locale-changed", () => {
   localizeLanguageOptions();
@@ -151,6 +168,7 @@ document.addEventListener("margin:locale-changed", () => {
   refreshNounGenderTitles();
   const shownSource = $("#result").hidden ? "" : $("#detected-language").dataset.language;
   if (shownSource) $("#detected-language").textContent = t("translation.source", { language: languageName(shownSource) });
+  setTranslationPanelCollapsed($(".translation-panel").classList.contains("is-collapsed"));
 });
 
 function localizeLanguageOptions() {
@@ -463,6 +481,7 @@ document.addEventListener("pointerup", event => {
 });
 
 function showSelection({ text, rectangles, context = "", contextOffset = null }) {
+  setTranslationPanelCollapsed(false);
   selectedText = text;
   selectedContext = context;
   selectedContextOffset = contextOffset;
@@ -1281,6 +1300,7 @@ function translationFromControl(control) {
 }
 
 function showTranslation(translation) {
+  setTranslationPanelCollapsed(false);
   const source = translation.normalizedSource || translation.source;
   const sourceLanguage = translation.sourceLanguage || translation.detectedLanguage;
   selectedText = translation.originalSource || source;
