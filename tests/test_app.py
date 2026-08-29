@@ -120,7 +120,7 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert '/static/styles.css?v=29' in response.text
     assert '/static/revision.js?v=19' in response.text
-    assert '/static/app.js?v=29' in response.text
+    assert '/static/app.js?v=30' in response.text
 
 
 def test_favicon_is_served() -> None:
@@ -170,6 +170,15 @@ def test_pdf_zoom_scales_only_the_document_and_keeps_highlights_relative() -> No
     assert "rect.x*100" in script
     assert ".pages-scroll {" in styles
     assert "overflow-x:auto" in styles
+
+
+def test_pdf_pages_are_virtualized_to_limit_mobile_canvas_memory() -> None:
+    script = client.get("/static/app.js").text
+
+    assert 'rootMargin: "1200px 0px"' in script
+    assert "Math.min(window.devicePixelRatio || 1, 1.5)" in script
+    assert "releasePdfPage(entry.target)" in script
+    assert 'wrapper.querySelector("canvas")?.remove()' in script
 
 
 def test_spanish_interface_catalog_is_served() -> None:

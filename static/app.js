@@ -25,6 +25,14 @@ const characterOffsetsForSpan = new WeakMap();
 const measurementContext = document.createElement("canvas").getContext("2d");
 let selectionDragStart = null;
 let translations = [];
+let activePdf = null;
+const pdfPageState = new WeakMap();
+const pdfPageRenderObserver = new IntersectionObserver(entries => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) renderPdfPage(entry.target);
+    else releasePdfPage(entry.target);
+  });
+}, { rootMargin: "1200px 0px" });
 const LEGACY_SAVED_VOCABULARY_STORAGE_KEY = "margin:saved-vocabulary:v1";
 let savedVocabulary = [];
 const pdfPageResizeObserver = new ResizeObserver(entries => {
@@ -166,14 +174,28 @@ async function openPdf(file) {
   // Highlights used to be persisted under the document key. Remove that legacy
   // data now that highlights are intentionally transient.
   try { localStorage.removeItem(activeDocumentKey); } catch {}
+  const documentKey = activeDocumentKey;
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  if (activeDocumentKey !== documentKey) {
+    pdf.destroy();
+    return;
+  }
+  activePdf = pdf;
   $("#empty-state").hidden = true;
   $("#reader").hidden = false;
   $("#pdf-zoom-toolbar").hidden = false;
   applyPdfZoom();
   const pageTexts = [];
   for (let number = 1; number <= pdf.numPages; number += 1) {
-    pageTexts.push(await renderPage(await pdf.getPage(number), number));
+    const page = await pdf.getPage(number);
+    // A representative prefix is enough for language detection. Do not keep
+    // every page's text and bitmap alive merely to build the sample.
+    if (pageTexts.join("").length < 12000) {
+      const textContent = await page.getTextContent();
+      pageTexts.push(pdfText(textContent));
+      page.cleanup();
+    }
+    createPdfPage(page, number);
   }
   documentLanguageSample = pageTexts.join("\n").replace(/\s+/g, " ").trim().slice(0, 12000);
   if (!detectedSourceLanguage) await detectDocumentLanguage();
@@ -182,7 +204,13 @@ async function openPdf(file) {
 function prepareDocument(documentKey) {
   clearCurrentHighlight();
   setReaderMetaOpen(false);
-  pages.querySelectorAll(".pdf-page").forEach(page => pdfPageResizeObserver.unobserve(page));
+  pages.querySelectorAll(".pdf-page").forEach(page => {
+    pdfPageResizeObserver.unobserve(page);
+    pdfPageRenderObserver.unobserve(page);
+    releasePdfPage(page);
+  });
+  activePdf?.destroy();
+  activePdf = null;
   pages.replaceChildren();
   $("#pdf-zoom-toolbar").hidden = true;
   pagesScroll.scrollLeft = 0;
@@ -318,7 +346,7 @@ function openWebDocument(data) {
   if (!detectedSourceLanguage) detectDocumentLanguage();
 }
 
-async function renderPage(page, number) {
+function createPdfPage(page, number) {
   const baseViewport = page.getViewport({ scale: 1 });
   const viewport = page.getViewport({ scale: Math.min(1.55, 820 / baseViewport.width) });
   const wrapper = document.createElement("article");
@@ -333,30 +361,75 @@ async function renderPage(page, number) {
   wrapper.style.setProperty("--pdf-height", `${viewport.height}px`);
   wrapper.style.setProperty("--responsive-scale", "1");
   wrapper.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
-  const canvas = document.createElement("canvas");
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = viewport.width * ratio;
-  canvas.height = viewport.height * ratio;
-  canvas.style.width = "100%";
-  canvas.style.height = "100%";
-  wrapper.append(canvas);
   const highlightLayer = document.createElement("div");
   highlightLayer.className = "highlight-layer";
   wrapper.append(highlightLayer);
-  const textLayer = document.createElement("div");
-  textLayer.className = "textLayer";
-  wrapper.append(textLayer);
   pages.append(wrapper);
+  pdfPageState.set(wrapper, { page, viewport, generation: 0, renderTask: null, rendered: false });
   sizePdfPage(wrapper);
   if (number === 1) updatePdfReaderLayout();
   pdfPageResizeObserver.observe(wrapper);
-  await page.render({ canvasContext: canvas.getContext("2d"), viewport, transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0] }).promise;
-  const textContent = await page.getTextContent();
-  const textLayerTask = new pdfjsLib.TextLayer({ textContentSource: textContent, container: textLayer, viewport });
-  await textLayerTask.render();
-  // TextLayer pushes exactly one span per text item, in item order, so the two
-  // arrays line up index for index.
-  textLayerTask.textDivs.forEach((span, index) => textItemForSpan.set(span, textContent.items[index]));
+  pdfPageRenderObserver.observe(wrapper);
+}
+
+async function renderPdfPage(wrapper) {
+  const state = pdfPageState.get(wrapper);
+  if (!state || state.rendered || state.renderTask) return;
+  const generation = ++state.generation;
+  const { page, viewport } = state;
+  const canvas = document.createElement("canvas");
+  // Large high-DPI magazine canvases are the dominant memory cost on mobile.
+  // The PDF is already rendered wider than most tablet viewports, so 1.5x
+  // remains crisp without allowing each page to consume tens of megabytes.
+  const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+  canvas.width = Math.ceil(viewport.width * ratio);
+  canvas.height = Math.ceil(viewport.height * ratio);
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
+  wrapper.prepend(canvas);
+  try {
+    state.renderTask = page.render({
+      canvasContext: canvas.getContext("2d"),
+      viewport,
+      transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0],
+    });
+    await state.renderTask.promise;
+    if (state.generation !== generation || !wrapper.isConnected) return;
+    const textContent = await page.getTextContent();
+    if (state.generation !== generation || !wrapper.isConnected) return;
+    const textLayer = document.createElement("div");
+    textLayer.className = "textLayer";
+    wrapper.append(textLayer);
+    const textLayerTask = new pdfjsLib.TextLayer({ textContentSource: textContent, container: textLayer, viewport });
+    await textLayerTask.render();
+    if (state.generation !== generation || !wrapper.isConnected) {
+      textLayer.remove();
+      return;
+    }
+    // TextLayer pushes exactly one span per text item, in item order, so the
+    // two arrays line up index for index.
+    textLayerTask.textDivs.forEach((span, index) => textItemForSpan.set(span, textContent.items[index]));
+    state.rendered = true;
+  } catch (error) {
+    if (error?.name !== "RenderingCancelledException") console.error("PDF page rendering failed", error);
+  } finally {
+    if (state.generation === generation) state.renderTask = null;
+  }
+}
+
+function releasePdfPage(wrapper) {
+  const state = pdfPageState.get(wrapper);
+  if (!state) return;
+  state.generation += 1;
+  state.renderTask?.cancel();
+  state.renderTask = null;
+  state.rendered = false;
+  wrapper.querySelector("canvas")?.remove();
+  wrapper.querySelector(".textLayer")?.remove();
+  state.page.cleanup();
+}
+
+function pdfText(textContent) {
   return textContent.items.map(item => `${item.str}${item.hasEOL ? "\n" : " "}`).join("");
 }
 
