@@ -461,8 +461,9 @@ async function submitConnectorAnswer(selectedAnswer) {
     $("#revision-feedback-title").textContent = data.correct
       ? t("revision.correct")
       : t("revision.incorrect", { answer: data.correct_answer });
-    renderConnectorSentence($("#revision-context"), card, true);
-    $("#revision-context").hidden = false;
+    renderConnectorSentence($("#revision-prompt-context"), card, true);
+    $("#revision-context").replaceChildren();
+    $("#revision-context").hidden = true;
     $("#revision-feedback-dictionary").hidden = true;
     $("#revision-feedback").hidden = false;
     currentCard = null;
