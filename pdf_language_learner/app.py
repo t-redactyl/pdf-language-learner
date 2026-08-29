@@ -11,7 +11,7 @@ import unicodedata
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -26,8 +26,9 @@ from wordfreq import zipf_frequency
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from ollama import Client
+from openai import OpenAI
 from pydantic import BaseModel, Field, field_validator
+from dotenv import load_dotenv
 
 from pdf_language_learner.revision import (
     RevisionCategory,
@@ -46,6 +47,16 @@ from pdf_language_learner.web_import import WebImportError, fetch_web_document
 logger = logging.getLogger("uvicorn.error").getChild("margin")
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_local_environment(path: Path = ROOT / ".env") -> None:
+    """Load local configuration without replacing exported environment values."""
+
+    load_dotenv(path, override=False)
+
+
+load_local_environment()
+
 STATIC = ROOT / "static"
 DATABASE_PATH = Path(
     os.getenv("MARGIN_DATABASE_PATH", ROOT / "data" / "margin.db")
@@ -466,7 +477,7 @@ OPEN_THESAURUS_METADATA_MARKERS = (
 OPEN_THESAURUS_NON_LEXICAL_MARKERS = ("spruch", "slogan", "beispielsatz")
 MODEL_CALL_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
-    thread_name_prefix="ollama-call",
+    thread_name_prefix="openai-call",
 )
 WORDNET_LEXICONS = {
     "german": "odenet:1.4",
@@ -519,114 +530,98 @@ def detect_document_language(text: str) -> str:
     return detected
 
 
-def ollama_host() -> str:
-    return os.getenv("OLLAMA_HOST", "http://localhost:11434")
-
-
 def translation_model() -> str:
-    return os.getenv("OLLAMA_MODEL", "translategemma:4b")
-
-
-def ollama_keep_alive() -> str | float:
-    value = os.getenv("OLLAMA_KEEP_ALIVE", "-1").strip()
-    try:
-        # Ollama interprets numeric values as seconds, including the special
-        # negative value that keeps a model loaded indefinitely. Duration
-        # strings such as "30m" or "2h" must retain their units.
-        return float(value)
-    except ValueError:
-        return value
+    return os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 
 
 @lru_cache(maxsize=1)
-def ollama_client() -> Client:
+def openai_client() -> OpenAI:
     """Return one process-wide client so HTTP connections can be reused."""
 
-    return Client(host=ollama_host())
+    return OpenAI(
+        timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30")),
+        max_retries=1,
+    )
 
 
-def _duration_ms(response: Any, field: str) -> float | None:
-    value = getattr(response, field, None)
-    if value is None and isinstance(response, dict):
-        value = response.get(field)
-    if not isinstance(value, (int, float)):
-        return None
-    # Ollama reports durations in nanoseconds.
-    return value / 1_000_000
-
-
-def _log_ollama_timing(operation: str, response: Any, elapsed_ms: float) -> None:
+def _log_openai_timing(operation: str, response: Any, elapsed_ms: float) -> None:
     metrics = [f"wall={elapsed_ms:.1f}ms"]
-    for field in (
-        "total_duration",
-        "load_duration",
-        "prompt_eval_duration",
-        "eval_duration",
-    ):
-        value = _duration_ms(response, field)
-        if value is not None:
-            metrics.append(f"{field.removesuffix('_duration')}={value:.1f}ms")
-    logger.info("Ollama %s completed: %s", operation, " ".join(metrics))
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        for field in ("input_tokens", "output_tokens", "total_tokens"):
+            value = getattr(usage, field, None)
+            if isinstance(value, int):
+                metrics.append(f"{field.removesuffix('_tokens')}={value}")
+    logger.info("OpenAI %s completed: %s", operation, " ".join(metrics))
 
 
-def timed_ollama_chat(client: Client, operation: str, **kwargs):
+def timed_openai_response(client: OpenAI, operation: str, **kwargs):
     started = time.perf_counter()
     try:
-        response = client.chat(**kwargs)
+        response = client.responses.create(**kwargs)
     except Exception:
         logger.warning(
-            "Ollama %s failed after %.1fms",
+            "OpenAI %s failed after %.1fms",
             operation,
             (time.perf_counter() - started) * 1_000,
         )
         raise
-    _log_ollama_timing(
+    _log_openai_timing(
         operation, response, (time.perf_counter() - started) * 1_000
     )
     return response
 
 
-def warm_translation_model() -> None:
-    """Load the translation model without making application startup depend on it."""
+def strict_json_schema(schema: dict) -> dict:
+    """Return the OpenAI strict-mode form of a Pydantic JSON schema."""
 
-    if os.getenv("OLLAMA_WARMUP", "true").casefold() in {"0", "false", "no", "off"}:
-        logger.info("Ollama background warm-up is disabled")
-        return
-    model = translation_model()
-    started = time.perf_counter()
-    try:
-        response = ollama_client().generate(
-            model=model,
-            prompt="",
-            keep_alive=ollama_keep_alive(),
-        )
-    except Exception as exc:
-        logger.warning(
-            "Ollama warm-up for %s failed after %.1fms: %s",
-            model,
-            (time.perf_counter() - started) * 1_000,
-            exc,
-        )
-        return
-    _log_ollama_timing(
-        f"warm-up ({model})",
-        response,
-        (time.perf_counter() - started) * 1_000,
+    strict_schema = json.loads(json.dumps(schema))
+
+    def make_strict(value: Any) -> None:
+        if isinstance(value, dict):
+            if value.get("type") == "object" or "properties" in value:
+                properties = value.get("properties", {})
+                value["additionalProperties"] = False
+                value["required"] = list(properties)
+            for child in value.values():
+                make_strict(child)
+        elif isinstance(value, list):
+            for child in value:
+                make_strict(child)
+
+    make_strict(strict_schema)
+    return strict_schema
+
+
+def structured_model_response(
+    operation: str,
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    schema: dict,
+    schema_name: str,
+    max_output_tokens: int,
+) -> str:
+    response = timed_openai_response(
+        openai_client(),
+        operation,
+        model=model,
+        input=messages,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": schema_name,
+                "strict": True,
+                "schema": strict_json_schema(schema),
+            }
+        },
+        reasoning={"effort": "none"},
+        max_output_tokens=max_output_tokens,
+        store=False,
     )
-
-
-def start_model_warmup() -> None:
-    threading.Thread(
-        target=warm_translation_model,
-        name="ollama-model-warmup",
-        daemon=True,
-    ).start()
-
-
-@asynccontextmanager
-async def application_lifespan(_app: FastAPI):
-    start_model_warmup()
-    yield
+    if not response.output_text:
+        raise ValueError("the model returned no structured output")
+    return response.output_text
 
 
 VERB_CLITICS = {
@@ -3157,7 +3152,7 @@ def connector_revision_cards(
     return cards, len(due_by_connector)
 
 
-app = FastAPI(title="PDF Language Learner", lifespan=application_lifespan)
+app = FastAPI(title="PDF Language Learner")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -3543,16 +3538,15 @@ def cached_verb_lemma_decision(
     source_language: str,
     context: str,
 ) -> VerbLemmaDecision:
-    response = timed_ollama_chat(
-        ollama_client(),
+    content = structured_model_response(
         "verb lemma classification",
         model=model,
         messages=verb_lemma_messages(analysis, source_language, context),
-        format=VerbLemmaDecision.model_json_schema(),
-        keep_alive=ollama_keep_alive(),
-        options={"temperature": 0, "num_ctx": 1024, "num_predict": 96},
+        schema=VerbLemmaDecision.model_json_schema(),
+        schema_name="verb_lemma_decision",
+        max_output_tokens=96,
     )
-    return VerbLemmaDecision.model_validate_json(response.message.content)
+    return VerbLemmaDecision.model_validate_json(content)
 
 
 @lru_cache(maxsize=RUNTIME_CACHE_SIZE)
@@ -3561,16 +3555,15 @@ def cached_source_noun_grammar(
     lemma: str,
     source_language: str,
 ) -> SourceNounGrammar:
-    response = timed_ollama_chat(
-        ollama_client(),
+    content = structured_model_response(
         "source noun grammar",
         model=model,
         messages=source_article_messages(lemma, source_language),
-        format=source_article_schema(source_language),
-        keep_alive=ollama_keep_alive(),
-        options={"temperature": 0, "num_ctx": 256, "num_predict": 32},
+        schema=source_article_schema(source_language),
+        schema_name="source_noun_grammar",
+        max_output_tokens=32,
     )
-    return SourceNounGrammar.model_validate_json(response.message.content)
+    return SourceNounGrammar.model_validate_json(content)
 
 
 @lru_cache(maxsize=RUNTIME_CACHE_SIZE)
@@ -3590,8 +3583,7 @@ def cached_model_translation(
         if is_noun
         else response_model.model_json_schema()
     )
-    response = timed_ollama_chat(
-        ollama_client(),
+    content = structured_model_response(
         "translation",
         model=model,
         messages=translation_messages(
@@ -3602,11 +3594,11 @@ def cached_model_translation(
             is_word=is_word,
             word_analysis=word_analysis,
         ),
-        format=response_schema,
-        keep_alive=ollama_keep_alive(),
-        options={"temperature": 0, "num_ctx": 1024, "num_predict": 128},
+        schema=response_schema,
+        schema_name="noun_translation" if is_noun else "translation",
+        max_output_tokens=128,
     )
-    return response_model.model_validate_json(response.message.content)
+    return response_model.model_validate_json(content)
 
 
 @lru_cache(maxsize=RUNTIME_CACHE_SIZE)
@@ -3618,8 +3610,7 @@ def cached_ranked_synonyms(
     part_of_speech: str,
     candidates: tuple[str, ...],
 ) -> tuple[str, ...]:
-    response = timed_ollama_chat(
-        ollama_client(),
+    content = structured_model_response(
         "synonym ranking",
         model=model,
         messages=synonym_ranking_messages(
@@ -3629,11 +3620,11 @@ def cached_ranked_synonyms(
             part_of_speech=part_of_speech,
             candidates=candidates,
         ),
-        format=RankedSynonyms.model_json_schema(),
-        keep_alive=ollama_keep_alive(),
-        options={"temperature": 0, "num_ctx": 1024, "num_predict": 64},
+        schema=RankedSynonyms.model_json_schema(),
+        schema_name="ranked_synonyms",
+        max_output_tokens=64,
     )
-    ranked = RankedSynonyms.model_validate_json(response.message.content).synonyms
+    ranked = RankedSynonyms.model_validate_json(content).synonyms
     allowed = {canonicalize(candidate): candidate for candidate in candidates}
     filtered: list[str] = []
     seen: set[str] = set()
@@ -3876,7 +3867,7 @@ def translate(request: TranslationRequest) -> TranslationResult:
             else:
                 # Retain the model fallback for languages whose Stanza model
                 # does not expose noun gender.
-                ollama_client()
+                openai_client()
                 grammar_future = MODEL_CALL_EXECUTOR.submit(
                     cached_source_noun_grammar,
                     model, word_analysis.lemma, request.source_language,
@@ -3984,5 +3975,5 @@ def translate(request: TranslationRequest) -> TranslationResult:
             synonym_future.cancel()
         raise HTTPException(
             status_code=502,
-            detail=f"Local translation model failed: {exc}",
+            detail=f"Translation service failed: {exc}",
         ) from exc

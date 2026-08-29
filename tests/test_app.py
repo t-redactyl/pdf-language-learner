@@ -1,5 +1,5 @@
 import json
-import logging
+import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
@@ -25,14 +25,15 @@ from pdf_language_learner.app import (
     cached_verb_lemma_decision,
     dictionary_synonym_candidates,
     frequency_ranked_synonym_candidates,
+    load_local_environment,
     multi_word_term_in_context,
-    ollama_client,
-    ollama_keep_alive,
+    openai_client,
     open_thesaurus_synonym_candidates,
     parse_open_thesaurus,
     part_of_speech_filtered_synonym_candidates,
     stanza_pipeline,
-    warm_translation_model,
+    strict_json_schema,
+    translation_model,
     wordnet_synonym_candidates,
 )
 
@@ -44,7 +45,7 @@ def clear_runtime_caches(monkeypatch):
     # Tests replace model and NLP dependencies with purpose-built fakes. Ensure
     # cached results and clients cannot leak from one test into the next.
     for cached_function in (
-        ollama_client,
+        openai_client,
         analyze_word_in_context,
         cached_verb_lemma_decision,
         cached_source_noun_grammar,
@@ -60,7 +61,7 @@ def clear_runtime_caches(monkeypatch):
     LOCAL_NOUN_GRAMMAR_CACHE.clear()
     yield
     for cached_function in (
-        ollama_client,
+        openai_client,
         analyze_word_in_context,
         cached_verb_lemma_decision,
         cached_source_noun_grammar,
@@ -77,6 +78,23 @@ def clear_runtime_caches(monkeypatch):
 
 def test_health() -> None:
     assert client.get("/health").json() == {"status": "ok"}
+
+
+def test_local_environment_file_is_loaded_without_overriding_exports(
+    monkeypatch, tmp_path
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "MARGIN_TEST_FROM_FILE=loaded\nMARGIN_TEST_EXPORTED=file-value\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MARGIN_TEST_FROM_FILE", raising=False)
+    monkeypatch.setenv("MARGIN_TEST_EXPORTED", "exported-value")
+
+    load_local_environment(env_file)
+
+    assert os.environ["MARGIN_TEST_FROM_FILE"] == "loaded"
+    assert os.environ["MARGIN_TEST_EXPORTED"] == "exported-value"
 
 
 def test_wordnet_database_allows_fastapi_worker_threads() -> None:
@@ -148,88 +166,62 @@ def test_spanish_interface_catalog_is_served() -> None:
     assert 'localStorage.setItem(STORAGE_KEY, locale)' in response.text
 
 
-def test_ollama_client_is_reused(monkeypatch) -> None:
+def test_openai_client_is_reused_and_configured(monkeypatch) -> None:
     created = []
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
             created.append(self)
 
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", "12.5")
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
-    assert ollama_client() is ollama_client()
+    assert openai_client() is openai_client()
     assert len(created) == 1
+    assert created[0].kwargs == {"timeout": 12.5, "max_retries": 1}
 
 
-@pytest.mark.parametrize(
-    ("configured", "expected"),
-    [("-1", -1.0), ("0", 0.0), ("90", 90.0), ("30m", "30m"), ("2h", "2h")],
-)
-def test_ollama_keep_alive_preserves_duration_semantics(
-    monkeypatch, configured, expected
-) -> None:
-    monkeypatch.setenv("OLLAMA_KEEP_ALIVE", configured)
+def test_translation_model_defaults_and_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    assert translation_model() == "gpt-5.6-luna"
 
-    assert ollama_keep_alive() == expected
+    monkeypatch.setenv("OPENAI_MODEL", "example-model")
+    assert translation_model() == "example-model"
 
 
-def test_translation_model_warmup_uses_configured_lifecycle(
-    monkeypatch, caplog
-) -> None:
-    calls = []
+def test_strict_json_schema_requires_all_object_properties() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "translation": {"type": "string"},
+            "detail": {
+                "type": "object",
+                "properties": {"gender": {"type": "string"}},
+            },
+        },
+    }
 
-    class FakeClient:
-        def generate(self, **kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(
-                total_duration=20_000_000,
-                load_duration=12_000_000,
-            )
+    strict = strict_json_schema(schema)
 
-    monkeypatch.setenv("OLLAMA_MODEL", "example:1b")
-    monkeypatch.setenv("OLLAMA_KEEP_ALIVE", "2h")
-    monkeypatch.setattr("pdf_language_learner.app.ollama_client", FakeClient)
-    caplog.set_level(logging.INFO, logger="uvicorn.error.margin")
-
-    warm_translation_model()
-
-    assert calls == [
-        {"model": "example:1b", "prompt": "", "keep_alive": "2h"}
-    ]
-    assert "Ollama warm-up (example:1b) completed" in caplog.text
-    assert "load=12.0ms" in caplog.text
-
-
-def test_translation_model_warmup_failure_is_non_fatal(monkeypatch, caplog) -> None:
-    class FakeClient:
-        def generate(self, **kwargs):
-            raise ConnectionError("Ollama is unavailable")
-
-    monkeypatch.setattr("pdf_language_learner.app.ollama_client", FakeClient)
-
-    warm_translation_model()
-
-    assert "Ollama warm-up" in caplog.text
-    assert "Ollama is unavailable" in caplog.text
+    assert strict["required"] == ["translation", "detail"]
+    assert strict["additionalProperties"] is False
+    assert strict["properties"]["detail"]["required"] == ["gender"]
+    assert strict["properties"]["detail"]["additionalProperties"] is False
 
 
 def test_identical_translation_requests_reuse_cached_model_result(monkeypatch) -> None:
     calls = []
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
+        def create(self, **kwargs):
             calls.append(kwargs)
-            return SimpleNamespace(
-                message=SimpleNamespace(
-                    content=json.dumps({"translation": "How are you?"})
-                )
-            )
+            return SimpleNamespace(output_text=json.dumps({"translation": "How are you?"}), usage=None)
 
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
     payload = {
         "text": "Wie geht es dir?",
         "source_language": "German",
@@ -243,6 +235,12 @@ def test_identical_translation_requests_reuse_cached_model_result(monkeypatch) -
     assert first.status_code == second.status_code == 200
     assert first.json() == second.json()
     assert len(calls) == 1
+    assert calls[0]["model"] == "gpt-5.6-luna"
+    assert calls[0]["reasoning"] == {"effort": "none"}
+    assert calls[0]["store"] is False
+    assert calls[0]["max_output_tokens"] == 128
+    assert calls[0]["text"]["format"]["type"] == "json_schema"
+    assert calls[0]["text"]["format"]["strict"] is True
     assert cached_model_translation.cache_info().hits == 1
 
 
@@ -264,10 +262,10 @@ def test_identical_translation_requests_reuse_cached_model_result(monkeypatch) -
 )
 def test_detect_language_uses_local_detector(monkeypatch, sample, expected) -> None:
     class UnexpectedClient:
-        def __init__(self, host: str) -> None:
-            raise AssertionError("language detection must not contact Ollama")
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError("language detection must not contact OpenAI")
 
-    monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", UnexpectedClient)
     response = client.post("/api/detect-language", json={"text": sample})
 
     assert response.status_code == 200
@@ -445,19 +443,19 @@ def test_translate_uses_contextual_pos_to_normalize_words(
         return analysis
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            required = set(kwargs["format"]["required"])
+        def create(self, **kwargs):
+            required = set(kwargs["text"]["format"]["schema"]["required"])
             if required == {"article", "gender"}:
-                prompt = kwargs["messages"][1]["content"]
+                prompt = kwargs["input"][1]["content"]
                 assert f"Normalized dictionary lemma: {analysis.lemma}" in prompt
                 assert "Selected token:" not in prompt
                 assert "Surrounding context:" not in prompt
                 if source.casefold() != analysis.lemma.casefold():
                     assert source not in prompt
-                assert kwargs["format"]["properties"]["article"][
+                assert kwargs["text"]["format"]["schema"]["properties"]["article"][
                     "enum"
                 ] == list({
                     "German": ("der", "die", "das"),
@@ -465,20 +463,18 @@ def test_translate_uses_contextual_pos_to_normalize_words(
                     "English": ("the",),
                     "Spanish": ("el", "la"),
                 }[source_language])
-                return SimpleNamespace(
-                    message=SimpleNamespace(content=json.dumps({
+                return SimpleNamespace(output_text=json.dumps({
                         "article": model_response["source_definite_article"],
                         "gender": model_response["source_gender"],
-                    }))
-                )
+                    }), usage=None)
             if analysis.pos == "NOUN":
-                assert set(kwargs["format"]["required"]) == {
+                assert set(kwargs["text"]["format"]["schema"]["required"]) == {
                     "target_lemma",
                     "target_definite_article",
                 }
             else:
-                assert kwargs["format"]["required"] == ["translation"]
-            prompt = kwargs["messages"][1]["content"]
+                assert kwargs["text"]["format"]["schema"]["required"] == ["translation"]
+            prompt = kwargs["input"][1]["content"]
             assert f"Part of speech (Universal POS): {analysis.pos}" in prompt
             assert f"Source lemma: {analysis.lemma}" in prompt
             assert (
@@ -488,9 +484,7 @@ def test_translate_uses_contextual_pos_to_normalize_words(
             response_data = dict(model_response)
             response_data.pop("source_definite_article", None)
             response_data.pop("source_gender", None)
-            return SimpleNamespace(
-                message=SimpleNamespace(content=json.dumps(response_data))
-            )
+            return SimpleNamespace(output_text=json.dumps(response_data), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context", fake_analysis
@@ -499,7 +493,7 @@ def test_translate_uses_contextual_pos_to_normalize_words(
         "pdf_language_learner.app.local_noun_grammars",
         lambda lemmas, language: tuple(None for _ in lemmas),
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
     response = client.post(
         "/api/translate",
         json={
@@ -528,19 +522,19 @@ def test_contextual_gender_removes_source_noun_model_lookup(monkeypatch) -> None
     calls = []
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
+        def create(self, **kwargs):
             calls.append(kwargs)
-            assert set(kwargs["format"]["required"]) == {
+            assert set(kwargs["text"]["format"]["schema"]["required"]) == {
                 "target_lemma",
                 "target_definite_article",
             }
-            return SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+            return SimpleNamespace(output_text=json.dumps({
                 "target_lemma": "house",
                 "target_definite_article": "the",
-            })))
+            }), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
@@ -548,7 +542,7 @@ def test_contextual_gender_removes_source_noun_model_lookup(monkeypatch) -> None
             "Häuser", "Haus", "NOUN", noun_gender="neutral"
         ),
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
     response = client.post(
         "/api/translate",
@@ -570,13 +564,13 @@ def test_translate_combines_translation_and_synonyms(monkeypatch) -> None:
     synonym_calls = []
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            return SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+        def create(self, **kwargs):
+            return SimpleNamespace(output_text=json.dumps({
                 "translation": "probably / presumably",
-            })))
+            }), usage=None)
 
     analysis = WordAnalysis("vermutlich", "vermutlich", "ADJ")
     monkeypatch.setattr(
@@ -596,7 +590,7 @@ def test_translate_combines_translation_and_synonyms(monkeypatch) -> None:
     monkeypatch.setattr(
         "pdf_language_learner.app.contextual_synonyms", fake_synonyms
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
     response = client.post(
         "/api/translate",
@@ -623,7 +617,7 @@ def test_translate_combines_translation_and_synonyms(monkeypatch) -> None:
     }
     assert synonym_calls == [
         (
-            "translategemma:4b",
+            "gpt-5.6-luna",
             analysis,
             "German",
             "Das ist vermutlich richtig.",
@@ -633,19 +627,17 @@ def test_translate_combines_translation_and_synonyms(monkeypatch) -> None:
 
 def test_local_target_grammar_overrides_model_article(monkeypatch) -> None:
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            required = set(kwargs["format"]["required"])
+        def create(self, **kwargs):
+            required = set(kwargs["text"]["format"]["schema"]["required"])
             data = (
                 {"article": "the", "gender": "none"}
                 if required == {"article", "gender"}
                 else {"target_lemma": "agua", "target_definite_article": "la"}
             )
-            return SimpleNamespace(
-                message=SimpleNamespace(content=json.dumps(data))
-            )
+            return SimpleNamespace(output_text=json.dumps(data), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
@@ -657,7 +649,7 @@ def test_local_target_grammar_overrides_model_article(monkeypatch) -> None:
             SourceNounGrammar(article="el", gender="feminine"),
         ),
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
     response = client.post(
         "/api/translate",
@@ -677,32 +669,30 @@ def test_source_noun_grammar_is_cached_across_target_languages(monkeypatch) -> N
     translation_calls = 0
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
+        def create(self, **kwargs):
             nonlocal grammar_calls, translation_calls
-            required = set(kwargs["format"]["required"])
+            required = set(kwargs["text"]["format"]["schema"]["required"])
             if required == {"article", "gender"}:
                 grammar_calls += 1
                 data = {"article": "das", "gender": "neutral"}
             else:
                 translation_calls += 1
-                prompt = kwargs["messages"][1]["content"]
+                prompt = kwargs["input"][1]["content"]
                 data = (
                     {"target_lemma": "house", "target_definite_article": "the"}
                     if "Target language: English" in prompt
                     else {"target_lemma": "maison", "target_definite_article": "la"}
                 )
-            return SimpleNamespace(
-                message=SimpleNamespace(content=json.dumps(data))
-            )
+            return SimpleNamespace(output_text=json.dumps(data), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
         lambda *args: WordAnalysis("Häuser", "Haus", "NOUN"),
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
     payload = {
         "text": "Häuser",
         "source_language": "German",
@@ -730,27 +720,25 @@ def test_noun_grammar_and_translation_requests_run_concurrently(monkeypatch) -> 
     calls = []
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
+        def create(self, **kwargs):
             calls.append(kwargs)
             rendezvous.wait(timeout=2)
-            required = set(kwargs["format"]["required"])
+            required = set(kwargs["text"]["format"]["schema"]["required"])
             data = (
                 {"article": "das", "gender": "neutral"}
                 if required == {"article", "gender"}
                 else {"target_lemma": "house", "target_definite_article": "the"}
             )
-            return SimpleNamespace(
-                message=SimpleNamespace(content=json.dumps(data))
-            )
+            return SimpleNamespace(output_text=json.dumps(data), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
         lambda *args: WordAnalysis("Häuser", "Haus", "NOUN"),
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
     response = client.post(
         "/api/translate",
@@ -831,13 +819,13 @@ def test_translate_semantically_decides_which_clitics_enter_verb_lemma(
     prompts = []
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            prompt = kwargs["messages"][1]["content"]
+        def create(self, **kwargs):
+            prompt = kwargs["input"][1]["content"]
             prompts.append(prompt)
-            required = set(kwargs["format"]["required"])
+            required = set(kwargs["text"]["format"]["schema"]["required"])
             if required == {"dictionary_lemma"}:
                 assert f"Base verb lemma: {analysis.lemma}" in prompt
                 assert (
@@ -845,22 +833,16 @@ def test_translate_semantically_decides_which_clitics_enter_verb_lemma(
                     f"{analysis.associated_clitics[0]}" in prompt
                 )
                 assert f"Full sentence context: {context}" in prompt
-                return SimpleNamespace(
-                    message=SimpleNamespace(content=json.dumps(decision))
-                )
+                return SimpleNamespace(output_text=json.dumps(decision), usage=None)
             assert required == {"translation"}
             assert f"Source lemma: {normalized_source}" in prompt
-            return SimpleNamespace(
-                message=SimpleNamespace(
-                    content=json.dumps({"translation": model_translation})
-                )
-            )
+            return SimpleNamespace(output_text=json.dumps({"translation": model_translation}), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
         lambda *args: analysis,
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
     response = client.post(
         "/api/translate",
@@ -892,24 +874,20 @@ def test_translate_uses_confident_reflexive_lemma_without_classifier(
     )
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            assert kwargs["format"]["required"] == ["translation"]
-            prompt = kwargs["messages"][1]["content"]
+        def create(self, **kwargs):
+            assert kwargs["text"]["format"]["schema"]["required"] == ["translation"]
+            prompt = kwargs["input"][1]["content"]
             assert "Source lemma: prepararse" in prompt
-            return SimpleNamespace(
-                message=SimpleNamespace(
-                    content=json.dumps({"translation": "get ready"})
-                )
-            )
+            return SimpleNamespace(output_text=json.dumps({"translation": "get ready"}), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
         lambda *args: analysis,
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
     response = client.post(
         "/api/translate",
@@ -940,24 +918,20 @@ def test_translate_uses_confident_german_sich_lemma_without_classifier(
     )
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            assert kwargs["format"]["required"] == ["translation"]
-            prompt = kwargs["messages"][1]["content"]
+        def create(self, **kwargs):
+            assert kwargs["text"]["format"]["schema"]["required"] == ["translation"]
+            prompt = kwargs["input"][1]["content"]
             assert "Source lemma: sich erinnern" in prompt
-            return SimpleNamespace(
-                message=SimpleNamespace(
-                    content=json.dumps({"translation": "remember"})
-                )
-            )
+            return SimpleNamespace(output_text=json.dumps({"translation": "remember"}), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
         lambda *args: analysis,
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
     response = client.post(
         "/api/translate",
@@ -982,11 +956,11 @@ def test_translate_retries_without_context_when_model_translates_excerpt(
     prompts = []
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            prompts.append(kwargs["messages"][1]["content"])
+        def create(self, **kwargs):
+            prompts.append(kwargs["input"][1]["content"])
             translation = (
                 "pleasant, compared to visiting Charlotte and her awful husband, "
                 "while her cold fingers were forgotten as she danced along the path, "
@@ -995,17 +969,13 @@ def test_translate_retries_without_context_when_model_translates_excerpt(
                 if len(prompts) == 1
                 else "do"
             )
-            return SimpleNamespace(
-                message=SimpleNamespace(
-                    content=json.dumps({"translation": translation})
-                )
-            )
+            return SimpleNamespace(output_text=json.dumps({"translation": translation}), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
         lambda *args: WordAnalysis("täte", "tun", "VERB"),
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
     response = client.post(
         "/api/translate",
         json={
@@ -1028,20 +998,16 @@ def test_translate_phrase_without_normalizing_or_word_validation(monkeypatch) ->
     translated_phrase = "went home after the party when everybody was already tired"
 
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            prompt = kwargs["messages"][1]["content"]
+        def create(self, **kwargs):
+            prompt = kwargs["input"][1]["content"]
             assert f"Phrase to translate: {phrase}" in prompt
             assert "Dictionary form to translate" not in prompt
-            return SimpleNamespace(
-                message=SimpleNamespace(
-                    content=json.dumps({"translation": translated_phrase})
-                )
-            )
+            return SimpleNamespace(output_text=json.dumps({"translation": translated_phrase}), usage=None)
 
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
         lambda *args: pytest.fail("phrases must not invoke POS analysis"),
@@ -1149,19 +1115,15 @@ def test_translate_expands_selected_word_to_known_expression(
     monkeypatch, text, context, offset, resolved_term, translation
 ) -> None:
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            prompt = kwargs["messages"][1]["content"]
+        def create(self, **kwargs):
+            prompt = kwargs["input"][1]["content"]
             assert f"Phrase to translate: {resolved_term}" in prompt
-            return SimpleNamespace(
-                message=SimpleNamespace(
-                    content=json.dumps({"translation": translation})
-                )
-            )
+            return SimpleNamespace(output_text=json.dumps({"translation": translation}), usage=None)
 
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
         lambda *args: pytest.fail(
@@ -1839,21 +1801,21 @@ def test_synonyms_are_ranked_by_context_and_restricted_to_dictionaries(
     monkeypatch,
 ) -> None:
     class FakeClient:
-        def __init__(self, host: str) -> None:
-            self.host = host
+        def __init__(self, **kwargs) -> None:
+            self.responses = self
 
-        def chat(self, **kwargs):
-            assert kwargs["format"]["required"] == ["synonyms"]
-            assert kwargs["options"]["num_predict"] == 64
-            assert "useful close synonyms" in kwargs["messages"][0]["content"]
-            prompt = kwargs["messages"][1]["content"]
+        def create(self, **kwargs):
+            assert kwargs["text"]["format"]["schema"]["required"] == ["synonyms"]
+            assert kwargs["max_output_tokens"] == 64
+            assert "useful close synonyms" in kwargs["input"][0]["content"]
+            prompt = kwargs["input"][1]["content"]
             assert "Source lemma: schnell" in prompt
             assert "Das Auto ist sehr schnell." in prompt
             assert "flink, rasch" in prompt
             assert "eilig" not in prompt
-            return SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+            return SimpleNamespace(output_text=json.dumps({
                 "synonyms": ["rasch", "erfunden", "RASCH", "flink"]
-            })))
+            }), usage=None)
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
@@ -1875,7 +1837,7 @@ def test_synonyms_are_ranked_by_context_and_restricted_to_dictionaries(
         "pdf_language_learner.app.zipf_frequency",
         lambda word, language: frequencies[word],
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", FakeClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
     response = client.post(
         "/api/synonyms",
@@ -1899,10 +1861,10 @@ def test_synonyms_are_ranked_by_context_and_restricted_to_dictionaries(
     }
 
 
-def test_synonyms_skip_ollama_when_wordnet_has_no_candidates(monkeypatch) -> None:
+def test_synonyms_skip_openai_when_wordnet_has_no_candidates(monkeypatch) -> None:
     class UnexpectedClient:
-        def __init__(self, host: str) -> None:
-            raise AssertionError("Ollama should not run without WordNet candidates")
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError("OpenAI should not run without WordNet candidates")
 
     monkeypatch.setattr(
         "pdf_language_learner.app.analyze_word_in_context",
@@ -1914,7 +1876,7 @@ def test_synonyms_skip_ollama_when_wordnet_has_no_candidates(monkeypatch) -> Non
         "pdf_language_learner.app.wordnet_synonym_candidates",
         lambda *args: SynonymCandidateSet(values=(), sense_count=0),
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", UnexpectedClient)
 
     response = client.post(
         "/api/synonyms",
@@ -1927,7 +1889,7 @@ def test_synonyms_skip_ollama_when_wordnet_has_no_candidates(monkeypatch) -> Non
 
 def test_noun_synonyms_include_local_articles_and_gender(monkeypatch) -> None:
     class UnexpectedClient:
-        def __init__(self, host: str) -> None:
+        def __init__(self, **kwargs) -> None:
             raise AssertionError("A single WordNet sense should stay model-free")
 
     monkeypatch.setattr(
@@ -1948,7 +1910,7 @@ def test_noun_synonyms_include_local_articles_and_gender(monkeypatch) -> None:
             SourceNounGrammar(article="das", gender="neutral") for _ in lemmas
         ),
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", UnexpectedClient)
 
     response = client.post(
         "/api/synonyms",
@@ -1967,9 +1929,9 @@ def test_noun_synonyms_include_local_articles_and_gender(monkeypatch) -> None:
     }
 
 
-def test_synonyms_skip_ollama_for_a_single_wordnet_sense(monkeypatch) -> None:
+def test_synonyms_skip_openai_for_a_single_wordnet_sense(monkeypatch) -> None:
     class UnexpectedClient:
-        def __init__(self, host: str) -> None:
+        def __init__(self, **kwargs) -> None:
             raise AssertionError("One unambiguous sense does not need ranking")
 
     monkeypatch.setattr(
@@ -1983,7 +1945,7 @@ def test_synonyms_skip_ollama_for_a_single_wordnet_sense(monkeypatch) -> None:
             sense_count=1,
         ),
     )
-    monkeypatch.setattr("pdf_language_learner.app.Client", UnexpectedClient)
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", UnexpectedClient)
 
     response = client.post(
         "/api/synonyms",
