@@ -25,6 +25,7 @@ const characterOffsetsForSpan = new WeakMap();
 const measurementContext = document.createElement("canvas").getContext("2d");
 let selectionDragStart = null;
 let translations = [];
+let displayedTranslation = null;
 let activePdf = null;
 const pdfPageState = new WeakMap();
 const pdfPageRenderObserver = new IntersectionObserver(entries => {
@@ -169,6 +170,7 @@ document.addEventListener("margin:locale-changed", () => {
   const shownSource = $("#result").hidden ? "" : $("#detected-language").dataset.language;
   if (shownSource) $("#detected-language").textContent = t("translation.source", { language: languageName(shownSource) });
   setTranslationPanelCollapsed($(".translation-panel").classList.contains("is-collapsed"));
+  renderPanelVocabularyToggle();
 });
 
 function localizeLanguageOptions() {
@@ -237,7 +239,9 @@ function prepareDocument(documentKey) {
   translations = readStoredTranslations();
   renderTranslationHistory();
   savedVocabulary = [];
+  displayedTranslation = null;
   renderSavedVocabulary();
+  renderPanelVocabularyToggle();
   selectedText = "";
   selectedContext = "";
   selectedContextOffset = null;
@@ -485,6 +489,8 @@ function showSelection({ text, rectangles, context = "", contextOffset = null })
   selectedText = text;
   selectedContext = context;
   selectedContextOffset = contextOffset;
+  displayedTranslation = null;
+  renderPanelVocabularyToggle();
   $("#selected-text").textContent = text;
   $("#selection-hint").hidden = true;
   $("#translation-content").hidden = false;
@@ -1049,7 +1055,7 @@ $("#translate-button").addEventListener("click", async () => {
     showSynonymResult(data.synonyms || [], Array.isArray(data.synonyms));
     $("#result").hidden = false;
     showCurrentHighlight(pendingHighlight);
-    saveTranslation({
+    displayedTranslation = {
       source: data.normalized_source,
       originalSource: data.original_source || selectedText,
       normalizedSource: data.normalized_source,
@@ -1064,7 +1070,9 @@ $("#translate-button").addEventListener("click", async () => {
       isWord,
       nounGender,
       synonyms: data.synonyms || null,
-    });
+    };
+    saveTranslation(displayedTranslation);
+    renderPanelVocabularyToggle();
   } catch (error) { $("#error").textContent = error.message; }
   finally { button.textContent = t("translation.button"); renderSourceLanguageState(); }
 });
@@ -1171,6 +1179,7 @@ function vocabularyApiPayload(translation) {
 function vocabularyFromApi(item) {
   return {
     id: item.id,
+    isWord: true,
     schemaVersion: item.schema_version,
     source: item.normalized_source,
     originalSource: item.original_source,
@@ -1204,6 +1213,7 @@ async function loadSavedVocabulary(language = effectiveSourceLanguage()) {
     savedVocabulary = [];
     renderTranslationHistory();
     renderSavedVocabulary();
+    renderPanelVocabularyToggle();
     return;
   }
   const legacyVocabulary = readLegacySavedVocabulary();
@@ -1225,6 +1235,7 @@ async function loadSavedVocabulary(language = effectiveSourceLanguage()) {
   savedVocabulary = data.map(vocabularyFromApi);
   renderTranslationHistory();
   renderSavedVocabulary();
+  renderPanelVocabularyToggle();
 }
 
 async function toggleSavedVocabulary(translation) {
@@ -1241,6 +1252,25 @@ async function toggleSavedVocabulary(translation) {
     await requestVocabulary(translation);
   }
   await loadSavedVocabulary(effectiveSourceLanguage());
+}
+
+function renderPanelVocabularyToggle() {
+  const button = $("#translation-vocabulary-toggle");
+  if (!button) return;
+  const translation = displayedTranslation;
+  const isWord = translation && (translation.isWord
+    ?? String(translation.originalSource || translation.source || "").trim().split(/\s+/).length === 1);
+  button.hidden = !isWord;
+  if (!isWord) return;
+  const word = translation.normalizedSource || translation.source;
+  const isSaved = savedVocabularyIndex(translation) >= 0;
+  button.setAttribute("aria-pressed", String(isSaved));
+  button.setAttribute(
+    "aria-label",
+    t(isSaved ? "vocabulary.removeAria" : "vocabulary.saveAria", { word }),
+  );
+  button.title = t(isSaved ? "vocabulary.removeTitle" : "vocabulary.saveTitle");
+  $(".translation-vocabulary-icon").textContent = isSaved ? "★" : "☆";
 }
 
 function createTranslationListItem(translation, index, collection) {
@@ -1310,6 +1340,8 @@ document.addEventListener("margin:vocabulary-removed", event => {
   if (!itemId) return;
   savedVocabulary = savedVocabulary.filter(entry => entry.id !== itemId);
   renderSavedVocabulary();
+  renderTranslationHistory();
+  renderPanelVocabularyToggle();
 });
 
 function translationFromControl(control) {
@@ -1325,6 +1357,7 @@ function showTranslation(translation) {
   selectedContext = translation.context || "";
   selectedContextOffset = translation.contextOffset ?? null;
   pendingHighlight = [];
+  displayedTranslation = translation;
   $("#selected-text").textContent = translation.originalSource || source;
   $("#target-language").value = translation.targetLanguage;
   $("#detected-language").dataset.language = sourceLanguage;
@@ -1338,7 +1371,23 @@ function showTranslation(translation) {
   $("#translation-content").hidden = false;
   $("#result").hidden = false;
   $("#error").textContent = "";
+  renderPanelVocabularyToggle();
 }
+
+$("#translation-vocabulary-toggle")?.addEventListener("click", async event => {
+  const button = event.currentTarget;
+  if (!displayedTranslation) return;
+  button.disabled = true;
+  $("#error").textContent = "";
+  try {
+    await toggleSavedVocabulary(displayedTranslation);
+  } catch (error) {
+    $("#error").textContent = error.message;
+  } finally {
+    button.disabled = false;
+    renderPanelVocabularyToggle();
+  }
+});
 
 async function handleTranslationListClick(event) {
   const saveButton = event.target.closest(".vocabulary-toggle");

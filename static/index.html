@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=32">
+  <link rel="stylesheet" href="/static/styles.css?v=35">
 </head>
 <body>
   <header class="topbar">
@@ -175,12 +175,17 @@
       <aside class="translation-panel">
         <div class="translation-panel-heading">
           <p id="lookup-title" class="eyebrow" data-i18n="translation.title">Translation</p>
-          <button id="toggle-translation-panel" class="translation-panel-toggle" type="button" aria-controls="translation-panel-body" aria-expanded="true" aria-label="Collapse translation panel" title="Collapse translation panel">
-            <span class="visually-hidden" data-i18n="translation.collapse">Collapse translation panel</span>
-            <svg class="translation-panel-toggle-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
-              <path d="M4 7l6 6 6-6"></path>
-            </svg>
-          </button>
+          <div class="translation-panel-heading-actions">
+            <button id="translation-vocabulary-toggle" class="translation-vocabulary-toggle" type="button" aria-pressed="false" hidden>
+              <span class="translation-vocabulary-icon" aria-hidden="true">☆</span>
+            </button>
+            <button id="toggle-translation-panel" class="translation-panel-toggle" type="button" aria-controls="translation-panel-body" aria-expanded="true" aria-label="Collapse translation panel" title="Collapse translation panel">
+              <span class="visually-hidden" data-i18n="translation.collapse">Collapse translation panel</span>
+              <svg class="translation-panel-toggle-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                <path d="M4 7l6 6 6-6"></path>
+              </svg>
+            </button>
+          </div>
         </div>
         <div id="translation-panel-body" class="translation-panel-body">
           <p id="selection-hint" data-i18n="translation.hint">Select text in the document to begin.</p>
@@ -228,6 +233,6 @@
     </section>
   </main>
   <script type="module" src="/static/revision.js?v=23"></script>
-  <script type="module" src="/static/app.js?v=35"></script>
+  <script type="module" src="/static/app.js?v=37"></script>
 </body>
 </html>

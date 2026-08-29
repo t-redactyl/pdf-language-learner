@@ -121,9 +121,10 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=32' in response.text
+    assert '/static/styles.css?v=35' in response.text
     assert '/static/revision.js?v=23' in response.text
-    assert '/static/app.js?v=35' in response.text
+    assert '/static/app.js?v=37' in response.text
+    assert 'id="translation-vocabulary-toggle"' in response.text
 
 
 def test_favicon_is_served() -> None:
@@ -182,6 +183,19 @@ def test_mobile_translation_panel_can_collapse_to_a_reading_handle() -> None:
     assert '.translation-panel-collapsed .pages { padding-bottom:68px; }' in styles
     assert 'viewBox="0 0 20 20"' in client.get("/").text
     assert '.translation-panel.is-collapsed .translation-panel-toggle-icon { transform:rotate(180deg); }' in styles
+
+
+def test_mobile_translation_panel_can_toggle_saved_vocabulary() -> None:
+    script = client.get("/static/app.js").text
+    styles = client.get("/static/styles.css").text
+
+    assert '$("#translation-vocabulary-toggle")?.addEventListener("click"' in script
+    assert "await toggleSavedVocabulary(displayedTranslation)" in script
+    assert "button.hidden = !isWord" in script
+    assert ".translation-vocabulary-toggle { display:none; }" in styles
+    assert 'class="translation-panel-heading-actions"' in client.get("/").text
+    assert ".translation-panel .translation-vocabulary-toggle { display:grid; width:26px; height:26px;" in styles
+    assert ".translation-vocabulary-icon { color:inherit; font-size:20px;" in styles
 
 
 def test_pdf_zoom_scales_only_the_document_and_keeps_highlights_relative() -> None:
