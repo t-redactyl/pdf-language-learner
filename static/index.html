@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=37">
+  <link rel="stylesheet" href="/static/styles.css?v=38">
 </head>
 <body>
   <header class="topbar">
@@ -127,16 +127,33 @@
       <p class="intro" data-i18n="hero.intro">Open a PDF or import an audio article with a transcript. Select any word or phrase and translate it without leaving the page.</p>
       <label class="primary-button"><span data-i18n="pdf.choose">Choose a PDF</span><input type="file" accept="application/pdf"></label>
       <span class="source-divider" data-i18n="common.or">or</span>
-      <form class="web-url-form empty-url-form">
+        <form class="web-url-form empty-url-form">
         <label for="empty-web-url" data-i18n="url.emptyLabel">Article or transcript URL</label>
         <div class="url-controls">
           <input id="empty-web-url" name="url" type="url" inputmode="url" placeholder="https://…" required>
           <button class="secondary-button url-clear-button" type="button" data-i18n="common.clear">Clear</button>
           <button class="primary-button" type="submit" data-i18n="url.import">Import page</button>
         </div>
-        <p class="web-import-status error" role="alert"></p>
-      </form>
-    </section>
+          <p class="web-import-status error" role="alert"></p>
+        </form>
+        <section id="suggestions" class="suggestions" aria-labelledby="suggestions-title">
+          <div class="suggestions-heading">
+            <p class="eyebrow" data-i18n="suggestions.eyebrow">Keep learning</p>
+            <h2 id="suggestions-title" data-i18n="suggestions.title">Suggested next</h2>
+          </div>
+          <p id="suggestions-status" class="suggestions-status" role="status" data-i18n="suggestions.loading">Finding the next episodes…</p>
+          <div id="suggestions-groups" class="suggestions-groups" hidden>
+            <section id="suggestions-german" class="suggestion-group" aria-labelledby="suggestions-german-title">
+              <h3 id="suggestions-german-title" data-i18n="language.german">German</h3>
+              <div class="suggestion-list"></div>
+            </section>
+            <section id="suggestions-spanish" class="suggestion-group" aria-labelledby="suggestions-spanish-title">
+              <h3 id="suggestions-spanish-title" data-i18n="language.spanish">Spanish</h3>
+              <div class="suggestion-list"></div>
+            </section>
+          </div>
+        </section>
+      </section>
     <section id="reader" class="reader" hidden>
       <button id="toggle-reader-meta" class="reader-meta-toggle" type="button" aria-controls="reader-meta" aria-expanded="false" aria-label="Saved &amp; history" title="Saved &amp; history" data-i18n-aria-label="library.open" data-i18n-title="library.open"><span class="visually-hidden" data-i18n="library.open">Saved &amp; history</span></button>
       <button id="reader-meta-backdrop" class="reader-meta-backdrop" type="button" aria-label="Close library" data-i18n-aria-label="library.close" hidden></button>
@@ -234,6 +251,6 @@
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
   <script type="module" src="/static/revision.js?v=25"></script>
-  <script type="module" src="/static/app.js?v=39"></script>
+  <script type="module" src="/static/app.js?v=40"></script>
 </body>
 </html>

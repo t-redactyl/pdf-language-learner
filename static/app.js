@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=5";
-import { initI18n, languageName, t } from "./i18n.js?v=13";
+import { initI18n, languageName, t } from "./i18n.js?v=14";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -48,6 +48,7 @@ const pdfPageResizeObserver = new ResizeObserver(entries => {
 const pdfColumnResizeObserver = new ResizeObserver(() => applyPdfZoom());
 pdfColumnResizeObserver.observe(pagesScroll);
 let readerLayoutFrame = null;
+let currentSuggestions = [];
 
 function sizePdfPage(page) {
   const renderWidth = Number(page.dataset.renderWidth);
@@ -172,6 +173,7 @@ document.addEventListener("margin:locale-changed", () => {
   if (shownSource) $("#detected-language").textContent = t("translation.source", { language: languageName(shownSource) });
   setTranslationPanelCollapsed($(".translation-panel").classList.contains("is-collapsed"));
   renderPanelVocabularyToggle();
+  renderSuggestions(currentSuggestions);
 });
 
 function localizeLanguageOptions() {
@@ -262,6 +264,18 @@ function prepareDocument(documentKey) {
   $("#error").textContent = "";
 }
 
+async function importWebUrl(url) {
+  const response = await fetch("/api/import-web", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || t("error.import", { status: response.status }));
+  openWebDocument(data);
+  document.querySelectorAll(".web-url-form input[name=url]").forEach(input => { input.value = data.url; });
+}
+
 document.querySelectorAll(".web-url-form").forEach(form => form.addEventListener("submit", async event => {
   event.preventDefault();
   const input = form.elements.url;
@@ -272,15 +286,7 @@ document.querySelectorAll(".web-url-form").forEach(form => form.addEventListener
   button.textContent = t("web.importing");
   setWebImportStatus("");
   try {
-    const response = await fetch("/api/import-web", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || t("error.import", { status: response.status }));
-    openWebDocument(data);
-    document.querySelectorAll(".web-url-form input[name=url]").forEach(other => { other.value = data.url; });
+    await importWebUrl(url);
   } catch (error) {
     setWebImportStatus(error.message);
   } finally {
@@ -288,6 +294,79 @@ document.querySelectorAll(".web-url-form").forEach(form => form.addEventListener
     button.textContent = t(form.classList.contains("topbar-url-form") ? "url.open" : "url.import");
   }
 }));
+
+function renderSuggestions(suggestions) {
+  const groups = $("#suggestions-groups");
+  const status = $("#suggestions-status");
+  if (!groups || !status) return;
+  const groupDefinitions = [
+    ["German", $("#suggestions-german")],
+    ["Spanish", $("#suggestions-spanish")],
+  ];
+  let shown = 0;
+  groupDefinitions.forEach(([language, group]) => {
+    const list = group.querySelector(".suggestion-list");
+    list.replaceChildren();
+    const items = suggestions.filter(item => item.language === language);
+    group.hidden = items.length === 0;
+    shown += items.length;
+    items.forEach(item => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "suggestion-card";
+      button.dataset.url = item.url;
+      const meta = document.createElement("span");
+      meta.className = "suggestion-meta";
+      const series = document.createElement("span");
+      series.textContent = item.series;
+      const cefr = document.createElement("span");
+      cefr.className = "cefr-badge";
+      cefr.textContent = item.cefr;
+      const title = document.createElement("span");
+      title.className = "suggestion-title";
+      title.textContent = item.title;
+      meta.append(series, cefr);
+      button.append(meta, title);
+      list.append(button);
+    });
+  });
+  groups.hidden = shown === 0;
+  status.hidden = shown > 0;
+  if (shown === 0) status.textContent = t("suggestions.empty");
+}
+
+async function loadSuggestions() {
+  const status = $("#suggestions-status");
+  if (!status) return;
+  status.hidden = false;
+  status.textContent = t("suggestions.loading");
+  try {
+    const response = await fetch("/api/suggestions");
+    if (!response.ok) throw new Error();
+    currentSuggestions = await response.json();
+    renderSuggestions(currentSuggestions);
+  } catch {
+    currentSuggestions = [];
+    $("#suggestions-groups").hidden = true;
+    status.textContent = t("suggestions.unavailable");
+  }
+}
+
+$("#suggestions-groups")?.addEventListener("click", async event => {
+  const button = event.target.closest(".suggestion-card");
+  if (!button) return;
+  button.disabled = true;
+  setWebImportStatus("");
+  try {
+    await importWebUrl(button.dataset.url);
+  } catch (error) {
+    setWebImportStatus(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+loadSuggestions();
 
 document.querySelectorAll(".url-clear-button").forEach(button => button.addEventListener("click", () => {
   document.querySelectorAll(".web-url-form input[name=url]").forEach(input => { input.value = ""; });
@@ -328,6 +407,7 @@ function openWebDocument(data) {
     video.preload = "metadata";
     video.playsInline = true;
     if (attachHlsVideo(video, data.video_url)) {
+      trackListeningCompletion(video, data);
       header.append(video);
     } else {
       header.append(mediaFallbackNotice(source, "web.noVideoPlayback", "web.watchOriginal"));
@@ -338,6 +418,7 @@ function openWebDocument(data) {
     audio.controls = true;
     audio.preload = "metadata";
     audio.src = data.audio_url;
+    trackListeningCompletion(audio, data);
     header.append(audio);
   } else {
     header.append(mediaFallbackNotice(source, "web.noDirectAudio", "web.listenOriginal"));
@@ -371,6 +452,21 @@ function openWebDocument(data) {
   }
   renderSourceLanguageState();
   if (!detectedSourceLanguage) detectDocumentLanguage();
+}
+
+function trackListeningCompletion(media, data) {
+  media.addEventListener("ended", async () => {
+    try {
+      const response = await fetch("/api/listening-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: data.url, title: data.title }),
+      });
+      if (response.ok) await loadSuggestions();
+    } catch {
+      // Completion tracking is non-blocking; replaying can retry the request.
+    }
+  }, { once: true });
 }
 
 function attachHlsVideo(video, url) {

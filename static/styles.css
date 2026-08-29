@@ -18,7 +18,7 @@ button,select,input { font:inherit; }
 .topbar-url-form .url-clear-button:hover,.topbar-url-form .url-clear-button:focus-visible { color:var(--ink); background:white; }
 .secondary-button { padding:10px 16px; border:1px solid var(--ink); border-radius:2px; background:transparent; color:var(--ink); cursor:pointer; }
 input[type=file] { display:none; }
-.empty-state { max-width:920px; margin:15vh auto; padding:0 24px; text-align:center; }
+.empty-state { max-width:920px; margin:10vh auto; padding:0 24px 64px; text-align:center; }
 .empty-mark { margin:auto auto 28px; width:52px; height:52px; display:grid; place-items:center; border:1px solid var(--ink); border-radius:50%; font:italic 27px Georgia,serif; }
 .eyebrow { text-transform:uppercase; letter-spacing:.16em; font-size:11px; font-weight:700; color:var(--sage); }
 h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; letter-spacing:-.045em; }
@@ -31,6 +31,21 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .url-controls input { min-width:0; flex:1; padding:10px 12px; border:1px solid var(--line); background:white; }
 .url-controls button { flex:none; }
 .web-import-status { min-height:20px; margin:7px 0 0; }
+.suggestions { margin:64px auto 0; padding-top:32px; border-top:1px solid var(--line); text-align:left; }
+.suggestions-heading { text-align:center; }
+.suggestions-heading .eyebrow { margin:0 0 6px; }
+.suggestions-heading h2 { margin:0; font:500 34px/1.1 Georgia,serif; letter-spacing:-.025em; }
+.suggestions-status { margin:24px 0 0; color:#777c74; text-align:center; }
+.suggestions-groups { display:grid; grid-template-columns:1fr 1fr; gap:34px; margin-top:30px; }
+.suggestion-group h3 { margin:0 0 12px; color:#5f645d; font:700 12px/1.4 Inter,ui-sans-serif,system-ui,sans-serif; letter-spacing:.12em; text-transform:uppercase; }
+.suggestion-list { display:grid; gap:10px; }
+.suggestion-card { display:block; width:100%; padding:15px 16px; border:1px solid var(--line); border-radius:3px; background:var(--card); color:var(--ink); text-align:left; cursor:pointer; transition:border-color .15s ease,transform .15s ease; }
+.suggestion-card:hover,.suggestion-card:focus-visible { border-color:#9ca296; transform:translateY(-1px); }
+.suggestion-card:disabled { cursor:wait; opacity:.65; transform:none; }
+.suggestion-meta { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#747a72; font-size:11px; font-weight:700; letter-spacing:.04em; }
+.cefr-badge { flex:none; padding:2px 7px; border-radius:999px; background:#78907b1c; color:#566c59; }
+.suggestion-title { display:block; margin-top:6px; font:500 18px/1.3 Georgia,serif; }
+@media (max-width:700px) { .suggestions-groups { grid-template-columns:1fr; } }
 .reader { display:grid; grid-template-columns:minmax(160px,220px) minmax(480px,820px) minmax(220px,290px); gap:34px; align-items:start; max-width:1450px; margin:40px auto; padding:0 3vw; }
 .reader-meta,.translation-panel { position:sticky; top:116px; }
 .reader-meta { color:#6a6e67; }

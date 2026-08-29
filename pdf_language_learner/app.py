@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator, Literal
+from urllib.parse import urlsplit
 
 import httpx
 import simplemma
@@ -40,6 +41,7 @@ from pdf_language_learner.revision import (
     revision_category,
     schedule_review,
 )
+from pdf_language_learner.suggestions import canonical_url, suggestions_for
 from pdf_language_learner.web_import import WebImportError, fetch_web_document
 
 # Attach application diagnostics to Uvicorn's configured server logger so INFO
@@ -1024,6 +1026,28 @@ class WebImportResult(BaseModel):
     audio_url: str | None = None
     video_url: str | None = None
     source_language: str | None = None
+
+
+class ListeningHistoryCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2_000)
+    title: str = Field(min_length=1, max_length=500)
+
+    @field_validator("url", "title")
+    @classmethod
+    def strip_listening_history_value(cls, value: str) -> str:
+        return value.strip()
+
+
+class SuggestionResult(BaseModel):
+    key: str
+    series: str
+    language: str
+    cefr: str
+    title: str
+    url: str
+    season: int | None = None
+    episode: int | None = None
+    is_bonus: bool = False
 
 
 class LanguageDetectionResult(BaseModel):
@@ -2857,6 +2881,15 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS listening_history (
+                url TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                listened_at TEXT NOT NULL
+            )
+            """
+        )
         create_connector_tables(connection)
         migrate_legacy_vocabulary(connection)
         migrate_vocabulary_gender(connection)
@@ -3338,6 +3371,35 @@ def import_web(request: WebImportRequest) -> WebImportResult:
         video_url=document.video_url,
         source_language=document.source_language,
     )
+
+
+@app.get("/api/suggestions", response_model=list[SuggestionResult])
+def list_suggestions() -> list[SuggestionResult]:
+    with vocabulary_database() as connection:
+        listened_urls = {
+            row["url"]
+            for row in connection.execute("SELECT url FROM listening_history").fetchall()
+        }
+    return [SuggestionResult(**vars(item)) for item in suggestions_for(listened_urls)]
+
+
+@app.post("/api/listening-history", status_code=204)
+def record_listening_history(request: ListeningHistoryCreate) -> Response:
+    url = canonical_url(request.url)
+    if urlsplit(url).scheme not in {"http", "https"} or not urlsplit(url).hostname:
+        raise HTTPException(status_code=422, detail="Listening URL must be public HTTP(S)")
+    with vocabulary_database() as connection:
+        connection.execute(
+            """
+            INSERT INTO listening_history (url, title, listened_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(url) DO UPDATE SET
+                title = excluded.title,
+                listened_at = excluded.listened_at
+            """,
+            (url, request.title, datetime.now(UTC).isoformat()),
+        )
+    return Response(status_code=204)
 
 
 @app.get("/api/vocabulary/languages", response_model=list[str])

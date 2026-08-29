@@ -244,7 +244,7 @@ def _is_spanish_timeline_notation_show(url: str) -> bool:
     if not _is_timeline_notation_player(url):
         return False
     show_slug = urlsplit(url).path.casefold().strip("/").partition("/")[0]
-    return show_slug in {"aventura", "undiamonolingue"}
+    return show_slug in {"aventura", "undiamonolingue", "undiamonolingue2"}
 
 
 def _timeline_notation_transcript(soup: BeautifulSoup, url: str) -> list[str]:

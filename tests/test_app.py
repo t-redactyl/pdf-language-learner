@@ -121,9 +121,10 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=37' in response.text
+    assert '/static/styles.css?v=38' in response.text
     assert '/static/revision.js?v=25' in response.text
-    assert '/static/app.js?v=39' in response.text
+    assert '/static/app.js?v=40' in response.text
+    assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
 
@@ -142,8 +143,10 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=13' in app_script
-    assert './i18n.js?v=13' in revision_script
+    assert './i18n.js?v=14' in app_script
+    assert './i18n.js?v=14' in revision_script
+    assert 'fetch("/api/suggestions")' in app_script
+    assert 'fetch("/api/listening-history"' in app_script
     assert 'new window.Hls({ capLevelToPlayerSize: true, startLevel: 0 })' in app_script
     assert app_script.index("window.Hls?.isSupported()") < app_script.index(
         'video.canPlayType("application/vnd.apple.mpegurl")'
