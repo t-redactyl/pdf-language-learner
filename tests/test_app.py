@@ -97,7 +97,7 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-exercise-selector"' in response.text
     assert 'data-i18n="hero.title"' in response.text
     assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">' in response.text
-    assert '/static/styles.css?v=27' in response.text
+    assert '/static/styles.css?v=28' in response.text
     assert '/static/revision.js?v=18' in response.text
     assert '/static/app.js?v=28' in response.text
 
@@ -130,6 +130,14 @@ def test_narrow_library_keeps_history_and_saved_vocabulary_independently_scrolla
 
     assert ".reader.meta-open #translation-history-list { max-height:38vh; overflow:auto; }" in styles
     assert ".reader.meta-open #saved-vocabulary-list { max-height:28vh; overflow:auto; }" in styles
+
+
+def test_tablet_translation_panel_keeps_all_three_sections_on_one_row() -> None:
+    styles = client.get("/static/styles.css").text
+
+    assert "@media (max-width:760px)" in styles
+    assert "grid-template-columns:repeat(3,minmax(0,1fr))" in styles
+    assert "@media (max-width:600px)" in styles
 
 
 def test_spanish_interface_catalog_is_served() -> None:
