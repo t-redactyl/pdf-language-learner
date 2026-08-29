@@ -645,6 +645,7 @@ function renderLetterTiles() {
   const selected = new Set(selectedTileIds);
   const answer = $("#revision-tile-answer");
   const pool = $("#revision-tile-pool");
+  const controls = document.querySelector(".revision-tile-controls");
   answer.replaceChildren();
   pool.replaceChildren();
 
@@ -683,12 +684,15 @@ function renderLetterTiles() {
     answer.append(blank);
   });
 
-  tileOptions.forEach(option => {
+  const remainingOptions = tileOptions.filter(option => !selected.has(option.id));
+  pool.hidden = !remainingOptions.length || tilesLocked;
+  controls.hidden = tilesLocked;
+  remainingOptions.forEach(option => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "revision-letter-tile";
     button.textContent = option.value;
-    button.disabled = tilesLocked || selected.has(option.id);
+    button.disabled = tilesLocked;
     button.setAttribute("aria-label", t("revision.addLetter", { letter: option.value }));
     button.addEventListener("click", () => {
       selectedTileIds.push(option.id);

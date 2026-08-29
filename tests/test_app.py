@@ -121,8 +121,8 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=35' in response.text
-    assert '/static/revision.js?v=23' in response.text
+    assert '/static/styles.css?v=36' in response.text
+    assert '/static/revision.js?v=24' in response.text
     assert '/static/app.js?v=37' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -149,6 +149,9 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert 'renderConnectorSentence($("#revision-prompt-context"), card, true)' in revision_script
     assert 'renderConnectorSentence($("#revision-context"), card, true)' not in revision_script
     assert '$("#revision-choices").hidden = true' in revision_script
+    assert "const remainingOptions = tileOptions.filter" in revision_script
+    assert "pool.hidden = !remainingOptions.length || tilesLocked" in revision_script
+    assert "controls.hidden = tilesLocked" in revision_script
     assert "export function renderClozeSentence" in text_script
     assert "originalSource: data.original_source || selectedText" in app_script
     assert "findWholeWordIgnoringCase" in text_script

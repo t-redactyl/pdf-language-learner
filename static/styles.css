@@ -198,7 +198,6 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-letter-blank { border-bottom:2px solid #b8bbb4; }
 .revision-tile-separator { min-width:10px; text-align:center; font:600 21px/1 Georgia,serif; }
 .revision-tile-pool { display:flex; min-height:66px; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; margin-top:18px; padding-top:18px; border-top:1px solid var(--line); }
-.revision-tile-pool .revision-letter-tile:disabled { visibility:hidden; }
 .revision-tile-controls { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:18px; }
 .revision-tile-controls .text-button:disabled { cursor:default; opacity:.45; }
 .revision-matching > h3 { margin:0 0 8px; font-size:clamp(28px,5vw,38px); }
