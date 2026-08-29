@@ -374,14 +374,17 @@ function openWebDocument(data) {
 }
 
 function attachHlsVideo(video, url) {
-  if (video.canPlayType("application/vnd.apple.mpegurl")) {
-    video.src = url;
-    return true;
-  }
+  // Some Android browsers report native HLS support but leave DW's adaptive
+  // master playlists stuck at 0:00. Prefer HLS.js wherever MediaSource is
+  // available, and reserve native playback for Safari-style implementations.
   if (window.Hls?.isSupported()) {
-    activeHls = new window.Hls();
+    activeHls = new window.Hls({ capLevelToPlayerSize: true, startLevel: 0 });
     activeHls.loadSource(url);
     activeHls.attachMedia(video);
+    return true;
+  }
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = url;
     return true;
   }
   return false;

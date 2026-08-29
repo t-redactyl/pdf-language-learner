@@ -123,7 +123,7 @@ def test_home_serves_reader() -> None:
     assert 'aria-controls="translation-panel-body"' in response.text
     assert '/static/styles.css?v=37' in response.text
     assert '/static/revision.js?v=25' in response.text
-    assert '/static/app.js?v=38' in response.text
+    assert '/static/app.js?v=39' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
 
@@ -144,7 +144,10 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert './text.js?v=5' in revision_script
     assert './i18n.js?v=13' in app_script
     assert './i18n.js?v=13' in revision_script
-    assert 'new window.Hls()' in app_script
+    assert 'new window.Hls({ capLevelToPlayerSize: true, startLevel: 0 })' in app_script
+    assert app_script.index("window.Hls?.isSupported()") < app_script.index(
+        'video.canPlayType("application/vnd.apple.mpegurl")'
+    )
     assert 'currentCard.contextual_gloss || currentCard.glosses[0] || ""' in revision_script
     assert 'currentCard.glosses.join(" / ")' not in revision_script
     assert 'renderConnectorSentence($("#revision-prompt-context"), card, true)' in revision_script
