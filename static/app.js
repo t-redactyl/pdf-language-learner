@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=5";
-import { initI18n, languageName, t } from "./i18n.js?v=11";
+import { initI18n, languageName, t } from "./i18n.js?v=12";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -501,7 +501,10 @@ function showSelection({ text, rectangles, context = "", contextOffset = null })
 function readSelection(range, drag = null) {
   const transcriptSelection = readTranscriptSelection(range);
   if (transcriptSelection) return transcriptSelection;
-  const measuredRange = drag ? range : expandHyphenatedWordRange(range);
+  // Pointer-up remeasures selections after even a tiny drag. Keep hyphenated
+  // word expansion active for that pass too, or it replaces the complete word
+  // captured by selectionchange with only the half under the pointer.
+  const measuredRange = expandHyphenatedWordRange(range);
   const selected = selectionGeometry(measuredRange, drag);
   if (selected.text && selected.rectangles.length) {
     return { ...selected, ...selectionContext(measuredRange, selected.text) };
@@ -679,6 +682,7 @@ function selectionGeometry(range, drag) {
   const rectangles = [];
   let text = "";
   let previousRect = null;
+  let previousEndsWithUnselectedHyphen = false;
 
   for (const page of document.querySelectorAll(".pdf-page")) {
     const pageBox = page.getBoundingClientRect();
@@ -742,8 +746,21 @@ function selectionGeometry(range, drag) {
         width: (to - from) / pageBox.width,
         height: (bottom - top) / pageBox.height,
       });
-      text = appendPdfText(text, characters.slice(start, end), spanRect, previousRect);
+      text = appendPdfText(
+        text,
+        characters.slice(start, end),
+        spanRect,
+        previousRect,
+        previousEndsWithUnselectedHyphen,
+      );
       previousRect = spanRect;
+      // A drag can end just before the narrow line-breaking hyphen even though
+      // both letter fragments are selected. PDF.js leaves that hyphen in the
+      // same text run, outside the measured highlight. Remember it so the next
+      // line is joined as one logical word rather than with an invented space.
+      previousEndsWithUnselectedHyphen = /^\s*[-\u00ad\u2010]\s*$/u.test(
+        characters.slice(end),
+      );
     }
   }
   return { text: text.replace(/\s+/g, " ").trim(), rectangles };
@@ -764,10 +781,11 @@ function changedTextLine(rect, previousRect) {
   return Math.abs(centre - previousCentre) > Math.min(rect.height, previousRect.height) / 2;
 }
 
-function appendPdfText(text, value, rect, previousRect) {
+function appendPdfText(text, value, rect, previousRect, previousEndsWithUnselectedHyphen = false) {
   const separator = text ? separatorBefore(rect, previousRect) : "";
-  if (separator && /[-\u00ad\u2010]$/u.test(text) && /^\p{L}/u.test(value)) {
-    return text.slice(0, -1) + value;
+  if (separator && /^\p{L}/u.test(value)) {
+    if (/[-\u00ad\u2010]$/u.test(text)) return text.slice(0, -1) + value;
+    if (previousEndsWithUnselectedHyphen) return text + value;
   }
   return text + separator + value;
 }

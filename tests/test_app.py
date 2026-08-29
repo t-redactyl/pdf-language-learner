@@ -24,6 +24,7 @@ from pdf_language_learner.app import (
     cached_source_noun_grammar,
     cached_verb_lemma_decision,
     dictionary_synonym_candidates,
+    enrich_connector_sentence,
     frequency_ranked_synonym_candidates,
     load_local_environment,
     multi_word_term_in_context,
@@ -121,8 +122,8 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
     assert '/static/styles.css?v=31' in response.text
-    assert '/static/revision.js?v=19' in response.text
-    assert '/static/app.js?v=32' in response.text
+    assert '/static/revision.js?v=21' in response.text
+    assert '/static/app.js?v=35' in response.text
 
 
 def test_favicon_is_served() -> None:
@@ -140,12 +141,18 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=11' in app_script
-    assert './i18n.js?v=11' in revision_script
+    assert './i18n.js?v=12' in app_script
+    assert './i18n.js?v=12' in revision_script
+    assert 'currentCard.contextual_gloss || currentCard.glosses[0] || ""' in revision_script
+    assert 'currentCard.glosses.join(" / ")' not in revision_script
     assert "export function renderClozeSentence" in text_script
     assert "originalSource: data.original_source || selectedText" in app_script
     assert "findWholeWordIgnoringCase" in text_script
     assert '$("#revision-context").hidden = true' in revision_script
+    assert "const measuredRange = expandHyphenatedWordRange(range);" in app_script
+    assert "drag ? range : expandHyphenatedWordRange(range)" not in app_script
+    assert "previousEndsWithUnselectedHyphen" in app_script
+    assert "characters.slice(end)" in app_script
 
 
 def test_narrow_library_keeps_history_and_saved_vocabulary_independently_scrollable() -> None:
@@ -2025,6 +2032,10 @@ def vocabulary_database(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "pdf_language_learner.app.DATABASE_PATH", tmp_path / "margin.db"
     )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.enrich_connector_sentence",
+        lambda sentence_id: None,
+    )
     return tmp_path
 
 
@@ -2306,6 +2317,115 @@ def test_duplicate_vocabulary_saves_preserve_additional_sentence_contexts(
         ).fetchone()[0] == 2
 
 
+def test_existing_connector_occurrences_gain_contextual_gloss_column(
+    vocabulary_database,
+) -> None:
+    database_path = vocabulary_database / "margin.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE connector_occurrences (
+                id TEXT PRIMARY KEY,
+                sentence_id TEXT NOT NULL,
+                connector_key TEXT NOT NULL,
+                surface_text TEXT NOT NULL,
+                start_offset INTEGER NOT NULL,
+                end_offset INTEGER NOT NULL,
+                categories_json TEXT NOT NULL,
+                glosses_json TEXT NOT NULL,
+                UNIQUE (sentence_id, connector_key, start_offset)
+            )
+            """
+        )
+
+    assert client.get("/api/vocabulary").status_code == 200
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(connector_occurrences)"
+            )
+        }
+    assert "contextual_gloss" in columns
+
+
+def test_saving_connector_sentence_schedules_contextual_enrichment(
+    vocabulary_database,
+    monkeypatch,
+) -> None:
+    scheduled = []
+    monkeypatch.setattr(
+        "pdf_language_learner.app.enrich_connector_sentence",
+        scheduled.append,
+    )
+
+    response = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(context="Obwohl es regnet, gehen wir spazieren."),
+    )
+
+    assert response.status_code == 200
+    assert len(scheduled) == 1
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        sentence_id = connection.execute(
+            "SELECT id FROM connector_sentences"
+        ).fetchone()[0]
+    assert scheduled == [sentence_id]
+
+
+def test_contextual_connector_enrichment_batches_sentence_occurrences(
+    vocabulary_database,
+    monkeypatch,
+) -> None:
+    sentence = "Obwohl es regnet, gehen wir; trotzdem bleiben wir lange."
+    client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(context=sentence),
+    )
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        sentence_id = connection.execute(
+            "SELECT id FROM connector_sentences"
+        ).fetchone()[0]
+    model_calls = []
+
+    def fake_structured_model_response(operation, **kwargs):
+        model_calls.append((operation, kwargs))
+        return json.dumps(
+            {
+                "glosses": [
+                    {"position": 0, "gloss": "even though"},
+                    {"position": 1, "gloss": "nevertheless"},
+                ]
+            }
+        )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.structured_model_response",
+        fake_structured_model_response,
+    )
+
+    enrich_connector_sentence(sentence_id)
+    enrich_connector_sentence(sentence_id)
+
+    assert len(model_calls) == 1
+    operation, call = model_calls[0]
+    assert operation == "contextual connector glosses"
+    assert sentence in call["messages"][1]["content"]
+    assert "0. 'Obwohl'" in call["messages"][1]["content"]
+    assert "1. 'trotzdem'" in call["messages"][1]["content"]
+    cards = client.get(
+        "/api/revision/session", params={"language": "German"}
+    ).json()["connector_cards"]
+    contextual_glosses = {
+        card["connector"].casefold(): card["contextual_gloss"] for card in cards
+    }
+    assert contextual_glosses == {
+        "obwohl": "even though",
+        "trotzdem": "nevertheless",
+    }
+
+
 def test_connector_revision_card_uses_sentence_gloss_and_choices(
     vocabulary_database,
 ) -> None:
@@ -2327,6 +2447,7 @@ def test_connector_revision_card_uses_sentence_gloss_and_choices(
     assert sentence[card["start_offset"]:card["end_offset"]] == "Obwohl"
     assert card["connector"] == "Obwohl"
     assert card["glosses"] == ["although", "even though"]
+    assert card["contextual_gloss"] is None
     assert card["category"] == "new"
     assert "subordinating conjunction" in card["connector_categories"]
     assert "obwohl" in card["choices"]

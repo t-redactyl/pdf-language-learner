@@ -3,7 +3,7 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=11";
+import { languageName, t } from "./i18n.js?v=12";
 
 const $ = selector => document.querySelector(selector);
 
@@ -382,7 +382,8 @@ function renderConnectorCard() {
   $("#revision-matching").hidden = true;
 
   $("#revision-connector-hint").hidden = false;
-  $("#revision-connector-meanings").textContent = currentCard.glosses.join(" / ");
+  $("#revision-connector-meanings").textContent =
+    currentCard.contextual_gloss || currentCard.glosses[0] || "";
   const context = $("#revision-prompt-context");
   renderConnectorSentence(context, currentCard, false);
   context.hidden = false;

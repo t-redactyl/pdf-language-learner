@@ -23,7 +23,7 @@ import simplemma
 import stanza
 import wn
 from wordfreq import zipf_frequency
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
@@ -1094,6 +1094,30 @@ class TranslatedText(BaseModel):
     )
 
 
+class ContextualConnectorGloss(BaseModel):
+    position: int = Field(
+        ge=0,
+        description="The zero-based position of the supplied connector occurrence",
+    )
+    gloss: str = Field(
+        min_length=1,
+        max_length=120,
+        description="One concise English equivalent in this sentence",
+    )
+
+    @field_validator("gloss")
+    @classmethod
+    def strip_gloss(cls, value: str) -> str:
+        value = value.strip().strip(".")
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+
+class ContextualConnectorGlossBatch(BaseModel):
+    glosses: list[ContextualConnectorGloss] = Field(min_length=1, max_length=200)
+
+
 class RankedSynonyms(BaseModel):
     synonyms: list[str] = Field(
         max_length=5,
@@ -1233,6 +1257,7 @@ class ConnectorRevisionCard(BaseModel):
     start_offset: int
     end_offset: int
     glosses: list[str]
+    contextual_gloss: str | None = None
     choices: list[str] = Field(min_length=2, max_length=4)
     connector_categories: list[str]
     category: RevisionCategory
@@ -2012,6 +2037,46 @@ def translation_messages(
     ]
 
 
+def contextual_connector_gloss_messages(
+    *,
+    source_language: str,
+    sentence: str,
+    occurrences: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    occurrence_lines = "\n".join(
+        (
+            f"{position}. {occurrence['surface_text']!r} at characters "
+            f"{occurrence['start_offset']}-{occurrence['end_offset']} "
+            f"(dictionary senses: {', '.join(occurrence['glosses'])})"
+        )
+        for position, occurrence in enumerate(occurrences)
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You provide contextual English glosses for connector words in "
+                "a language-learning application. For each supplied occurrence, "
+                "return exactly one short English equivalent that expresses what "
+                "the connector means in this specific sentence. Prefer a natural "
+                "substitution over a dictionary list. Never give alternatives, "
+                "slashes, explanations, punctuation, or translations of neighboring "
+                "words. Preserve each supplied zero-based position exactly."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Source language: {source_language}\n"
+                f"Sentence: {sentence}\n"
+                "Connector occurrences:\n"
+                f"{occurrence_lines}\n"
+                "Return one contextual English gloss for every occurrence."
+            ),
+        },
+    ]
+
+
 def synonym_ranking_messages(
     *,
     source: str,
@@ -2574,10 +2639,21 @@ def create_connector_tables(connection: sqlite3.Connection) -> None:
             end_offset INTEGER NOT NULL,
             categories_json TEXT NOT NULL,
             glosses_json TEXT NOT NULL,
+            contextual_gloss TEXT,
             UNIQUE (sentence_id, connector_key, start_offset)
         )
         """
     )
+    occurrence_columns = {
+        row["name"]
+        for row in connection.execute(
+            "PRAGMA table_info(connector_occurrences)"
+        ).fetchall()
+    }
+    if "contextual_gloss" not in occurrence_columns:
+        connection.execute(
+            "ALTER TABLE connector_occurrences ADD COLUMN contextual_gloss TEXT"
+        )
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS connector_reviews (
@@ -2638,10 +2714,10 @@ def index_saved_sentence(
     context: str,
     document_key: str,
     saved_at: str,
-) -> None:
+) -> str | None:
     sentence = context.strip()
     if not sentence:
-        return
+        return None
     canonical_language = canonicalize(source_language)
     canonical_sentence = canonicalize(sentence)
     sentence_id = str(
@@ -2675,7 +2751,7 @@ def index_saved_sentence(
         (canonical_language, canonical_sentence),
     ).fetchone()
     if stored is None:
-        return
+        return None
     sentence_id = stored["id"]
     connection.execute(
         """
@@ -2714,6 +2790,15 @@ def index_saved_sentence(
                 json.dumps(definition["glosses"], ensure_ascii=False),
             ),
         )
+    pending_occurrence = connection.execute(
+        """
+        SELECT 1 FROM connector_occurrences
+        WHERE sentence_id = ? AND contextual_gloss IS NULL
+        LIMIT 1
+        """,
+        (sentence_id,),
+    ).fetchone()
+    return sentence_id if pending_occurrence is not None else None
 
 
 def backfill_connector_sentences(connection: sqlite3.Connection) -> None:
@@ -2779,6 +2864,77 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
         connection.commit()
     finally:
         connection.close()
+
+
+def enrich_connector_sentence(sentence_id: str) -> None:
+    """Generate and persist one contextual English gloss per connector occurrence."""
+
+    try:
+        with vocabulary_database() as connection:
+            sentence = connection.execute(
+                "SELECT source_language, text FROM connector_sentences WHERE id = ?",
+                (sentence_id,),
+            ).fetchone()
+            rows = connection.execute(
+                """
+                SELECT id, surface_text, start_offset, end_offset, glosses_json
+                FROM connector_occurrences
+                WHERE sentence_id = ? AND contextual_gloss IS NULL
+                ORDER BY start_offset, id
+                """,
+                (sentence_id,),
+            ).fetchall()
+        if sentence is None or not rows:
+            return
+
+        occurrences = [
+            {
+                "id": row["id"],
+                "surface_text": row["surface_text"],
+                "start_offset": row["start_offset"],
+                "end_offset": row["end_offset"],
+                "glosses": json.loads(row["glosses_json"]),
+            }
+            for row in rows
+        ]
+        content = structured_model_response(
+            "contextual connector glosses",
+            model=translation_model(),
+            messages=contextual_connector_gloss_messages(
+                source_language=sentence["source_language"],
+                sentence=sentence["text"],
+                occurrences=occurrences,
+            ),
+            schema=ContextualConnectorGlossBatch.model_json_schema(),
+            schema_name="contextual_connector_glosses",
+            max_output_tokens=min(4096, 48 * len(occurrences)),
+        )
+        generated = ContextualConnectorGlossBatch.model_validate_json(content)
+        glosses_by_position = {
+            item.position: item.gloss
+            for item in generated.glosses
+            if item.position < len(occurrences)
+        }
+        if not glosses_by_position:
+            raise ValueError("the model returned no matching connector glosses")
+
+        with vocabulary_database() as connection:
+            for position, gloss in glosses_by_position.items():
+                connection.execute(
+                    """
+                    UPDATE connector_occurrences
+                    SET contextual_gloss = ?
+                    WHERE id = ? AND contextual_gloss IS NULL
+                    """,
+                    (gloss, occurrences[position]["id"]),
+                )
+    except Exception:
+        # Contextual enrichment is intentionally best-effort. Revision can
+        # always fall back to the first curated dictionary gloss.
+        logger.exception(
+            "Contextual connector-gloss enrichment failed for sentence %s",
+            sentence_id,
+        )
 
 
 def vocabulary_synonyms(
@@ -3143,6 +3299,7 @@ def connector_revision_cards(
                 start_offset=row["start_offset"],
                 end_offset=row["end_offset"],
                 glosses=json.loads(row["glosses_json"]),
+                contextual_gloss=row["contextual_gloss"],
                 choices=choices,
                 connector_categories=categories,
                 category=revision_category(schedule_state(row)),
@@ -3220,7 +3377,10 @@ def list_vocabulary(language: str | None = None) -> list[VocabularyItem]:
 
 
 @app.post("/api/vocabulary", response_model=VocabularySaveResult)
-def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
+def save_vocabulary(
+    request: VocabularyCreate,
+    background_tasks: BackgroundTasks,
+) -> VocabularySaveResult:
     item_id = str(uuid.uuid4())
     saved_at = datetime.now(UTC).isoformat()
     canonical_source = canonicalize(request.normalized_source)
@@ -3288,7 +3448,7 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
                         position,
                     ),
                 )
-        index_saved_sentence(
+        connector_sentence_id = index_saved_sentence(
             connection,
             vocabulary_item_id=row["id"],
             source_language=request.source_language,
@@ -3300,6 +3460,8 @@ def save_vocabulary(request: VocabularyCreate) -> VocabularySaveResult:
             row,
             vocabulary_synonyms(connection, row["id"]),
         )
+    if connector_sentence_id is not None:
+        background_tasks.add_task(enrich_connector_sentence, connector_sentence_id)
     return VocabularySaveResult(item=item, created=created)
 
 
@@ -3358,6 +3520,7 @@ def delete_vocabulary(item_id: str) -> Response:
 
 @app.get("/api/revision/session", response_model=RevisionSession)
 def revision_session(
+    background_tasks: BackgroundTasks,
     language: str | None = None,
     limit: int = 40,
     supports_letter_tiles: bool = False,
@@ -3386,9 +3549,27 @@ def revision_session(
             language=language,
             now=now,
         )
+        canonical_language = canonicalize(language) if language is not None else None
+        pending_connector_sentences = connection.execute(
+            """
+            SELECT DISTINCT o.sentence_id
+            FROM connector_occurrences o
+            JOIN connector_sentences s ON s.id = o.sentence_id
+            WHERE o.contextual_gloss IS NULL
+              AND (? IS NULL OR s.canonical_source_language = ?)
+            LIMIT ?
+            """,
+            (
+                canonical_language,
+                canonical_language,
+                CONNECTOR_REVISION_LIMIT,
+            ),
+        ).fetchall()
 
     due_count = sum(is_due(schedule_state(row), at=now) for row in rows)
     selected = select_session_rows(rows, now=now, limit=limit)
+    for pending in pending_connector_sentences:
+        background_tasks.add_task(enrich_connector_sentence, pending["sentence_id"])
     return RevisionSession(
         cards=[
             revision_card(
