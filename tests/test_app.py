@@ -115,9 +115,12 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-exercise-selector"' in response.text
     assert 'data-i18n="hero.title"' in response.text
     assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">' in response.text
-    assert '/static/styles.css?v=28' in response.text
-    assert '/static/revision.js?v=18' in response.text
-    assert '/static/app.js?v=28' in response.text
+    assert 'id="pdf-zoom-toolbar"' in response.text
+    assert 'id="pdf-zoom-out"' in response.text
+    assert 'id="pdf-zoom-in"' in response.text
+    assert '/static/styles.css?v=29' in response.text
+    assert '/static/revision.js?v=19' in response.text
+    assert '/static/app.js?v=29' in response.text
 
 
 def test_favicon_is_served() -> None:
@@ -135,8 +138,8 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=9' in app_script
-    assert './i18n.js?v=9' in revision_script
+    assert './i18n.js?v=10' in app_script
+    assert './i18n.js?v=10' in revision_script
     assert "export function renderClozeSentence" in text_script
     assert "originalSource: data.original_source || selectedText" in app_script
     assert "findWholeWordIgnoringCase" in text_script
@@ -156,6 +159,17 @@ def test_tablet_translation_panel_keeps_all_three_sections_on_one_row() -> None:
     assert "@media (max-width:760px)" in styles
     assert "grid-template-columns:repeat(3,minmax(0,1fr))" in styles
     assert "@media (max-width:600px)" in styles
+
+
+def test_pdf_zoom_scales_only_the_document_and_keeps_highlights_relative() -> None:
+    script = client.get("/static/app.js").text
+    styles = client.get("/static/styles.css").text
+
+    assert "const PDF_ZOOM_LEVELS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5]" in script
+    assert "fitWidth * PDF_ZOOM_LEVELS[pdfZoomIndex]" in script
+    assert "rect.x*100" in script
+    assert ".pages-scroll {" in styles
+    assert "overflow-x:auto" in styles
 
 
 def test_spanish_interface_catalog_is_served() -> None:

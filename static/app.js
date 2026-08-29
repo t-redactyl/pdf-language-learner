@@ -1,10 +1,13 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=5";
-import { initI18n, languageName, t } from "./i18n.js?v=9";
+import { initI18n, languageName, t } from "./i18n.js?v=10";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
 const pages = $("#pages");
+const pagesScroll = $("#pages-scroll");
+const PDF_ZOOM_LEVELS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5];
+let pdfZoomIndex = 1;
 let selectedText = "";
 let selectedContext = "";
 let selectedContextOffset = null;
@@ -32,7 +35,52 @@ const pdfPageResizeObserver = new ResizeObserver(entries => {
     }
   });
 });
+const pdfColumnResizeObserver = new ResizeObserver(() => applyPdfZoom());
+pdfColumnResizeObserver.observe(pagesScroll);
 let readerLayoutFrame = null;
+
+function sizePdfPage(page) {
+  const renderWidth = Number(page.dataset.renderWidth);
+  if (!(renderWidth > 0)) return;
+  const fitWidth = Math.min(renderWidth, pagesScroll.clientWidth || renderWidth);
+  page.style.width = `${fitWidth * PDF_ZOOM_LEVELS[pdfZoomIndex]}px`;
+}
+
+function applyPdfZoom() {
+  pages.querySelectorAll(".pdf-page").forEach(sizePdfPage);
+  const zoom = PDF_ZOOM_LEVELS[pdfZoomIndex];
+  $("#pdf-zoom-value").textContent = `${Math.round(zoom * 100)}%`;
+  $("#pdf-zoom-out").disabled = pdfZoomIndex === 0;
+  $("#pdf-zoom-in").disabled = pdfZoomIndex === PDF_ZOOM_LEVELS.length - 1;
+}
+
+function setPdfZoom(nextIndex) {
+  const boundedIndex = Math.max(0, Math.min(PDF_ZOOM_LEVELS.length - 1, nextIndex));
+  if (boundedIndex === pdfZoomIndex) return;
+  const oldScrollWidth = pagesScroll.scrollWidth;
+  const horizontalCentre = oldScrollWidth > 0
+    ? (pagesScroll.scrollLeft + pagesScroll.clientWidth / 2) / oldScrollWidth
+    : 0.5;
+  const referenceY = window.innerHeight / 2;
+  const anchorPage = [...pages.querySelectorAll(".pdf-page")].find(page => page.getBoundingClientRect().bottom >= referenceY);
+  const anchorBox = anchorPage?.getBoundingClientRect();
+  const anchorRatio = anchorBox?.height
+    ? Math.max(0, Math.min(1, (referenceY - anchorBox.top) / anchorBox.height))
+    : 0;
+
+  pdfZoomIndex = boundedIndex;
+  applyPdfZoom();
+  if (anchorPage) {
+    const resizedBox = anchorPage.getBoundingClientRect();
+    window.scrollBy(0, resizedBox.top + resizedBox.height * anchorRatio - referenceY);
+  }
+  pagesScroll.scrollLeft = horizontalCentre * pagesScroll.scrollWidth - pagesScroll.clientWidth / 2;
+  schedulePdfReaderLayout();
+}
+
+$("#pdf-zoom-out").addEventListener("click", () => setPdfZoom(pdfZoomIndex - 1));
+$("#pdf-zoom-in").addEventListener("click", () => setPdfZoom(pdfZoomIndex + 1));
+$("#pdf-zoom-reset").addEventListener("click", () => setPdfZoom(PDF_ZOOM_LEVELS.indexOf(1)));
 
 function updatePdfReaderLayout() {
   readerLayoutFrame = null;
@@ -121,6 +169,8 @@ async function openPdf(file) {
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   $("#empty-state").hidden = true;
   $("#reader").hidden = false;
+  $("#pdf-zoom-toolbar").hidden = false;
+  applyPdfZoom();
   const pageTexts = [];
   for (let number = 1; number <= pdf.numPages; number += 1) {
     pageTexts.push(await renderPage(await pdf.getPage(number), number));
@@ -134,6 +184,8 @@ function prepareDocument(documentKey) {
   setReaderMetaOpen(false);
   pages.querySelectorAll(".pdf-page").forEach(page => pdfPageResizeObserver.unobserve(page));
   pages.replaceChildren();
+  $("#pdf-zoom-toolbar").hidden = true;
+  pagesScroll.scrollLeft = 0;
   $("#reader").classList.remove("reader-stacked");
   activeDocumentKey = documentKey;
   translations = readStoredTranslations();
@@ -280,7 +332,6 @@ async function renderPage(page, number) {
   wrapper.style.setProperty("--pdf-width", `${viewport.width}px`);
   wrapper.style.setProperty("--pdf-height", `${viewport.height}px`);
   wrapper.style.setProperty("--responsive-scale", "1");
-  wrapper.style.width = `min(100%, ${viewport.width}px)`;
   wrapper.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
   const canvas = document.createElement("canvas");
   const ratio = window.devicePixelRatio || 1;
@@ -296,6 +347,7 @@ async function renderPage(page, number) {
   textLayer.className = "textLayer";
   wrapper.append(textLayer);
   pages.append(wrapper);
+  sizePdfPage(wrapper);
   if (number === 1) updatePdfReaderLayout();
   pdfPageResizeObserver.observe(wrapper);
   await page.render({ canvasContext: canvas.getContext("2d"), viewport, transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0] }).promise;

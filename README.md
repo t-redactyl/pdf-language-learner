@@ -24,7 +24,7 @@ uv run python main.py
 The app loads `.env` automatically for local development. Exported environment
 variables take precedence, and `.env` is excluded from Git.
 
-Open <http://127.0.0.1:8000>, choose a text-based PDF or paste a public article URL, select text, choose a target language, and translate. Starred vocabulary is saved to `data/margin.db` by default and remains available across documents and browser sessions. Set `MARGIN_DATABASE_PATH` to use a different SQLite file.
+Open <http://127.0.0.1:8000>, choose a text-based PDF or paste a public article URL, select text, choose a target language, and translate. PDF zoom controls enlarge only the document while keeping text selection and highlights aligned. Starred vocabulary is saved to `data/margin.db` by default and remains available across documents and browser sessions. Set `MARGIN_DATABASE_PATH` to use a different SQLite file.
 
 ## Deploy on Hugging Face Spaces
 

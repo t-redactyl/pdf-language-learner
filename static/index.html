@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=28">
+  <link rel="stylesheet" href="/static/styles.css?v=29">
 </head>
 <body>
   <header class="topbar">
@@ -162,7 +162,16 @@
           <ol id="translation-history-list"></ol>
         </section>
       </aside>
-      <div id="pages" class="pages" aria-label="Document content" data-i18n-aria-label="document.content"></div>
+      <div class="reader-document">
+        <div id="pdf-zoom-toolbar" class="pdf-zoom-toolbar" role="group" aria-label="PDF zoom" data-i18n-aria-label="pdf.zoom" hidden>
+          <button id="pdf-zoom-out" type="button" aria-label="Zoom out" title="Zoom out" data-i18n-aria-label="pdf.zoomOut" data-i18n-title="pdf.zoomOut">−</button>
+          <button id="pdf-zoom-reset" class="pdf-zoom-reset" type="button" aria-label="Reset PDF zoom" title="Reset PDF zoom" data-i18n-aria-label="pdf.zoomReset" data-i18n-title="pdf.zoomReset"><span id="pdf-zoom-value" aria-live="polite">100%</span></button>
+          <button id="pdf-zoom-in" type="button" aria-label="Zoom in" title="Zoom in" data-i18n-aria-label="pdf.zoomIn" data-i18n-title="pdf.zoomIn">+</button>
+        </div>
+        <div id="pages-scroll" class="pages-scroll">
+          <div id="pages" class="pages" aria-label="Document content" data-i18n-aria-label="document.content"></div>
+        </div>
+      </div>
       <aside class="translation-panel">
         <p id="lookup-title" class="eyebrow" data-i18n="translation.title">Translation</p>
         <p id="selection-hint" data-i18n="translation.hint">Select text in the document to begin.</p>
@@ -208,7 +217,7 @@
       </aside>
     </section>
   </main>
-  <script type="module" src="/static/revision.js?v=18"></script>
-  <script type="module" src="/static/app.js?v=28"></script>
+  <script type="module" src="/static/revision.js?v=19"></script>
+  <script type="module" src="/static/app.js?v=29"></script>
 </body>
 </html>

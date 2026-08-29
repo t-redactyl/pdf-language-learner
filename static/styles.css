@@ -66,9 +66,16 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .history-source { color:#777c74; font:italic 13px/1.45 Georgia,serif; }
 .history-source.noun-masculine,.history-source.noun-feminine,.history-source.noun-neutral { padding-left:7px; border-left:4px solid var(--noun-colour); }
 .history-translation { margin-top:3px; color:#343832; font:500 17px/1.35 Georgia,serif; transition:color .15s ease; }
-.pages { display:flex; width:100%; flex-direction:column; align-items:center; gap:28px; min-width:0; }
-.pdf-page { position:relative; flex:none; background:white; box-shadow:0 8px 28px #28261f1a; overflow:hidden; }
-.web-document { width:min(100%,820px); padding:clamp(28px,6vw,64px); background:var(--card); box-shadow:0 8px 28px #28261f1a; }
+.reader-document { width:100%; min-width:0; }
+.pages-scroll { width:100%; overflow-x:auto; overflow-y:clip; scrollbar-gutter:stable; overscroll-behavior-inline:contain; }
+.pages { display:flex; width:100%; flex-direction:column; align-items:stretch; gap:28px; min-width:0; padding:0 0 20px; }
+.pdf-page { position:relative; flex:none; margin-inline:auto; background:white; box-shadow:0 8px 28px #28261f1a; overflow:hidden; }
+.pdf-zoom-toolbar { position:sticky; z-index:6; top:88px; display:flex; width:max-content; align-items:center; margin:0 auto 12px; padding:4px; border:1px solid var(--line); border-radius:4px; background:rgba(255,254,250,.94); box-shadow:0 3px 12px #28261f14; backdrop-filter:blur(8px); }
+.pdf-zoom-toolbar button { display:grid; min-width:40px; height:40px; place-items:center; padding:0 10px; border:0; border-radius:2px; background:transparent; color:var(--ink); cursor:pointer; font-size:22px; line-height:1; }
+.pdf-zoom-toolbar button:hover,.pdf-zoom-toolbar button:focus-visible { background:#78907b18; }
+.pdf-zoom-toolbar button:disabled { color:#a7aaa3; cursor:default; background:transparent; }
+.pdf-zoom-toolbar .pdf-zoom-reset { min-width:64px; border-inline:1px solid var(--line); border-radius:0; color:#62675f; font-size:12px; font-weight:700; }
+.web-document { width:min(100%,820px); margin-inline:auto; padding:clamp(28px,6vw,64px); background:var(--card); box-shadow:0 8px 28px #28261f1a; }
 .web-document-header { padding-bottom:26px; border-bottom:1px solid var(--line); }
 .web-document h1 { margin:8px 0 12px; font:500 clamp(34px,5vw,54px)/1.08 Georgia,serif; letter-spacing:-.035em; }
 .web-source-link { color:#6d736a; font-size:12px; overflow-wrap:anywhere; }
