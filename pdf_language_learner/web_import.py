@@ -134,8 +134,8 @@ def extract_web_document(html: str, url: str) -> WebDocument:
     soup = BeautifulSoup(html, "html.parser")
     title = _page_title(soup)
     if title == "Imported transcript":
-        title = _embedded_lesson_title(html, url) or title
-    transcript = _embedded_transcript(html)
+        title = _embedded_dw_title(html, url) or title
+    transcript = _embedded_transcript(html, url)
     if not transcript:
         transcript = _dom_transcript(soup, url)
     audio_url = _audio_url(soup, html, url)
@@ -162,15 +162,16 @@ def _page_title(soup: BeautifulSoup) -> str:
     return _clean_text(value) or "Imported transcript"
 
 
-def _embedded_lesson_title(source: str, url: str) -> str | None:
-    """Read the current DW lesson name when its server shell has no title."""
+def _embedded_dw_title(source: str, url: str) -> str | None:
+    """Read a DW lesson/article name when its server shell has no title."""
 
     host = (urlsplit(url).hostname or "").casefold()
-    lesson_id = re.search(r"/l-(\d+)(?:/|$)", urlsplit(url).path)
-    if not host.endswith("learngerman.dw.com") or not lesson_id:
+    content_id = re.search(r"/([la])-(\d+)(?:/|$)", urlsplit(url).path)
+    if not host.endswith("learngerman.dw.com") or not content_id:
         return None
+    content_type = "Lesson" if content_id.group(1) == "l" else "Article"
     match = re.search(
-        rf'"Lesson:{lesson_id.group(1)}"\s*:\s*\{{.*?'
+        rf'"{content_type}:{content_id.group(2)}"\s*:\s*\{{.*?'
         r'"name"\s*:\s*"((?:\\.|[^"\\])*)"',
         source,
         re.DOTALL,
@@ -183,7 +184,10 @@ def _embedded_lesson_title(source: str, url: str) -> str | None:
         return None
 
 
-def _embedded_transcript(source: str) -> list[str]:
+def _embedded_transcript(source: str, url: str) -> list[str]:
+    article = _dw_article_transcript(source, url)
+    if article:
+        return article
     # DW lesson pages expose the complete selectable manuscript as an escaped
     # HTML string in their Apollo state. The same fallback also covers sites
     # that use the conventional articleBody or transcript JSON fields.
@@ -201,6 +205,27 @@ def _embedded_transcript(source: str) -> list[str]:
         if len(" ".join(paragraphs)) >= 80:
             return paragraphs
     return []
+
+
+def _dw_article_transcript(source: str, url: str) -> list[str]:
+    host = (urlsplit(url).hostname or "").casefold()
+    article_id = re.search(r"/a-(\d+)(?:/|$)", urlsplit(url).path)
+    if not host.endswith("learngerman.dw.com") or not article_id:
+        return []
+    match = re.search(
+        rf'"Article:{article_id.group(1)}"\s*:\s*\{{.*?'
+        r'"text"\s*:\s*"((?:\\.|[^"\\])*)"',
+        source,
+        re.DOTALL,
+    )
+    if not match:
+        return []
+    try:
+        value = json.loads(f'"{match.group(1)}"')
+    except json.JSONDecodeError:
+        return []
+    paragraphs = _html_paragraphs(value)
+    return paragraphs if len(" ".join(paragraphs)) >= 80 else []
 
 
 def _dom_transcript(soup: BeautifulSoup, url: str) -> list[str]:
