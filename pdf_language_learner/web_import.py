@@ -23,6 +23,7 @@ MAX_PDF_BYTES = 15_000_000
 MAX_REDIRECTS = 5
 USER_AGENT = "Margin language reader/0.1 (+local educational use)"
 AUDIO_EXTENSIONS = (".mp3", ".m4a", ".aac", ".ogg", ".wav", ".opus")
+VIDEO_EXTENSIONS = (".mp4", ".webm", ".m3u8")
 LANGUAGE_NAMES = {
     "de": "German",
     "en": "English",
@@ -46,6 +47,7 @@ class WebDocument:
     title: str
     transcript: list[str]
     audio_url: str | None
+    video_url: str | None
     source_language: str | None
 
 
@@ -131,16 +133,20 @@ def fetch_web_document(value: str) -> WebDocument:
 def extract_web_document(html: str, url: str) -> WebDocument:
     soup = BeautifulSoup(html, "html.parser")
     title = _page_title(soup)
+    if title == "Imported transcript":
+        title = _embedded_lesson_title(html, url) or title
     transcript = _embedded_transcript(html)
     if not transcript:
         transcript = _dom_transcript(soup, url)
     audio_url = _audio_url(soup, html, url)
+    video_url = _video_url(soup, html, url)
     language = (soup.html.get("lang", "") if soup.html else "").split("-")[0].casefold()
     return WebDocument(
         url=url,
         title=title,
         transcript=transcript,
         audio_url=audio_url,
+        video_url=video_url,
         source_language=LANGUAGE_NAMES.get(language),
     )
 
@@ -154,6 +160,27 @@ def _page_title(soup: BeautifulSoup) -> str:
     if not value and soup.title:
         value = soup.title.get_text(" ", strip=True)
     return _clean_text(value) or "Imported transcript"
+
+
+def _embedded_lesson_title(source: str, url: str) -> str | None:
+    """Read the current DW lesson name when its server shell has no title."""
+
+    host = (urlsplit(url).hostname or "").casefold()
+    lesson_id = re.search(r"/l-(\d+)(?:/|$)", urlsplit(url).path)
+    if not host.endswith("learngerman.dw.com") or not lesson_id:
+        return None
+    match = re.search(
+        rf'"Lesson:{lesson_id.group(1)}"\s*:\s*\{{.*?'
+        r'"name"\s*:\s*"((?:\\.|[^"\\])*)"',
+        source,
+        re.DOTALL,
+    )
+    if not match:
+        return None
+    try:
+        return _clean_text(json.loads(f'"{match.group(1)}"')) or None
+    except json.JSONDecodeError:
+        return None
 
 
 def _embedded_transcript(source: str) -> list[str]:
@@ -221,7 +248,12 @@ def _block_paragraphs(node: BeautifulSoup | Tag) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
     for block in node.select("p, h2, h3, blockquote, li"):
-        value = _clean_text(block.get_text(" ", strip=True))
+        # A separator passed to get_text() also lands on both sides of DW's
+        # inline glossary spans, turning words such as "Stiftungsgeldern" into
+        # "Stiftungs geldern". Only explicit line breaks need a separator.
+        for line_break in block.select("br"):
+            line_break.replace_with(" ")
+        value = _clean_text(block.get_text("", strip=False))
         canonical = value.casefold()
         if len(value) < 2 or canonical in seen or _looks_like_interface_text(value):
             continue
@@ -276,6 +308,27 @@ def _audio_url(soup: BeautifulSoup, source: str, base_url: str) -> str | None:
         resolved = urljoin(base_url, html_module.unescape(candidate.strip()))
         parsed = urlsplit(resolved)
         if parsed.scheme in {"http", "https"} and _is_audio_path(resolved):
+            return resolved
+    return None
+
+
+def _video_url(soup: BeautifulSoup, source: str, base_url: str) -> str | None:
+    candidates = [
+        node.get("src", "")
+        for node in soup.select("video[src], video source[src]")
+    ]
+    for key in ("hlsVideoSrc", "videoUrl"):
+        for match in re.finditer(rf'"{key}"\s*:\s*"((?:\\.|[^"\\])*)"', source):
+            try:
+                candidates.append(json.loads(f'"{match.group(1)}"'))
+            except json.JSONDecodeError:
+                pass
+    for candidate in candidates:
+        resolved = urljoin(base_url, html_module.unescape(candidate.strip()))
+        parsed = urlsplit(resolved)
+        if parsed.scheme in {"http", "https"} and parsed.path.casefold().endswith(
+            VIDEO_EXTENSIONS
+        ):
             return resolved
     return None
 

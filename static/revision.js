@@ -3,7 +3,7 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=12";
+import { languageName, t } from "./i18n.js?v=13";
 
 const $ = selector => document.querySelector(selector);
 

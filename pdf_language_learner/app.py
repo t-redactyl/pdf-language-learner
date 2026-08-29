@@ -1022,6 +1022,7 @@ class WebImportResult(BaseModel):
     title: str
     transcript: list[str]
     audio_url: str | None = None
+    video_url: str | None = None
     source_language: str | None = None
 
 
@@ -3334,6 +3335,7 @@ def import_web(request: WebImportRequest) -> WebImportResult:
         title=document.title,
         transcript=document.transcript,
         audio_url=document.audio_url,
+        video_url=document.video_url,
         source_language=document.source_language,
     )
 

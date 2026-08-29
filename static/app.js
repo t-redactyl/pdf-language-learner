@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=5";
-import { initI18n, languageName, t } from "./i18n.js?v=12";
+import { initI18n, languageName, t } from "./i18n.js?v=13";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -27,6 +27,7 @@ let selectionDragStart = null;
 let translations = [];
 let displayedTranslation = null;
 let activePdf = null;
+let activeHls = null;
 const pdfPageState = new WeakMap();
 const pdfPageRenderObserver = new IntersectionObserver(entries => {
   entries.forEach(entry => {
@@ -231,6 +232,8 @@ function prepareDocument(documentKey) {
   });
   activePdf?.destroy();
   activePdf = null;
+  activeHls?.destroy();
+  activeHls = null;
   pages.replaceChildren();
   $("#pdf-zoom-toolbar").hidden = true;
   pagesScroll.scrollLeft = 0;
@@ -306,8 +309,9 @@ function openWebDocument(data) {
   header.className = "web-document-header";
   const eyebrow = document.createElement("p");
   eyebrow.className = "eyebrow";
-  eyebrow.dataset.i18n = "web.audioTranscript";
-  eyebrow.textContent = t("web.audioTranscript");
+  const transcriptKind = data.video_url ? "web.videoTranscript" : "web.audioTranscript";
+  eyebrow.dataset.i18n = transcriptKind;
+  eyebrow.textContent = t(transcriptKind);
   const title = document.createElement("h1");
   title.textContent = data.title;
   const source = document.createElement("a");
@@ -317,7 +321,18 @@ function openWebDocument(data) {
   source.rel = "noopener noreferrer";
   source.textContent = new URL(data.url).hostname;
   header.append(eyebrow, title, source);
-  if (data.audio_url) {
+  if (data.video_url) {
+    const video = document.createElement("video");
+    video.className = "web-video";
+    video.controls = true;
+    video.preload = "metadata";
+    video.playsInline = true;
+    if (attachHlsVideo(video, data.video_url)) {
+      header.append(video);
+    } else {
+      header.append(mediaFallbackNotice(source, "web.noVideoPlayback", "web.watchOriginal"));
+    }
+  } else if (data.audio_url) {
     const audio = document.createElement("audio");
     audio.className = "web-audio";
     audio.controls = true;
@@ -325,17 +340,7 @@ function openWebDocument(data) {
     audio.src = data.audio_url;
     header.append(audio);
   } else {
-    const audioNotice = document.createElement("p");
-    audioNotice.className = "audio-notice";
-    const noticeText = document.createElement("span");
-    noticeText.dataset.i18n = "web.noDirectAudio";
-    noticeText.textContent = t("web.noDirectAudio");
-    audioNotice.append(noticeText);
-    const listenLink = source.cloneNode(true);
-    listenLink.dataset.i18n = "web.listenOriginal";
-    listenLink.textContent = t("web.listenOriginal");
-    audioNotice.append(listenLink);
-    header.append(audioNotice);
+    header.append(mediaFallbackNotice(source, "web.noDirectAudio", "web.listenOriginal"));
   }
   const transcript = document.createElement("section");
   transcript.className = "web-transcript";
@@ -366,6 +371,34 @@ function openWebDocument(data) {
   }
   renderSourceLanguageState();
   if (!detectedSourceLanguage) detectDocumentLanguage();
+}
+
+function attachHlsVideo(video, url) {
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = url;
+    return true;
+  }
+  if (window.Hls?.isSupported()) {
+    activeHls = new window.Hls();
+    activeHls.loadSource(url);
+    activeHls.attachMedia(video);
+    return true;
+  }
+  return false;
+}
+
+function mediaFallbackNotice(source, messageKey, linkKey) {
+  const notice = document.createElement("p");
+  notice.className = "audio-notice";
+  const noticeText = document.createElement("span");
+  noticeText.dataset.i18n = messageKey;
+  noticeText.textContent = t(messageKey);
+  notice.append(noticeText);
+  const mediaLink = source.cloneNode(true);
+  mediaLink.dataset.i18n = linkKey;
+  mediaLink.textContent = t(linkKey);
+  notice.append(mediaLink);
+  return notice;
 }
 
 function createPdfPage(page, number) {

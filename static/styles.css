@@ -80,6 +80,7 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .web-document h1 { margin:8px 0 12px; font:500 clamp(34px,5vw,54px)/1.08 Georgia,serif; letter-spacing:-.035em; }
 .web-source-link { color:#6d736a; font-size:12px; overflow-wrap:anywhere; }
 .web-audio { width:100%; margin-top:24px; }
+.web-video { display:block; width:100%; margin-top:24px; background:#171916; }
 .audio-notice { margin:22px 0 0; padding:12px 14px; background:#f2efe7; color:#696e67; font-size:13px; }
 .audio-notice a { color:inherit; font-weight:700; }
 .web-transcript { padding-top:18px; color:#282c27; font:19px/1.75 Georgia,serif; }
