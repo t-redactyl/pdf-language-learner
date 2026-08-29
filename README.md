@@ -52,7 +52,7 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | `MARGIN_OPEN_THESAURUS_PATH`   | `/data/openthesaurus.txt`  | German thesaurus location                    |
 | `STANZA_RESOURCES_DIR`         | `/data/stanza`             | Stanza model directory                       |
 
-URL imports are downloaded by the local FastAPI server and reduced to plain transcript paragraphs plus playable media when the publisher exposes it. Dynamic sites are supported through embedded transcript data (including DW lesson manuscripts, HLS video on Video-Thema pages, and Langsam gesprochene Nachrichten articles), and linked transcript PDFs such as Deutsch-to-go's “Text (PDF)” attachments are detected and extracted automatically. Some publishers keep media behind their own JavaScript player; in that case Margin links to the original player while still making the extracted article text selectable.
+URL imports are downloaded by the local FastAPI server and reduced to plain transcript paragraphs plus playable media when the publisher exposes it. Dynamic sites are supported through embedded transcript data (including DW lesson manuscripts, HLS video on Video-Thema pages, Langsam gesprochene Nachrichten articles, and Spanish Babbel podcasts hosted by TimelineNotation), and linked transcript PDFs such as Deutsch-to-go's “Text (PDF)” attachments are detected and extracted automatically. Some publishers keep media behind their own JavaScript player; in that case Margin links to the original player while still making the extracted article text selectable.
 
 The reader loads PDF.js from cdnjs, so the first page load needs an internet connection. Scanned/image-only PDFs require OCR, which is not part of this first version.
 

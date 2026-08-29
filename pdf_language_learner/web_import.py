@@ -137,17 +137,24 @@ def extract_web_document(html: str, url: str) -> WebDocument:
         title = _embedded_dw_title(html, url) or title
     transcript = _embedded_transcript(html, url)
     if not transcript:
+        transcript = _timeline_notation_transcript(soup, url)
+    if not transcript:
         transcript = _dom_transcript(soup, url)
     audio_url = _audio_url(soup, html, url)
     video_url = _video_url(soup, html, url)
     language = (soup.html.get("lang", "") if soup.html else "").split("-")[0].casefold()
+    source_language = LANGUAGE_NAMES.get(language)
+    if _is_spanish_timeline_notation_show(url):
+        # TimelineNotation's player shell declares English even though this
+        # show's transcript and audio are Spanish.
+        source_language = "Spanish"
     return WebDocument(
         url=url,
         title=title,
         transcript=transcript,
         audio_url=audio_url,
         video_url=video_url,
-        source_language=LANGUAGE_NAMES.get(language),
+        source_language=source_language,
     )
 
 
@@ -226,6 +233,35 @@ def _dw_article_transcript(source: str, url: str) -> list[str]:
         return []
     paragraphs = _html_paragraphs(value)
     return paragraphs if len(" ".join(paragraphs)) >= 80 else []
+
+
+def _is_timeline_notation_player(url: str) -> bool:
+    parsed = urlsplit(url)
+    return (parsed.hostname or "").casefold() == "player.timelinenotation.com"
+
+
+def _is_spanish_timeline_notation_show(url: str) -> bool:
+    if not _is_timeline_notation_player(url):
+        return False
+    show_slug = urlsplit(url).path.casefold().strip("/").partition("/")[0]
+    return show_slug in {"aventura", "undiamonolingue"}
+
+
+def _timeline_notation_transcript(soup: BeautifulSoup, url: str) -> list[str]:
+    """Extract the public, timestamped transcript from this podcast player."""
+
+    if not _is_timeline_notation_player(url):
+        return []
+    values: list[str] = []
+    seen: set[str] = set()
+    for node in soup.select(".timeline .transcript_tag_body"):
+        value = _clean_text(node.get_text(" ", strip=True))
+        canonical = value.casefold()
+        if len(value) < 2 or canonical in seen:
+            continue
+        seen.add(canonical)
+        values.append(value)
+    return values if len(" ".join(values)) >= 80 else []
 
 
 def _dom_transcript(soup: BeautifulSoup, url: str) -> list[str]:
