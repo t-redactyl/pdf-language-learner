@@ -462,6 +462,7 @@ async function submitConnectorAnswer(selectedAnswer) {
       ? t("revision.correct")
       : t("revision.incorrect", { answer: data.correct_answer });
     renderConnectorSentence($("#revision-prompt-context"), card, true);
+    $("#revision-choices").hidden = true;
     $("#revision-context").replaceChildren();
     $("#revision-context").hidden = true;
     $("#revision-feedback-dictionary").hidden = true;
