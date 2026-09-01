@@ -123,8 +123,10 @@ class GrammarGrade(BaseModel):
 
 def normalize_grammar_answer(value: str) -> str:
     value = unicodedata.normalize("NFKC", value).casefold().strip()
+    value = re.sub(r"\s+([,.;:!?%)\]}])", r"\1", value)
+    value = re.sub(r"([¿¡(\[{])\s+", r"\1", value)
     value = re.sub(r"[.!?¡¿]+$", "", value)
-    return re.sub(r"\s+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def deterministic_grammar_grade(

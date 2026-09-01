@@ -3,6 +3,7 @@ import { t } from "./i18n.js?v=20";
 const $ = selector => document.querySelector(selector);
 let activeSession = null;
 let selectedTokens = [];
+let orderingTokens = [];
 let loadCurrent = null;
 
 export function initializeGrammarRevision(reload) {
@@ -17,7 +18,7 @@ export function initializeGrammarRevision(reload) {
     renderOrdering();
   });
   $("#grammar-order-check")?.addEventListener("click", () => {
-    if (selectedTokens.length) submitGrammarAnswer(selectedTokens.map(item => item.token).join(" "));
+    if (selectedTokens.length) submitGrammarAnswer(orderingAnswer());
   });
   $("#grammar-continue")?.addEventListener("click", () => loadCurrent());
 }
@@ -85,7 +86,22 @@ function renderSession() {
     });
   }
   selectedTokens = [];
+  orderingTokens = exercise.type === "ordering"
+    ? shuffledOrderingTokens(exercise.tokens)
+    : [];
   if (exercise.type === "ordering") renderOrdering();
+}
+
+function shuffledOrderingTokens(tokens) {
+  const shuffled = tokens.map((token, index) => ({ index, token }));
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]];
+  }
+  if (shuffled.length > 1 && shuffled.every((item, index) => item.index === index)) {
+    shuffled.push(shuffled.shift());
+  }
+  return shuffled;
 }
 
 function ruleSummaryPoints(summary) {
@@ -157,11 +173,10 @@ function renderRuleTable(ruleTable) {
 }
 
 function renderOrdering() {
-  const tokens = activeSession.exercise.tokens;
-  $("#grammar-order-answer").textContent = selectedTokens.join(" ");
+  $("#grammar-order-answer").textContent = orderingAnswer();
   const pool = $("#grammar-order-tokens");
   pool.replaceChildren();
-  tokens.forEach((token, index) => {
+  orderingTokens.forEach(({ index, token }) => {
     const used = selectedTokens.some(item => item.index === index);
     const button = document.createElement("button");
     button.type = "button";
@@ -169,12 +184,17 @@ function renderOrdering() {
     button.disabled = used;
     button.addEventListener("click", () => {
       selectedTokens.push({ index, token });
-      $("#grammar-order-answer").textContent = selectedTokens.map(item => item.token).join(" ");
       renderOrdering();
     });
     pool.append(button);
   });
-  $("#grammar-order-answer").textContent = selectedTokens.map(item => item.token).join(" ");
+  $("#grammar-order-answer").textContent = orderingAnswer();
+}
+
+function orderingAnswer() {
+  return selectedTokens.map(item => item.token).join(" ")
+    .replace(/\s+([,.;:!?%)\]}])/g, "$1")
+    .replace(/([¿¡(\[{])\s+/g, "$1");
 }
 
 async function submitGrammarAnswer(answer) {

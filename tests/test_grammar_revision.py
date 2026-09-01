@@ -68,6 +68,18 @@ def test_closed_grammar_grading_normalizes_punctuation() -> None:
         "Hablo",
     ) is True
     assert deterministic_grammar_grade(
+        GrammarExerciseType.ORDERING,
+        "Ich besuche einen netten Mann .",
+        ["Ich besuche einen netten Mann."],
+        "Ich besuche einen netten Mann.",
+    ) is True
+    assert deterministic_grammar_grade(
+        GrammarExerciseType.ORDERING,
+        "Obwohl es regnet , bleibe ich hier .",
+        ["Obwohl es regnet, bleibe ich hier."],
+        "Obwohl es regnet, bleibe ich hier.",
+    ) is True
+    assert deterministic_grammar_grade(
         GrammarExerciseType.TRANSLATION,
         "Hablo",
         [],

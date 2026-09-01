@@ -134,7 +134,7 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
     assert '/static/styles.css?v=45' in response.text
-    assert '/static/revision.js?v=33' in response.text
+    assert '/static/revision.js?v=35' in response.text
     assert '/static/app.js?v=46' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
@@ -161,12 +161,15 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert './i18n.js?v=20' in app_script
     assert './i18n.js?v=20' in revision_script
     assert './i18n.js?v=20' in grammar_script
-    assert './grammar.js?v=7' in revision_script
+    assert './grammar.js?v=9' in revision_script
     assert 'revisionMode === "grammar" ? "grammar.generating"' in revision_script
     assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
     assert '"grammar.reviewRules.other": "Reviewing {count} grammar rules"' in i18n_script
     assert "function renderTopicHeading()" in grammar_script
     assert "function ruleSummaryPoints(summary)" in grammar_script
+    assert "function shuffledOrderingTokens(tokens)" in grammar_script
+    assert "orderingTokens.forEach(({ index, token })" in grammar_script
+    assert "function orderingAnswer()" in grammar_script
     assert "@keyframes margin-loading-bounce" not in styles
     assert "@keyframes margin-loading-typeface" in styles
     assert "@media (prefers-reduced-motion:reduce)" in styles
