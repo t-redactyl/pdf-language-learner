@@ -43,8 +43,21 @@ class GrammarGeneratedExercise(BaseModel):
     explanation: str
 
 
+class GrammarRuleTable(BaseModel):
+    title: str
+    headers: list[str] = Field(min_length=2, max_length=6)
+    rows: list[list[str]] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def validate_row_widths(self) -> "GrammarRuleTable":
+        if any(len(row) != len(self.headers) for row in self.rows):
+            raise ValueError("every grammar table row must match its headers")
+        return self
+
+
 class GrammarGeneratedSession(BaseModel):
     rule_summary: str
+    rule_tables: list[GrammarRuleTable] = Field(default_factory=list, max_length=2)
     worked_examples: list[str] = Field(min_length=2, max_length=3)
     exercises: list[GrammarGeneratedExercise] = Field(min_length=6, max_length=6)
 
@@ -146,7 +159,25 @@ def grammar_generation_messages(
                 "or error-correction tasks. Keep production tightly constrained. Use saved vocabulary "
                 "naturally when it fits, never at the expense of the target grammar. Multiple choice "
                 "must have 3-4 choices. Ordering must supply every token. Closed tasks must include all "
-                "valid accepted answers. Explanations should teach the target rule."
+                "valid accepted answers. Explain every grammar rule in English. In particular, write "
+                "the rule_summary and every exercise explanation in English, even when the language "
+                "being studied is not English. Keep target-language forms, example sentences, prompts, "
+                "and answers in the language being studied where the exercise requires them. Rule "
+                "explanations must be accurate, self-contained, and internally consistent: define "
+                "technical or shorthand terms, distinguish regular patterns from exceptions, and do "
+                "not claim that a regular shortcut covers irregular forms. When describing a sequence "
+                "of transformations, make each example begin with the form named in the instructions "
+                "and show the relevant intermediate step. For example, do not say to start from a "
+                "Spanish verb's present-tense yo form and then illustrate the rule with an unexplained "
+                "arrow directly from the infinitive; show a sequence such as hablo -> habl- -> no "
+                "hables and state explicitly which endings apply to -ar versus -er/-ir verbs. For a "
+                "lesson, include a rule_table when a compact table makes the rule easier to understand, "
+                "especially for conjugations, declensions, person-by-person endings, or comparisons of "
+                "forms. Use at most two tables, give each a clear English title and headers, and keep "
+                "each cell concise. Do not force a table for a rule that is clearer in prose, do not "
+                "put prose "
+                "paragraphs in cells, and do not embed Markdown tables in text fields. For a review "
+                "session, return an empty rule_tables list."
             ),
         },
         {

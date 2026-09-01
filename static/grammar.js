@@ -48,6 +48,9 @@ function renderSession() {
   const lesson = $("#grammar-lesson");
   lesson.hidden = activeSession.kind !== "lesson";
   $("#grammar-rule-summary").textContent = activeSession.rule_summary;
+  $("#grammar-rule-tables").replaceChildren(
+    ...(activeSession.rule_tables || []).map(renderRuleTable),
+  );
   $("#grammar-examples").replaceChildren(...activeSession.worked_examples.map(example => {
     const item = document.createElement("li");
     item.textContent = example;
@@ -74,6 +77,39 @@ function renderSession() {
   }
   selectedTokens = [];
   if (exercise.type === "ordering") renderOrdering();
+}
+
+function renderRuleTable(ruleTable) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "grammar-rule-table-wrap";
+  const table = document.createElement("table");
+  table.className = "grammar-rule-table";
+  const caption = document.createElement("caption");
+  caption.textContent = ruleTable.title;
+  table.append(caption);
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  ruleTable.headers.forEach(header => {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = header;
+    headerRow.append(cell);
+  });
+  head.append(headerRow);
+  table.append(head);
+  const body = document.createElement("tbody");
+  ruleTable.rows.forEach(row => {
+    const tableRow = document.createElement("tr");
+    row.forEach(value => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      tableRow.append(cell);
+    });
+    body.append(tableRow);
+  });
+  table.append(body);
+  wrapper.append(table);
+  return wrapper;
 }
 
 function renderOrdering() {

@@ -7,7 +7,9 @@ from fastapi.testclient import TestClient
 from pdf_language_learner.app import app
 from pdf_language_learner.grammar_revision import (
     GrammarExerciseType,
+    GrammarSessionKind,
     deterministic_grammar_grade,
+    grammar_generation_messages,
     schedule_grammar_review,
 )
 from pdf_language_learner.revision import ScheduleState
@@ -15,6 +17,33 @@ from pdf_language_learner.spanish_grammar_catalogue import SPANISH_GRAMMAR_TOPIC
 
 
 client = TestClient(app)
+
+
+def test_grammar_generation_explains_rules_in_english() -> None:
+    messages = grammar_generation_messages(
+        language="Spanish",
+        kind=GrammarSessionKind.LESSON,
+        topics=[
+            {
+                "key": "present-tense",
+                "title": "Present tense",
+                "level": "A1",
+                "example": "Hablo español.",
+            }
+        ],
+        saved_vocabulary=[],
+    )
+
+    system_instruction = messages[0]["content"]
+    assert "Explain every grammar rule in English" in system_instruction
+    assert (
+        "rule_summary and every exercise explanation in English"
+        in system_instruction
+    )
+    assert "accurate, self-contained, and internally consistent" in system_instruction
+    assert "hablo -> habl- -> no hables" in system_instruction
+    assert "include a rule_table when a compact table" in system_instruction
+    assert "do not embed Markdown tables" in system_instruction
 
 
 def test_grammar_scheduler_uses_topic_level_intervals() -> None:
@@ -75,6 +104,13 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         return json.dumps(
             {
                 "rule_summary": "A concise explanation.",
+                "rule_tables": [
+                    {
+                        "title": "Present tense",
+                        "headers": ["Person", "Form"],
+                        "rows": [["yo", "hablo"], ["tú", "hablas"]],
+                    }
+                ],
                 "worked_examples": ["Example one.", "Example two."],
                 "exercises": exercises,
             }
@@ -88,6 +124,13 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
     session = response.json()
     assert session["kind"] == "lesson"
     assert session["topics"][0]["key"] == next_topic.key
+    assert session["rule_tables"] == [
+        {
+            "title": "Present tense",
+            "headers": ["Person", "Form"],
+            "rows": [["yo", "hablo"], ["tú", "hablas"]],
+        }
+    ]
     assert "accepted_answers" not in session["exercise"]
 
     resumed = client.post("/api/grammar/session", json={"language": "Spanish"}).json()

@@ -2746,12 +2746,22 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
             kind TEXT NOT NULL,
             topic_keys_json TEXT NOT NULL,
             rule_summary TEXT NOT NULL,
+            rule_tables_json TEXT NOT NULL DEFAULT '[]',
             worked_examples_json TEXT NOT NULL,
             created_at TEXT NOT NULL,
             completed_at TEXT
         )
         """
     )
+    session_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(grammar_sessions)")
+    }
+    if "rule_tables_json" not in session_columns:
+        connection.execute(
+            "ALTER TABLE grammar_sessions "
+            "ADD COLUMN rule_tables_json TEXT NOT NULL DEFAULT '[]'"
+        )
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS grammar_exercises (
@@ -3692,8 +3702,8 @@ def persist_grammar_session(
         """
         INSERT INTO grammar_sessions (
             id, canonical_language, kind, topic_keys_json, rule_summary,
-            worked_examples_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            rule_tables_json, worked_examples_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             session_id,
@@ -3701,6 +3711,10 @@ def persist_grammar_session(
             kind.value,
             json.dumps([topic.key for topic in topics]),
             generated.rule_summary,
+            json.dumps(
+                [table.model_dump() for table in generated.rule_tables],
+                ensure_ascii=False,
+            ),
             json.dumps(generated.worked_examples, ensure_ascii=False),
             now.isoformat(),
         ),
@@ -3761,6 +3775,7 @@ def grammar_session_payload(
             for key in topic_keys
         ],
         "rule_summary": session_row["rule_summary"],
+        "rule_tables": json.loads(session_row["rule_tables_json"]),
         "worked_examples": json.loads(session_row["worked_examples_json"]),
         "answered": len(answered),
         "correct": sum(row["correct"] for row in answered),
