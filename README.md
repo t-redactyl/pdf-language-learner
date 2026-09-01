@@ -16,7 +16,7 @@ A local-first language reader that lets you select text, detect its language, an
 
 ```bash
 cp .env .env
-# Replace OPENAI_API_KEY in .env with your key.
+# Set OPENAI_API_KEY, ANTHROPIC_API_KEY, and ANTHROPIC_GRAMMAR_MODEL in .env.
 uv sync --dev
 uv run python main.py
 ```
@@ -29,9 +29,11 @@ Open <http://127.0.0.1:8000>, choose a text-based PDF or paste a public article 
 ## Deploy on Hugging Face Spaces
 
 Create a private Docker Space and push this repository to it. CPU Basic hardware
-is sufficient because translation uses the OpenAI API. Add `OPENAI_API_KEY` as a
-Space **Secret**, not a variable. The container serves the app on the port that
-Hugging Face expects, and its changeable files use `/data` by default:
+is sufficient because generation uses hosted model APIs. Add `OPENAI_API_KEY`
+and `ANTHROPIC_API_KEY` as Space **Secrets**, not variables. Set
+`ANTHROPIC_GRAMMAR_MODEL` to the chosen Claude model ID. The container serves
+the app on the port that Hugging Face expects, and its changeable files use
+`/data` by default:
 
 - `/data/margin.db` stores saved vocabulary and revision history.
 - `/data/stanza` stores downloaded language-analysis models.
@@ -48,6 +50,8 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 |--------------------------------|----------------------------|----------------------------------------------|
 | `OPENAI_MODEL`                 | `gpt-5.6-luna`             | OpenAI model used for translation            |
 | `OPENAI_TIMEOUT_SECONDS`       | `30`                       | OpenAI request timeout                        |
+| `ANTHROPIC_GRAMMAR_MODEL`      | required                   | Anthropic model used for grammar             |
+| `ANTHROPIC_TIMEOUT_SECONDS`    | `60`                       | Anthropic request timeout                     |
 | `MARGIN_DATABASE_PATH`         | `/data/margin.db`          | Vocabulary database location                 |
 | `MARGIN_OPEN_THESAURUS_PATH`   | `/data/openthesaurus.txt`  | German thesaurus location                    |
 | `STANZA_RESOURCES_DIR`         | `/data/stanza`             | Stanza model directory                       |

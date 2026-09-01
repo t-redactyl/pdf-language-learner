@@ -18,6 +18,9 @@ from pdf_language_learner.app import (
     SynonymValue,
     WordAnalysis,
     analyze_word_in_context,
+    anthropic_client,
+    anthropic_grammar_model,
+    anthropic_structured_model_response,
     app,
     cached_model_translation,
     cached_ranked_synonyms,
@@ -37,6 +40,7 @@ from pdf_language_learner.app import (
     translation_model,
     wordnet_synonym_candidates,
 )
+from pdf_language_learner.grammar_revision import GrammarGrade
 
 client = TestClient(app)
 
@@ -46,6 +50,7 @@ def clear_runtime_caches(monkeypatch):
     # Tests replace model and NLP dependencies with purpose-built fakes. Ensure
     # cached results and clients cannot leak from one test into the next.
     for cached_function in (
+        anthropic_client,
         openai_client,
         analyze_word_in_context,
         cached_verb_lemma_decision,
@@ -123,9 +128,9 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=40' in response.text
-    assert '/static/revision.js?v=27' in response.text
-    assert '/static/app.js?v=42' in response.text
+    assert '/static/styles.css?v=41' in response.text
+    assert '/static/revision.js?v=29' in response.text
+    assert '/static/app.js?v=43' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -257,6 +262,80 @@ def test_openai_client_is_reused_and_configured(monkeypatch) -> None:
     assert openai_client() is openai_client()
     assert len(created) == 1
     assert created[0].kwargs == {"timeout": 12.5, "max_retries": 1}
+
+
+def test_anthropic_client_is_reused_and_configured(monkeypatch) -> None:
+    created = []
+
+    class FakeClient:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+            created.append(self)
+
+    monkeypatch.setenv("ANTHROPIC_TIMEOUT_SECONDS", "45")
+    monkeypatch.setattr("pdf_language_learner.app.Anthropic", FakeClient)
+
+    assert anthropic_client() is anthropic_client()
+    assert len(created) == 1
+    assert created[0].kwargs == {"timeout": 45.0, "max_retries": 1}
+
+
+def test_anthropic_grammar_model_is_required(monkeypatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_GRAMMAR_MODEL", raising=False)
+    with pytest.raises(ValueError, match="ANTHROPIC_GRAMMAR_MODEL"):
+        anthropic_grammar_model()
+
+    monkeypatch.setenv("ANTHROPIC_GRAMMAR_MODEL", "example-claude-model")
+    assert anthropic_grammar_model() == "example-claude-model"
+
+
+def test_anthropic_structured_response_separates_system_message(
+    monkeypatch,
+) -> None:
+    calls = []
+    parsed = GrammarGrade(correct=True, feedback="Correct form.")
+    response = SimpleNamespace(
+        parsed_output=parsed,
+        stop_reason="end_turn",
+        usage=SimpleNamespace(input_tokens=20, output_tokens=8),
+    )
+
+    class FakeMessages:
+        def parse(self, **kwargs):
+            calls.append(kwargs)
+            return response
+
+    fake_client = SimpleNamespace(messages=FakeMessages())
+    monkeypatch.setattr(
+        "pdf_language_learner.app.anthropic_client", lambda: fake_client
+    )
+    monkeypatch.setenv("ANTHROPIC_GRAMMAR_MODEL", "example-claude-model")
+
+    content = anthropic_structured_model_response(
+        "grammar answer grading",
+        messages=[
+            {"role": "system", "content": "Grade precisely."},
+            {"role": "user", "content": "Learner answer: hablo"},
+        ],
+        response_model=GrammarGrade,
+        max_output_tokens=250,
+    )
+
+    assert json.loads(content) == {
+        "correct": True,
+        "feedback": "Correct form.",
+    }
+    assert calls == [
+        {
+            "model": "example-claude-model",
+            "max_tokens": 250,
+            "system": "Grade precisely.",
+            "messages": [
+                {"role": "user", "content": "Learner answer: hablo"}
+            ],
+            "output_format": GrammarGrade,
+        }
+    ]
 
 
 def test_translation_model_defaults_and_can_be_overridden(monkeypatch) -> None:

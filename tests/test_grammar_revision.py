@@ -117,7 +117,8 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         )
 
     monkeypatch.setattr(
-        "pdf_language_learner.app.structured_model_response", fake_structured
+        "pdf_language_learner.app.anthropic_structured_model_response",
+        fake_structured,
     )
     response = client.post("/api/grammar/session", json={"language": "Spanish"})
     assert response.status_code == 200

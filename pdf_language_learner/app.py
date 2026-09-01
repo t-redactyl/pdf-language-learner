@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterator, Literal
 from urllib.parse import urlsplit
 
+from anthropic import Anthropic
 import httpx
 import simplemma
 import stanza
@@ -554,8 +555,11 @@ def translation_model() -> str:
     return os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 
 
-def grammar_grading_model() -> str:
-    return os.getenv("OPENAI_GRAMMAR_GRADING_MODEL", "gpt-5.6-terra")
+def anthropic_grammar_model() -> str:
+    model = os.getenv("ANTHROPIC_GRAMMAR_MODEL", "").strip()
+    if not model:
+        raise ValueError("ANTHROPIC_GRAMMAR_MODEL is not configured")
+    return model
 
 
 @lru_cache(maxsize=1)
@@ -564,6 +568,16 @@ def openai_client() -> OpenAI:
 
     return OpenAI(
         timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30")),
+        max_retries=1,
+    )
+
+
+@lru_cache(maxsize=1)
+def anthropic_client() -> Anthropic:
+    """Return one process-wide Anthropic client for grammar requests."""
+
+    return Anthropic(
+        timeout=float(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "60")),
         max_retries=1,
     )
 
@@ -646,6 +660,63 @@ def structured_model_response(
     if not response.output_text:
         raise ValueError("the model returned no structured output")
     return response.output_text
+
+
+def anthropic_structured_model_response(
+    operation: str,
+    *,
+    messages: list[dict[str, str]],
+    response_model: type[BaseModel],
+    max_output_tokens: int,
+) -> str:
+    """Return a Pydantic-validated structured response from Anthropic."""
+
+    system = "\n\n".join(
+        message["content"] for message in messages if message["role"] == "system"
+    )
+    conversation = [
+        {"role": message["role"], "content": message["content"]}
+        for message in messages
+        if message["role"] in {"user", "assistant"}
+    ]
+    if not conversation:
+        raise ValueError(
+            "Anthropic requests require at least one conversation message"
+        )
+
+    started = time.perf_counter()
+    try:
+        response = anthropic_client().messages.parse(
+            model=anthropic_grammar_model(),
+            max_tokens=max_output_tokens,
+            system=system,
+            messages=conversation,
+            output_format=response_model,
+        )
+    except Exception:
+        logger.warning(
+            "Anthropic %s failed after %.1fms",
+            operation,
+            (time.perf_counter() - started) * 1_000,
+        )
+        raise
+
+    elapsed_ms = (time.perf_counter() - started) * 1_000
+    usage = response.usage
+    logger.info(
+        "Anthropic %s completed: wall=%.1fms input=%d output=%d",
+        operation,
+        elapsed_ms,
+        usage.input_tokens,
+        usage.output_tokens,
+    )
+    parsed = response.parsed_output
+    if parsed is None:
+        raise ValueError(
+            "Anthropic returned no structured output "
+            f"(stop reason: {response.stop_reason})"
+        )
+    return parsed.model_dump_json()
 
 
 VERB_CLITICS = {
@@ -2754,7 +2825,7 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
         """
     )
     session_columns = {
-        row["name"]
+        row[1]
         for row in connection.execute("PRAGMA table_info(grammar_sessions)")
     }
     if "rule_tables_json" not in session_columns:
@@ -3658,17 +3729,15 @@ def generate_grammar_content(
         }
         for topic in topics
     ]
-    content = structured_model_response(
+    content = anthropic_structured_model_response(
         "grammar session generation",
-        model=translation_model(),
         messages=grammar_generation_messages(
             language=language,
             kind=kind,
             topics=topic_data,
             saved_vocabulary=vocabulary,
         ),
-        schema=GrammarGeneratedSession.model_json_schema(),
-        schema_name="grammar_revision_session",
+        response_model=GrammarGeneratedSession,
         max_output_tokens=5000,
     )
     generated = GrammarGeneratedSession.model_validate_json(content)
@@ -3891,17 +3960,16 @@ def answer_grammar_exercise(
         grading_data = dict(row)
     if correct is None:
         try:
-            content = structured_model_response(
+            content = anthropic_structured_model_response(
                 "grammar answer grading",
-                model=grammar_grading_model(),
                 messages=grammar_grading_messages(
                     language=language, prompt=grading_data["prompt"],
                     instruction=grading_data["instruction"], answer=request.answer,
                     reference_answer=grading_data["reference_answer"],
                     rubric=grading_data["grading_rubric"],
                 ),
-                schema=GrammarGrade.model_json_schema(),
-                schema_name="grammar_answer_grade", max_output_tokens=250,
+                response_model=GrammarGrade,
+                max_output_tokens=250,
             )
             grade = GrammarGrade.model_validate_json(content)
             correct, feedback = grade.correct, grade.feedback

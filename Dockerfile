@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
     OPENAI_MODEL="gpt-5.6-luna" \
     OPENAI_TIMEOUT_SECONDS="30" \
+    ANTHROPIC_TIMEOUT_SECONDS="60" \
     MARGIN_DATABASE_PATH="/data/margin.db" \
     MARGIN_OPEN_THESAURUS_PATH="/data/openthesaurus.txt" \
     STANZA_RESOURCES_DIR="/data/stanza"
