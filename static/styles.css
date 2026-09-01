@@ -236,6 +236,17 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-feedback-dictionary { margin:0 0 18px; color:#686d65; font-size:13px; }
 .revision-feedback-dictionary strong { color:var(--ink); font:500 17px/1.4 Georgia,serif; }
 .revision-feedback .primary-button { width:100%; }
+.revision-mode-tabs { display:inline-flex; gap:4px; margin:12px 0 18px; padding:3px; border:1px solid var(--line); border-radius:5px; background:#f4f2eb; }
+.revision-mode-tab { padding:8px 14px; border:0; border-radius:3px; background:transparent; color:#686d65; cursor:pointer; font:700 12px/1 sans-serif; }
+.revision-mode-tab.active { background:white; color:var(--ink); box-shadow:0 1px 4px #28261f18; }
+.grammar-card { text-align:left; }
+.grammar-card > h3 { margin:0 0 12px; font-size:clamp(25px,4vw,34px); }
+.grammar-lesson { margin:0 0 24px; padding:16px 18px; border-left:3px solid var(--gold); background:#f8f5e9; }
+.grammar-lesson p { margin-top:0; }
+.grammar-lesson ul { margin-bottom:0; padding-left:20px; }
+.grammar-prompt { margin:12px 0 22px; font:500 clamp(20px,3vw,27px)/1.4 Georgia,serif; }
+.grammar-ordering { margin-top:16px; }
+.grammar-ordering .primary-button { float:right; margin-top:14px; }
 [hidden] { display:none !important; }
 @media (max-width:1050px) { .reader { grid-template-columns:minmax(0,820px) minmax(200px,240px); gap:clamp(18px,2.5vw,26px); padding-inline:clamp(14px,2.5vw,26px); } .reader-meta { display:none; } .reader-meta-toggle { display:inline-flex; } .translation-panel { padding:clamp(18px,2.5vw,24px); } }
 @media (max-width:900px) { .topbar-url-form { display:none; } }

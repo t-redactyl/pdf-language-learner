@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=39">
+  <link rel="stylesheet" href="/static/styles.css?v=40">
 </head>
 <body>
   <header class="topbar">
@@ -32,7 +32,11 @@
         <div class="revision-heading">
           <div>
             <p class="eyebrow" data-i18n="revision.eyebrow">Spaced repetition</p>
-            <h2 id="revision-title" data-i18n="revision.title">Vocabulary revision</h2>
+            <h2 id="revision-title" data-i18n="revision.title">Revision</h2>
+            <div class="revision-mode-tabs" role="tablist" aria-label="Revision mode">
+              <button id="revision-mode-vocabulary" class="revision-mode-tab active" type="button" role="tab" aria-selected="true" data-i18n="revision.modeVocabulary">Vocabulary</button>
+              <button id="revision-mode-grammar" class="revision-mode-tab" type="button" role="tab" aria-selected="false" data-i18n="revision.modeGrammar">Grammar</button>
+            </div>
             <div class="revision-filters">
               <div class="revision-language-control">
                 <label class="revision-language-label" for="revision-language" data-i18n="revision.language">Language</label>
@@ -120,6 +124,45 @@
                 <strong id="revision-feedback-dictionary-value"></strong>
               </p>
               <button id="revision-continue" class="primary-button" type="button" data-i18n="revision.continue">Continue</button>
+            </div>
+          </article>
+        </div>
+        <div id="grammar-session" hidden>
+          <div class="revision-progress">
+            <span id="grammar-progress"></span>
+            <span id="grammar-score"></span>
+          </div>
+          <article class="revision-card grammar-card">
+            <p id="grammar-session-kind" class="eyebrow"></p>
+            <h3 id="grammar-topic-title"></h3>
+            <section id="grammar-lesson" class="grammar-lesson">
+              <p id="grammar-rule-summary"></p>
+              <ul id="grammar-examples"></ul>
+            </section>
+            <div id="grammar-exercise">
+              <p id="grammar-instruction" class="form-label"></p>
+              <p id="grammar-prompt" class="grammar-prompt"></p>
+              <div id="grammar-choices" class="revision-choices"></div>
+              <form id="grammar-answer-form" class="revision-recall">
+                <label for="grammar-answer" data-i18n="revision.typeAnswer">Type your answer</label>
+                <div class="revision-recall-controls">
+                  <input id="grammar-answer" type="text" maxlength="2000" autocomplete="off" spellcheck="false">
+                  <button class="primary-button" type="submit" data-i18n="revision.check">Check answer</button>
+                </div>
+              </form>
+              <div id="grammar-ordering" class="grammar-ordering" hidden>
+                <div id="grammar-order-answer" class="revision-tile-answer"></div>
+                <div id="grammar-order-tokens" class="revision-tile-pool"></div>
+                <button id="grammar-order-clear" class="text-button" type="button" data-i18n="revision.clearLetters">Clear</button>
+                <button id="grammar-order-check" class="primary-button" type="button" data-i18n="revision.check">Check answer</button>
+              </div>
+            </div>
+            <div id="grammar-feedback" class="revision-feedback" aria-live="polite" hidden>
+              <strong id="grammar-feedback-title"></strong>
+              <p id="grammar-feedback-copy"></p>
+              <p><span data-i18n="grammar.referenceAnswer">Reference answer</span>: <strong id="grammar-reference"></strong></p>
+              <p id="grammar-explanation"></p>
+              <button id="grammar-continue" class="primary-button" type="button" data-i18n="revision.continue">Continue</button>
             </div>
           </article>
         </div>
@@ -254,7 +297,7 @@
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
-  <script type="module" src="/static/revision.js?v=26"></script>
-  <script type="module" src="/static/app.js?v=41"></script>
+  <script type="module" src="/static/revision.js?v=27"></script>
+  <script type="module" src="/static/app.js?v=42"></script>
 </body>
 </html>

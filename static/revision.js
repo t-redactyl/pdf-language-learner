@@ -3,7 +3,8 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=15";
+import { languageName, t } from "./i18n.js?v=16";
+import { initializeGrammarRevision, loadGrammarRevision } from "./grammar.js?v=1";
 
 const $ = selector => document.querySelector(selector);
 
@@ -33,6 +34,7 @@ let tileOptions = [];
 let selectedTileIds = [];
 let tilesLocked = false;
 let hintUsed = false;
+let revisionMode = "vocabulary";
 const NOUN_GENDERS = new Set(["masculine", "feminine", "neutral"]);
 const ARTICLE_GENDERS = {
   german: { der: "masculine", die: "feminine", das: "neutral" },
@@ -78,6 +80,8 @@ $("#revision-recall-hint")?.addEventListener("click", revealTypedHint);
 $("#revision-tile-hint")?.addEventListener("click", revealTileHint);
 $("#revision-recall-answer")?.addEventListener("input", updateRecallHintButton);
 $("#revision-language")?.addEventListener("change", loadRevisionSession);
+$("#revision-mode-vocabulary")?.addEventListener("click", () => setRevisionMode("vocabulary"));
+$("#revision-mode-grammar")?.addEventListener("click", () => setRevisionMode("grammar"));
 $("#revision-exercise-selector")?.addEventListener("change", event => {
   const selected = selectedRevisionExercises();
   if (!selected.size) {
@@ -108,6 +112,9 @@ document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !view.hidden) closeRevision();
 });
 document.addEventListener("margin:locale-changed", () => {
+  $("#revision-title").textContent = t(
+    revisionMode === "grammar" ? "grammar.title" : "revision.title"
+  );
   localizeRevisionLanguageOptions();
   if (currentCard?.exercise === "connector_cloze") {
     renderConnectorDirection();
@@ -163,7 +170,7 @@ async function populateLanguageSelector() {
   if (!response.ok) throw new Error(languages.detail || t("revision.languagesLoadError"));
   const select = $("#revision-language");
   select.replaceChildren(new Option(t("revision.selectLanguage"), ""));
-  const choices = [...languages];
+  const choices = [...new Set([...languages, "German", "Spanish"])];
   if (documentLanguage && !choices.some(language => normalize(language) === normalize(documentLanguage))) {
     choices.push(documentLanguage);
   }
@@ -176,6 +183,7 @@ async function loadRevisionSession() {
   loading.hidden = false;
   empty.hidden = true;
   session.hidden = true;
+  $("#grammar-session").hidden = true;
   queue = [];
   currentCard = null;
   answered = 0;
@@ -192,6 +200,16 @@ async function loadRevisionSession() {
     empty.hidden = false;
     $("#revision-empty-title").textContent = t("revision.chooseLanguage");
     $("#revision-empty-copy").textContent = t("revision.chooseLanguageCopy");
+    return;
+  }
+
+  if (revisionMode === "grammar") {
+    try {
+      await loadGrammarRevision(language);
+      loading.hidden = true;
+    } catch (error) {
+      showRevisionError(error);
+    }
     return;
   }
 
@@ -226,8 +244,27 @@ function showRevisionError(error) {
   loading.hidden = true;
   empty.hidden = false;
   session.hidden = true;
+  $("#grammar-session").hidden = true;
   $("#revision-empty-title").textContent = t("revision.loadError");
   $("#revision-empty-copy").textContent = error.message;
+}
+
+function setRevisionMode(mode) {
+  revisionMode = mode;
+  const grammar = mode === "grammar";
+  $("#revision-mode-vocabulary").classList.toggle("active", !grammar);
+  $("#revision-mode-vocabulary").setAttribute("aria-selected", String(!grammar));
+  $("#revision-mode-grammar").classList.toggle("active", grammar);
+  $("#revision-mode-grammar").setAttribute("aria-selected", String(grammar));
+  $("#revision-exercise-selector").hidden = grammar;
+  $("#revision-title").textContent = t(grammar ? "grammar.title" : "revision.title");
+  const select = $("#revision-language");
+  [...select.options].forEach(option => {
+    option.disabled = grammar && option.value
+      && !["german", "spanish"].includes(normalize(option.value));
+  });
+  if (grammar && select.selectedOptions[0]?.disabled) select.value = "";
+  if (!view.hidden) loadRevisionSession();
 }
 
 function closeRevision() {
@@ -967,3 +1004,4 @@ function normalize(value) {
 }
 
 restoreRevisionExercisePreferences();
+initializeGrammarRevision(loadRevisionSession);

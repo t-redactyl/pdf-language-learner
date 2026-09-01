@@ -41,6 +41,24 @@ from pdf_language_learner.revision import (
     revision_category,
     schedule_review,
 )
+from pdf_language_learner.grammar_progress import (
+    INITIAL_GRAMMAR_PROGRESS_MIGRATION,
+    grammar_topic_status,
+    initially_seen_topics,
+)
+from pdf_language_learner.german_grammar_catalogue import GRAMMAR_TOPICS
+from pdf_language_learner.grammar_revision import (
+    GrammarExerciseType,
+    GrammarGeneratedSession,
+    GrammarGrade,
+    GrammarSessionKind,
+    deterministic_grammar_grade,
+    grammar_generation_messages,
+    grammar_grading_messages,
+    schedule_grammar_review,
+)
+from pdf_language_learner.grammar_topics import GrammarTopic
+from pdf_language_learner.spanish_grammar_catalogue import SPANISH_GRAMMAR_TOPICS
 from pdf_language_learner.suggestions import canonical_url, suggestions_for
 from pdf_language_learner.web_import import WebImportError, fetch_web_document
 
@@ -534,6 +552,10 @@ def detect_document_language(text: str) -> str:
 
 def translation_model() -> str:
     return os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
+
+
+def grammar_grading_model() -> str:
+    return os.getenv("OPENAI_GRAMMAR_GRADING_MODEL", "gpt-5.6-terra")
 
 
 @lru_cache(maxsize=1)
@@ -2705,6 +2727,113 @@ def create_connector_tables(connection: sqlite3.Connection) -> None:
     )
 
 
+def create_grammar_tables(connection: sqlite3.Connection) -> None:
+    """Create language-neutral topic-level grammar review state."""
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            name TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS grammar_sessions (
+            id TEXT PRIMARY KEY,
+            canonical_language TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            topic_keys_json TEXT NOT NULL,
+            rule_summary TEXT NOT NULL,
+            worked_examples_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS grammar_exercises (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            topic_key TEXT NOT NULL,
+            exercise_type TEXT NOT NULL,
+            instruction TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            choices_json TEXT NOT NULL,
+            tokens_json TEXT NOT NULL,
+            accepted_answers_json TEXT NOT NULL,
+            reference_answer TEXT NOT NULL,
+            grading_rubric TEXT NOT NULL,
+            explanation TEXT NOT NULL,
+            UNIQUE (session_id, position)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS grammar_exercise_answers (
+            exercise_id TEXT PRIMARY KEY,
+            answer TEXT NOT NULL,
+            correct INTEGER NOT NULL,
+            feedback TEXT NOT NULL,
+            answered_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS grammar_reviews (
+            canonical_language TEXT NOT NULL,
+            topic_key TEXT NOT NULL,
+            introduced_at TEXT NOT NULL,
+            last_reviewed_at TEXT,
+            next_review_at TEXT,
+            repetitions INTEGER NOT NULL DEFAULT 0,
+            lapses INTEGER NOT NULL DEFAULT 0,
+            consecutive_correct INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (canonical_language, topic_key)
+        )
+        """
+    )
+
+
+def seed_initial_grammar_progress(
+    connection: sqlite3.Connection,
+    *,
+    introduced_at: datetime | None = None,
+) -> None:
+    """Record the learner's pre-existing coursework exactly once."""
+
+    applied = connection.execute(
+        "SELECT 1 FROM schema_migrations WHERE name = ?",
+        (INITIAL_GRAMMAR_PROGRESS_MIGRATION,),
+    ).fetchone()
+    if applied is not None:
+        return
+    introduced_at = introduced_at or datetime.now(UTC)
+    if introduced_at.tzinfo is None:
+        raise ValueError("introduced_at must include a timezone")
+    timestamp = introduced_at.astimezone(UTC).isoformat()
+    connection.executemany(
+        """
+        INSERT OR IGNORE INTO grammar_reviews (
+            canonical_language, topic_key, introduced_at
+        ) VALUES (?, ?, ?)
+        """,
+        (
+            (topic.language.value, topic.key, timestamp)
+            for topic in initially_seen_topics()
+        ),
+    )
+    connection.execute(
+        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+        (INITIAL_GRAMMAR_PROGRESS_MIGRATION, timestamp),
+    )
+
+
 def connector_catalogue(language: str) -> dict[str, dict[str, tuple[str, ...]]]:
     normalized_language = canonicalize(language)
     if normalized_language in {"german", "deutsch"}:
@@ -2893,6 +3022,8 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
             """
         )
         create_connector_tables(connection)
+        create_grammar_tables(connection)
+        seed_initial_grammar_progress(connection)
         migrate_legacy_vocabulary(connection)
         migrate_vocabulary_gender(connection)
         backfill_connector_sentences(connection)
@@ -3417,6 +3548,422 @@ def list_vocabulary_languages() -> list[str]:
     with vocabulary_database() as connection:
         languages = [row["display_name"] for row in registered_language_tables(connection)]
     return languages
+
+
+class GrammarSessionRequest(BaseModel):
+    language: str
+
+
+class GrammarAnswerRequest(BaseModel):
+    answer: str = Field(min_length=1, max_length=2000)
+
+
+def grammar_catalogue(language: str) -> tuple[GrammarTopic, ...]:
+    normalized = canonicalize(language)
+    if normalized in {"german", "deutsch"}:
+        return GRAMMAR_TOPICS
+    if normalized in {"spanish", "espanol", "español"}:
+        return SPANISH_GRAMMAR_TOPICS
+    raise HTTPException(status_code=422, detail="Grammar revision supports German and Spanish")
+
+
+def grammar_schedule_from_row(row: sqlite3.Row | None) -> ScheduleState:
+    if row is None:
+        return ScheduleState()
+    return ScheduleState(
+        repetitions=row["repetitions"],
+        lapses=row["lapses"],
+        consecutive_correct=row["consecutive_correct"],
+        last_reviewed_at=parse_timestamp(row["last_reviewed_at"]),
+        next_review_at=parse_timestamp(row["next_review_at"]),
+    )
+
+
+def select_grammar_topics(
+    connection: sqlite3.Connection,
+    language: str,
+    now: datetime,
+) -> tuple[GrammarSessionKind, list[GrammarTopic]] | None:
+    catalogue = grammar_catalogue(language)
+    canonical_language = catalogue[0].language.value
+    review_rows = {
+        row["topic_key"]: row
+        for row in connection.execute(
+            "SELECT * FROM grammar_reviews WHERE canonical_language = ?",
+            (canonical_language,),
+        ).fetchall()
+    }
+    unseen = [topic for topic in catalogue if topic.key not in review_rows]
+    due = [
+        topic for topic in catalogue
+        if topic.key in review_rows
+        and is_due(grammar_schedule_from_row(review_rows[topic.key]), at=now)
+    ]
+    due.sort(
+        key=lambda topic: (
+            review_rows[topic.key]["next_review_at"] is not None,
+            review_rows[topic.key]["next_review_at"] or "",
+            topic.sequence,
+        )
+    )
+    completed = connection.execute(
+        "SELECT COUNT(*) FROM grammar_sessions WHERE canonical_language = ? AND completed_at IS NOT NULL",
+        (canonical_language,),
+    ).fetchone()[0]
+    if unseen and (not due or completed % 3 < 2):
+        return GrammarSessionKind.LESSON, unseen[:1]
+    if due:
+        return GrammarSessionKind.REVIEW, due[:3]
+    if unseen:
+        return GrammarSessionKind.LESSON, unseen[:1]
+    return None
+
+
+def saved_grammar_vocabulary(
+    connection: sqlite3.Connection, language: str
+) -> list[str]:
+    table = language_table(connection, language)
+    if table is None:
+        return []
+    return [
+        row["normalized_source"]
+        for row in connection.execute(
+            f"SELECT normalized_source FROM {table} ORDER BY saved_at DESC LIMIT 24"
+        ).fetchall()
+    ]
+
+
+def generate_grammar_content(
+    language: str,
+    kind: GrammarSessionKind,
+    topics: list[GrammarTopic],
+    vocabulary: list[str],
+) -> GrammarGeneratedSession:
+    topic_data = [
+        {
+            "key": topic.key,
+            "title": topic.title,
+            "level": topic.level.value,
+            "example": topic.example,
+        }
+        for topic in topics
+    ]
+    content = structured_model_response(
+        "grammar session generation",
+        model=translation_model(),
+        messages=grammar_generation_messages(
+            language=language,
+            kind=kind,
+            topics=topic_data,
+            saved_vocabulary=vocabulary,
+        ),
+        schema=GrammarGeneratedSession.model_json_schema(),
+        schema_name="grammar_revision_session",
+        max_output_tokens=5000,
+    )
+    generated = GrammarGeneratedSession.model_validate_json(content)
+    allowed = {topic.key for topic in topics}
+    if any(exercise.topic_key not in allowed for exercise in generated.exercises):
+        raise ValueError("generated exercise referred to an unselected grammar topic")
+    counts = {
+        topic.key: sum(
+            exercise.topic_key == topic.key for exercise in generated.exercises
+        )
+        for topic in topics
+    }
+    if max(counts.values()) - min(counts.values()) > 1 or any(
+        count == 0 for count in counts.values()
+    ):
+        raise ValueError("generated exercises were not balanced across selected topics")
+    return generated
+
+
+def persist_grammar_session(
+    connection: sqlite3.Connection,
+    *,
+    language: str,
+    kind: GrammarSessionKind,
+    topics: list[GrammarTopic],
+    generated: GrammarGeneratedSession,
+    now: datetime,
+) -> str:
+    session_id = str(uuid.uuid4())
+    connection.execute(
+        """
+        INSERT INTO grammar_sessions (
+            id, canonical_language, kind, topic_keys_json, rule_summary,
+            worked_examples_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            session_id,
+            canonicalize(language),
+            kind.value,
+            json.dumps([topic.key for topic in topics]),
+            generated.rule_summary,
+            json.dumps(generated.worked_examples, ensure_ascii=False),
+            now.isoformat(),
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO grammar_exercises (
+            id, session_id, position, topic_key, exercise_type, instruction,
+            prompt, choices_json, tokens_json, accepted_answers_json,
+            reference_answer, grading_rubric, explanation
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                str(uuid.uuid4()), session_id, position, exercise.topic_key,
+                exercise.type.value, exercise.instruction, exercise.prompt,
+                json.dumps(exercise.choices, ensure_ascii=False),
+                json.dumps(exercise.tokens, ensure_ascii=False),
+                json.dumps(exercise.accepted_answers, ensure_ascii=False),
+                exercise.reference_answer, exercise.grading_rubric,
+                exercise.explanation,
+            )
+            for position, exercise in enumerate(generated.exercises, start=1)
+        ],
+    )
+    return session_id
+
+
+def grammar_session_payload(
+    connection: sqlite3.Connection, session_id: str
+) -> dict[str, Any]:
+    session_row = connection.execute(
+        "SELECT * FROM grammar_sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    if session_row is None:
+        raise HTTPException(status_code=404, detail="Grammar session not found")
+    exercises = connection.execute(
+        """
+        SELECT e.*, a.correct FROM grammar_exercises e
+        LEFT JOIN grammar_exercise_answers a ON a.exercise_id = e.id
+        WHERE e.session_id = ? ORDER BY e.position
+        """,
+        (session_id,),
+    ).fetchall()
+    answered = [row for row in exercises if row["correct"] is not None]
+    current = next((row for row in exercises if row["correct"] is None), None)
+    catalogue = {topic.key: topic for topic in grammar_catalogue(session_row["canonical_language"])}
+    topic_keys = json.loads(session_row["topic_keys_json"])
+    payload: dict[str, Any] = {
+        "id": session_id,
+        "language": session_row["canonical_language"],
+        "kind": session_row["kind"],
+        "topics": [
+            {
+                "key": key, "title": catalogue[key].title,
+                "category": catalogue[key].category, "level": catalogue[key].level.value,
+            }
+            for key in topic_keys
+        ],
+        "rule_summary": session_row["rule_summary"],
+        "worked_examples": json.loads(session_row["worked_examples_json"]),
+        "answered": len(answered),
+        "correct": sum(row["correct"] for row in answered),
+        "total": len(exercises),
+        "complete": session_row["completed_at"] is not None,
+        "exercise": None,
+    }
+    if current is not None:
+        payload["exercise"] = {
+            "id": current["id"], "position": current["position"],
+            "topic_key": current["topic_key"], "type": current["exercise_type"],
+            "instruction": current["instruction"], "prompt": current["prompt"],
+            "choices": json.loads(current["choices_json"]),
+            "tokens": json.loads(current["tokens_json"]),
+        }
+    return payload
+
+
+@app.get("/api/grammar/topics")
+def list_grammar_topics(language: str) -> list[dict[str, Any]]:
+    catalogue = grammar_catalogue(language)
+    with vocabulary_database() as connection:
+        rows = {
+            row["topic_key"]: row for row in connection.execute(
+                "SELECT * FROM grammar_reviews WHERE canonical_language = ?",
+                (catalogue[0].language.value,),
+            ).fetchall()
+        }
+    return [
+        {
+            "key": topic.key, "title": topic.title, "category": topic.category,
+            "level": topic.level.value, "sequence": topic.sequence,
+            "status": grammar_topic_status(
+                introduced=topic.key in rows,
+                schedule=grammar_schedule_from_row(rows.get(topic.key)),
+            ).value,
+        }
+        for topic in catalogue
+    ]
+
+
+@app.post("/api/grammar/session")
+def start_grammar_session(request: GrammarSessionRequest) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    catalogue = grammar_catalogue(request.language)
+    canonical_language = catalogue[0].language.value
+    with vocabulary_database() as connection:
+        existing = connection.execute(
+            """
+            SELECT id FROM grammar_sessions
+            WHERE canonical_language = ? AND completed_at IS NULL
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (canonical_language,),
+        ).fetchone()
+        if existing is not None:
+            return grammar_session_payload(connection, existing["id"])
+        selection = select_grammar_topics(connection, canonical_language, now)
+        if selection is None:
+            raise HTTPException(status_code=404, detail="No grammar topics are due")
+        kind, topics = selection
+        vocabulary = saved_grammar_vocabulary(connection, canonical_language)
+    try:
+        generated = generate_grammar_content(
+            canonical_language, kind, topics, vocabulary
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Grammar session generation failed: {exc}"
+        ) from exc
+    with vocabulary_database() as connection:
+        session_id = persist_grammar_session(
+            connection, language=canonical_language, kind=kind,
+            topics=topics, generated=generated, now=now,
+        )
+        return grammar_session_payload(connection, session_id)
+
+
+@app.post("/api/grammar/session/{session_id}/exercises/{exercise_id}/answer")
+def answer_grammar_exercise(
+    session_id: str, exercise_id: str, request: GrammarAnswerRequest
+) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    with vocabulary_database() as connection:
+        row = connection.execute(
+            """
+            SELECT e.*, s.canonical_language, s.completed_at
+            FROM grammar_exercises e JOIN grammar_sessions s ON s.id = e.session_id
+            WHERE e.id = ? AND e.session_id = ?
+            """,
+            (exercise_id, session_id),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Grammar exercise not found")
+        if row["completed_at"] is not None:
+            raise HTTPException(status_code=409, detail="Grammar session is complete")
+        prior = connection.execute(
+            "SELECT * FROM grammar_exercise_answers WHERE exercise_id = ?",
+            (exercise_id,),
+        ).fetchone()
+        if prior is not None:
+            return {
+                "correct": bool(prior["correct"]), "feedback": prior["feedback"],
+                "reference_answer": row["reference_answer"],
+                "explanation": row["explanation"], "session_complete": False,
+            }
+        exercise_type = GrammarExerciseType(row["exercise_type"])
+        correct = deterministic_grammar_grade(
+            exercise_type, request.answer,
+            json.loads(row["accepted_answers_json"]), row["reference_answer"],
+        )
+        language = row["canonical_language"]
+        grading_data = dict(row)
+    if correct is None:
+        try:
+            content = structured_model_response(
+                "grammar answer grading",
+                model=grammar_grading_model(),
+                messages=grammar_grading_messages(
+                    language=language, prompt=grading_data["prompt"],
+                    instruction=grading_data["instruction"], answer=request.answer,
+                    reference_answer=grading_data["reference_answer"],
+                    rubric=grading_data["grading_rubric"],
+                ),
+                schema=GrammarGrade.model_json_schema(),
+                schema_name="grammar_answer_grade", max_output_tokens=250,
+            )
+            grade = GrammarGrade.model_validate_json(content)
+            correct, feedback = grade.correct, grade.feedback
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Grammar grading failed: {exc}") from exc
+    else:
+        feedback = "Correct." if correct else "Review the target form and compare your answer."
+    with vocabulary_database() as connection:
+        connection.execute(
+            "INSERT INTO grammar_exercise_answers VALUES (?, ?, ?, ?, ?)",
+            (exercise_id, request.answer, int(correct), feedback, now.isoformat()),
+        )
+        remaining = connection.execute(
+            """
+            SELECT COUNT(*) FROM grammar_exercises e
+            LEFT JOIN grammar_exercise_answers a ON a.exercise_id = e.id
+            WHERE e.session_id = ? AND a.exercise_id IS NULL
+            """,
+            (session_id,),
+        ).fetchone()[0]
+        complete = remaining == 0
+        if complete:
+            finish_grammar_session(connection, session_id, now)
+        return {
+            "correct": bool(correct), "feedback": feedback,
+            "reference_answer": grading_data["reference_answer"],
+            "explanation": grading_data["explanation"],
+            "session_complete": complete,
+        }
+
+
+def finish_grammar_session(
+    connection: sqlite3.Connection, session_id: str, now: datetime
+) -> None:
+    session_row = connection.execute(
+        "SELECT * FROM grammar_sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    results = connection.execute(
+        """
+        SELECT e.topic_key, COUNT(*) attempted, SUM(a.correct) correct
+        FROM grammar_exercises e JOIN grammar_exercise_answers a ON a.exercise_id = e.id
+        WHERE e.session_id = ? GROUP BY e.topic_key
+        """,
+        (session_id,),
+    ).fetchall()
+    for result in results:
+        previous = connection.execute(
+            "SELECT * FROM grammar_reviews WHERE canonical_language = ? AND topic_key = ?",
+            (session_row["canonical_language"], result["topic_key"]),
+        ).fetchone()
+        updated = schedule_grammar_review(
+            grammar_schedule_from_row(previous),
+            correct=result["correct"] / result["attempted"] >= 2 / 3,
+            reviewed_at=now,
+        )
+        connection.execute(
+            """
+            INSERT INTO grammar_reviews (
+                canonical_language, topic_key, introduced_at, last_reviewed_at,
+                next_review_at, repetitions, lapses, consecutive_correct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(canonical_language, topic_key) DO UPDATE SET
+                last_reviewed_at=excluded.last_reviewed_at,
+                next_review_at=excluded.next_review_at,
+                repetitions=excluded.repetitions, lapses=excluded.lapses,
+                consecutive_correct=excluded.consecutive_correct
+            """,
+            (
+                session_row["canonical_language"], result["topic_key"], now.isoformat(),
+                updated.last_reviewed_at.isoformat(), updated.next_review_at.isoformat(),
+                updated.repetitions, updated.lapses, updated.consecutive_correct,
+            ),
+        )
+    connection.execute(
+        "UPDATE grammar_sessions SET completed_at = ? WHERE id = ?",
+        (now.isoformat(), session_id),
+    )
 
 
 @app.get("/api/vocabulary", response_model=list[VocabularyItem])

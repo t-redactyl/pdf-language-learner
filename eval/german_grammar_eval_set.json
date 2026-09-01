@@ -1,0 +1,245 @@
+{
+  "description": "Eval set for testing whether a candidate LLM (OpenAI vs Claude, or any model tier) is reliable enough to grade free-response German exercises (translation, error-correction). Built from Jodie's own recurring error patterns rather than generic grammar trivia, since these are the mistakes a grading model actually needs to catch correctly and NOT falsely flag when absent.",
+  "how_to_use": [
+    "For each item, send only the 'sentence' field to the candidate model with the same prompt you plan to use in the real grading endpoint (e.g. 'Is this German sentence grammatically correct? If not, identify the error and give the corrected form.').",
+    "Compare the model's verdict against 'is_correct' and, for incorrect items, its proposed fix against 'correct_form'.",
+    "Score two things separately: (1) verdict accuracy - did it correctly say correct/incorrect (this is the critical number - false positives on incorrect items are the worst failure, since they teach you a wrong sentence is fine; false negatives on correct items are the second-worst, since they'd mark valid German wrong and erode trust), and (2) explanation quality - for items it correctly flagged, is 'error_type' the one it actually named, and is its corrected form linguistically equivalent to 'correct_form'.",
+    "Run the same 26 items through each candidate model in a fresh context (no prior turns, no hints), then tally per-category so you can see whether failures cluster in specific categories rather than being random noise."
+  ],
+  "items": [
+    {
+      "id": 1,
+      "category": "two_way_preposition_case",
+      "sentence": "Er hat das Buch auf den Tisch gelegt.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "Wohin? (direction of the laying action) -> Akkusativ. Correct as written."
+    },
+    {
+      "id": 2,
+      "category": "two_way_preposition_case",
+      "sentence": "Ich stelle die Vase auf dem Tisch.",
+      "is_correct": false,
+      "error_type": "wrong case after two-way preposition (should be wohin/Akkusativ, not wo/Dativ)",
+      "correct_form": "Ich stelle die Vase auf den Tisch.",
+      "note": "stellen = movement to a position -> wohin? -> Akkusativ. Dative 'dem Tisch' incorrectly treats it as a static location."
+    },
+    {
+      "id": 3,
+      "category": "compound_verb_meaning",
+      "sentence": "Sie hat endgültig festgestellt, dass der Vertrag ungültig war.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "feststellen = to determine/ascertain. Correct usage."
+    },
+    {
+      "id": 4,
+      "category": "compound_verb_meaning",
+      "sentence": "Er hat sich bei der neuen Firma abgestellt.",
+      "is_correct": false,
+      "error_type": "wrong compound verb selected (abstellen vs. anstellen)",
+      "correct_form": "Er hat sich bei der neuen Firma angestellt.",
+      "note": "sich anstellen bei = to get hired/take a job at. abstellen means to park, switch off, or set down - wrong prefix verb for this meaning."
+    },
+    {
+      "id": 5,
+      "category": "worden_vs_geworden",
+      "sentence": "Der Brief ist gestern geschrieben worden.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "Passive Perfekt uses 'worden', not 'geworden'. Correct as written."
+    },
+    {
+      "id": 6,
+      "category": "worden_vs_geworden",
+      "sentence": "Das Problem ist inzwischen gelöst geworden.",
+      "is_correct": false,
+      "error_type": "geworden used instead of worden in passive Perfekt",
+      "correct_form": "Das Problem ist inzwischen gelöst worden.",
+      "note": "In the Perfekt passive, the participle of werden shortens to 'worden'; 'geworden' is only for the full verb werden meaning 'to become'."
+    },
+    {
+      "id": 7,
+      "category": "predicate_adjective_ending",
+      "sentence": "Das Auto ist schnell.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "Predicate adjective after sein takes no ending. Correct."
+    },
+    {
+      "id": 8,
+      "category": "predicate_adjective_ending",
+      "sentence": "Die Suppe ist warme.",
+      "is_correct": false,
+      "error_type": "predicate adjective incorrectly given an ending after sein",
+      "correct_form": "Die Suppe ist warm.",
+      "note": "Adjectives after sein/werden/bleiben are never declined, regardless of the noun's gender."
+    },
+    {
+      "id": 9,
+      "category": "dative_governing_verbs",
+      "sentence": "Ich vertraue meinem besten Freund.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "vertrauen governs Dativ. Correct."
+    },
+    {
+      "id": 10,
+      "category": "dative_governing_verbs",
+      "sentence": "Der Mann, den ich vertraue, ist mein Chef.",
+      "is_correct": false,
+      "error_type": "wrong relative pronoun case - vertrauen requires Dativ, not Akkusativ",
+      "correct_form": "Der Mann, dem ich vertraue, ist mein Chef.",
+      "note": "The relative pronoun's case is governed by the verb inside the relative clause (vertrauen + Dativ), not by the antecedent's role in the main clause."
+    },
+    {
+      "id": 11,
+      "category": "ob_vs_wenn",
+      "sentence": "Ich wei\u00df nicht, ob er heute kommt.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "Indirect yes/no question -> ob. Correct."
+    },
+    {
+      "id": 12,
+      "category": "ob_vs_wenn",
+      "sentence": "Sie fragte mich, wenn ich Zeit h\u00e4tte.",
+      "is_correct": false,
+      "error_type": "wenn used instead of ob for an indirect yes/no question",
+      "correct_form": "Sie fragte mich, ob ich Zeit h\u00e4tte.",
+      "note": "'fragen, ob...' introduces an indirect question; 'wenn' would only fit a conditional or repeated-time meaning, neither of which applies here."
+    },
+    {
+      "id": 13,
+      "category": "wobei_vs_obwohl",
+      "sentence": "Er ist optimistisch, obwohl die Lage schwierig ist.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "Strong concessive contrast -> obwohl. Correct."
+    },
+    {
+      "id": 14,
+      "category": "wobei_vs_obwohl",
+      "sentence": "Wobei ich m\u00fcde war, bin ich trotzdem gegangen.",
+      "is_correct": false,
+      "error_type": "wobei used where a strong concessive (obwohl) is required",
+      "correct_form": "Obwohl ich m\u00fcde war, bin ich trotzdem gegangen.",
+      "note": "wobei introduces an accompanying/parallel circumstance (typically after the main clause, not fronted) and is too weak to carry 'even though' here; obwohl is the correct strong concessive connector."
+    },
+    {
+      "id": 15,
+      "category": "konjunktiv2_agreement",
+      "sentence": "Wenn ich mehr Zeit h\u00e4tte, w\u00fcrde ich mehr reisen.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "h\u00e4tte agrees with ich. Correct."
+    },
+    {
+      "id": 16,
+      "category": "konjunktiv2_agreement",
+      "sentence": "Wenn wir mehr Geld h\u00e4tten, h\u00e4tte wir ein neues Auto gekauft.",
+      "is_correct": false,
+      "error_type": "subject-verb agreement error in Konjunktiv II (h\u00e4tte instead of h\u00e4tten with wir)",
+      "correct_form": "Wenn wir mehr Geld h\u00e4tten, h\u00e4tten wir ein neues Auto gekauft.",
+      "note": "The second-clause auxiliary must also agree with 'wir' -> h\u00e4tten, not h\u00e4tte."
+    },
+    {
+      "id": 17,
+      "category": "lexical_precision",
+      "sentence": "Das Projekt l\u00e4uft gut, seit wir mehr Leute eingestellt haben.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "gut laufen = to go well (idiomatic for a project/business). Correct."
+    },
+    {
+      "id": 18,
+      "category": "lexical_precision",
+      "sentence": "Das Gesch\u00e4ft hat dieses Jahr sehr gut gemacht.",
+      "is_correct": false,
+      "error_type": "wrong verb choice - calque from English 'did well' instead of the idiomatic gut laufen",
+      "correct_form": "Das Gesch\u00e4ft ist dieses Jahr sehr gut gelaufen.",
+      "note": "'gut machen' is not idiomatic for a business performing well; German uses 'gut laufen' (with sein in the Perfekt, since laufen takes sein here)."
+    },
+    {
+      "id": 19,
+      "category": "neuter_das_case_ambiguity",
+      "sentence": "Das Kind, das ich gesehen habe, war f\u00fcnf Jahre alt.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "Relative pronoun 'das' is Akkusativ object of 'sehen' (ich sah es). Correct."
+    },
+    {
+      "id": 20,
+      "category": "neuter_das_case_ambiguity",
+      "sentence": "Das Ergebnis, das die Studie zeigt, \u00fcberraschen die Forscher.",
+      "is_correct": false,
+      "error_type": "verb agreement error caused by misidentifying the Nominativ subject (das Ergebnis) as an object, due to identical der/das forms in the relative clause",
+      "correct_form": "Das Ergebnis, das die Studie zeigt, \u00fcberrascht die Forscher.",
+      "note": "'Das Ergebnis' is the singular Nominativ subject of 'überraschen'; the main-clause verb must agree with it ('überrascht'), not with the plural 'die Forscher'."
+    },
+    {
+      "id": 21,
+      "category": "haengen_pair",
+      "sentence": "Ich habe das Bild an die Wand geh\u00e4ngt.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "Transitive, directional (wohin -> Akkusativ), weak Perfekt 'geh\u00e4ngt'. Correct."
+    },
+    {
+      "id": 22,
+      "category": "haengen_pair",
+      "sentence": "Der Mantel hat am Haken geh\u00e4ngt.",
+      "is_correct": false,
+      "error_type": "weak participle (geh\u00e4ngt) used instead of the strong intransitive participle (gehangen)",
+      "correct_form": "Der Mantel hat am Haken gehangen.",
+      "note": "Intransitive/stative hängen (to be hanging) is a strong verb: hängen - hing - gehangen. 'gehängt' belongs only to the transitive, directional pair."
+    },
+    {
+      "id": 23,
+      "category": "imperative_formation",
+      "sentence": "Sprich lauter!",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "sprechen has an e->i stem change in the du-imperative. Correct."
+    },
+    {
+      "id": 24,
+      "category": "imperative_formation",
+      "sentence": "Lese das Buch!",
+      "is_correct": false,
+      "error_type": "missing e->ie stem change in the du-imperative",
+      "correct_form": "Lies das Buch!",
+      "note": "lesen changes e->ie in the du-imperative (and 2nd/3rd person present): du liest -> Lies!"
+    },
+    {
+      "id": 25,
+      "category": "perfekt_participle",
+      "sentence": "Ich habe das Fenster ge\u00f6ffnet.",
+      "is_correct": true,
+      "error_type": null,
+      "correct_form": null,
+      "note": "Regular weak participle. Correct."
+    },
+    {
+      "id": 26,
+      "category": "perfekt_participle",
+      "sentence": "Er hat den Brief geschreibt.",
+      "is_correct": false,
+      "error_type": "incorrect participle formed as if schreiben were weak",
+      "correct_form": "Er hat den Brief geschrieben.",
+      "note": "schreiben is a strong verb: schreiben - schrieb - geschrieben. 'geschreibt' incorrectly applies the weak (-t) pattern."
+    }
+  ]
+}
