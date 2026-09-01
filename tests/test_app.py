@@ -2240,17 +2240,20 @@ def test_due_review_summary_counts_due_vocabulary_and_grammar(
             "UPDATE grammar_reviews SET next_review_at = ?",
             ("2999-08-01T12:00:00+00:00",),
         )
-        connection.execute(
+        connection.executemany(
             """
             INSERT INTO grammar_reviews (
                 canonical_language, topic_key, introduced_at, next_review_at
             ) VALUES (?, ?, ?, ?)
             """,
             (
-                "german",
-                "reminder-test-due",
-                "2026-08-01T12:00:00+00:00",
-                "2000-08-01T12:00:00+00:00",
+                (
+                    "german",
+                    f"reminder-test-due-{index}",
+                    "2026-08-01T12:00:00+00:00",
+                    "2000-08-01T12:00:00+00:00",
+                )
+                for index in range(4)
             ),
         )
 
@@ -2258,7 +2261,7 @@ def test_due_review_summary_counts_due_vocabulary_and_grammar(
 
     assert summary == {
         "vocabulary_count": 1,
-        "grammar_count": 1,
+        "grammar_count": 3,
     }
 
     with sqlite3.connect(vocabulary_database / "margin.db") as connection:

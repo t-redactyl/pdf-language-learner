@@ -15,6 +15,7 @@ from pdf_language_learner.revision import ScheduleState
 GRAMMAR_CORRECT_INTERVAL_DAYS = (3, 7, 14, 30, 60, 120)
 GRAMMAR_INCORRECT_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_SESSION_INTERVAL = timedelta(days=2)
+GRAMMAR_REVIEW_TOPIC_LIMIT = 3
 
 
 class GrammarSessionKind(StrEnum):

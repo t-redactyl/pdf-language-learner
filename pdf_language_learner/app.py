@@ -54,6 +54,7 @@ from pdf_language_learner.grammar_revision import (
     GrammarGenerationResponse,
     GrammarGrade,
     GRAMMAR_REVIEW_SESSION_INTERVAL,
+    GRAMMAR_REVIEW_TOPIC_LIMIT,
     GrammarSessionKind,
     GrammarTopicSummary,
     deterministic_grammar_grade,
@@ -3809,7 +3810,7 @@ def select_grammar_topics(
     if unseen and (not due or completed % 3 < 2):
         return GrammarSessionKind.LESSON, unseen[:1]
     if due and grammar_review_is_available(connection, now):
-        return GrammarSessionKind.REVIEW, due[:3]
+        return GrammarSessionKind.REVIEW, due[:GRAMMAR_REVIEW_TOPIC_LIMIT]
     if unseen:
         return GrammarSessionKind.LESSON, unseen[:1]
     return None
@@ -4559,8 +4560,9 @@ def due_reviews() -> DueReviewSummary:
         vocabulary_count=sum(
             is_due(schedule_state(row), at=now) for row in vocabulary_rows
         ),
-        grammar_count=sum(
-            is_due(grammar_schedule_from_row(row), at=now) for row in grammar_rows
+        grammar_count=min(
+            sum(is_due(grammar_schedule_from_row(row), at=now) for row in grammar_rows),
+            GRAMMAR_REVIEW_TOPIC_LIMIT,
         ),
     )
 
