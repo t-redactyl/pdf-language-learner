@@ -248,15 +248,21 @@ async function submitGrammarAnswer(answer) {
     $("#grammar-feedback-title").textContent = result.correct ? t("revision.correct") : t("grammar.notQuite");
     $("#grammar-feedback-copy").textContent = result.feedback;
     $("#grammar-reference").textContent = result.reference_answer;
+    $("#grammar-reference-row").hidden = false;
     $("#grammar-explanation").textContent = result.explanation;
+    $("#grammar-explanation").hidden = false;
     $("#grammar-continue").textContent = result.session_complete ? t("grammar.nextSession") : t("revision.continue");
+    $("#grammar-continue").hidden = false;
     $("#grammar-feedback").hidden = false;
   } catch (error) {
     document.querySelectorAll("#grammar-exercise button, #grammar-exercise input").forEach(control => { control.disabled = false; });
     $("#grammar-feedback-title").textContent = error.message;
     $("#grammar-feedback-copy").textContent = "";
     $("#grammar-reference").textContent = "";
+    $("#grammar-reference-row").hidden = true;
     $("#grammar-explanation").textContent = "";
+    $("#grammar-explanation").hidden = true;
+    $("#grammar-continue").hidden = true;
     $("#grammar-feedback").hidden = false;
   }
 }

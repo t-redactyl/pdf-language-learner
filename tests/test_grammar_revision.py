@@ -157,10 +157,12 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
     monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
     next_topic = SPANISH_GRAMMAR_TOPICS[61]
     calls = []
+    grading_token_budgets = []
 
     def fake_structured(operation, **kwargs):
         calls.append(operation)
         if operation == "grammar answer grading":
+            grading_token_budgets.append(kwargs["max_output_tokens"])
             return json.dumps({"correct": True, "feedback": "The target form is correct."})
         if operation == "grammar topic summary":
             return json.dumps({"summary": "Use this form to express the core rule."})
@@ -261,6 +263,7 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         assert result.status_code == 200
     assert result.json()["session_complete"] is True
     assert calls.count("grammar answer grading") == 3
+    assert grading_token_budgets == [1000, 1000, 1000]
     with sqlite3.connect(database) as connection:
         progress = connection.execute(
             "SELECT repetitions, lapses FROM grammar_reviews WHERE topic_key = ?",

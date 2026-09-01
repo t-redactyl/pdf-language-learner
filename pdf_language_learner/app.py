@@ -140,6 +140,10 @@ MIN_SYNONYM_ZIPF = 2.5
 MAX_SYNONYM_ZIPF_DROP = 2.0
 CONNECTOR_REVISION_LIMIT = 8
 CONNECTOR_BACKFILL_VERSION = "connector-sentences-v2"
+# Anthropic's max_tokens budget also covers adaptive reasoning. A 250-token
+# budget can therefore expire before even this small structured grade is
+# emitted, especially for open-ended production exercises.
+GRAMMAR_GRADING_MAX_OUTPUT_TOKENS = 1000
 GERMAN_CONNECTORS = {
     "obwohl": {
         "categories": ("subordinating conjunction",),
@@ -4179,7 +4183,7 @@ def answer_grammar_exercise(
                     rubric=grading_data["grading_rubric"],
                 ),
                 response_model=GrammarGrade,
-                max_output_tokens=250,
+                max_output_tokens=GRAMMAR_GRADING_MAX_OUTPUT_TOKENS,
             )
             grade = GrammarGrade.model_validate_json(content)
             correct, feedback = grade.correct, grade.feedback
