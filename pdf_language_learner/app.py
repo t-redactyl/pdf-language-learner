@@ -54,9 +54,11 @@ from pdf_language_learner.grammar_revision import (
     GrammarGenerationResponse,
     GrammarGrade,
     GrammarSessionKind,
+    GrammarTopicSummary,
     deterministic_grammar_grade,
     grammar_generation_messages,
     grammar_grading_messages,
+    grammar_topic_summary_messages,
     schedule_grammar_review,
 )
 from pdf_language_learner.grammar_topics import GrammarTopic
@@ -2851,6 +2853,7 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
             kind TEXT NOT NULL,
             topic_keys_json TEXT NOT NULL,
             rule_summary TEXT NOT NULL,
+            topic_summaries_json TEXT NOT NULL DEFAULT '{}',
             rule_tables_json TEXT NOT NULL DEFAULT '[]',
             worked_examples_json TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -2866,6 +2869,11 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE grammar_sessions "
             "ADD COLUMN rule_tables_json TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "topic_summaries_json" not in session_columns:
+        connection.execute(
+            "ALTER TABLE grammar_sessions "
+            "ADD COLUMN topic_summaries_json TEXT NOT NULL DEFAULT '{}'"
         )
     connection.execute(
         """
@@ -2913,6 +2921,50 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS grammar_topic_summaries (
+            canonical_language TEXT NOT NULL,
+            topic_key TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            PRIMARY KEY (canonical_language, topic_key)
+        )
+        """
+    )
+    summary_cache_migrated = connection.execute(
+        "SELECT 1 FROM schema_migrations WHERE name = ?",
+        ("grammar_topic_summary_cache_v1",),
+    ).fetchone()
+    if summary_cache_migrated is None:
+        for session in connection.execute(
+            """
+            SELECT canonical_language, topic_summaries_json, created_at
+            FROM grammar_sessions ORDER BY created_at DESC
+            """
+        ).fetchall():
+            summaries = json.loads(session["topic_summaries_json"])
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO grammar_topic_summaries (
+                    canonical_language, topic_key, summary, generated_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    (
+                        session["canonical_language"],
+                        topic_key,
+                        summary,
+                        session["created_at"],
+                    )
+                    for topic_key, summary in summaries.items()
+                    if summary
+                ),
+            )
+        connection.execute(
+            "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+            ("grammar_topic_summary_cache_v1", datetime.now(UTC).isoformat()),
+        )
 
 
 def seed_initial_grammar_progress(
@@ -3869,6 +3921,19 @@ def grammar_session_payload(
     current = next((row for row in exercises if row["correct"] is None), None)
     catalogue = {topic.key: topic for topic in grammar_catalogue(session_row["canonical_language"])}
     topic_keys = json.loads(session_row["topic_keys_json"])
+    topic_summaries = json.loads(session_row["topic_summaries_json"])
+    topic_summaries.update(
+        {
+            row["topic_key"]: row["summary"]
+            for row in connection.execute(
+                """
+                SELECT topic_key, summary FROM grammar_topic_summaries
+                WHERE canonical_language = ?
+                """,
+                (session_row["canonical_language"],),
+            ).fetchall()
+        }
+    )
     payload: dict[str, Any] = {
         "id": session_id,
         "language": session_row["canonical_language"],
@@ -3877,6 +3942,7 @@ def grammar_session_payload(
             {
                 "key": key, "title": catalogue[key].title,
                 "category": catalogue[key].category, "level": catalogue[key].level.value,
+                "summary": topic_summaries.get(key),
             }
             for key in topic_keys
         ],
@@ -3958,6 +4024,98 @@ def start_grammar_session(request: GrammarSessionRequest) -> dict[str, Any]:
             topics=topics, generated=generated, now=now,
         )
         return grammar_session_payload(connection, session_id)
+
+
+@app.post("/api/grammar/session/{session_id}/topics/{topic_key}/summary")
+def generate_grammar_topic_summary(
+    session_id: str, topic_key: str
+) -> dict[str, str]:
+    with vocabulary_database() as connection:
+        session = connection.execute(
+            "SELECT * FROM grammar_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if session is None:
+            raise HTTPException(status_code=404, detail="Grammar session not found")
+        topic_keys = json.loads(session["topic_keys_json"])
+        if topic_key not in topic_keys:
+            raise HTTPException(
+                status_code=404, detail="Grammar topic not found in session"
+            )
+        language = session["canonical_language"]
+        cached = connection.execute(
+            """
+            SELECT summary FROM grammar_topic_summaries
+            WHERE canonical_language = ? AND topic_key = ?
+            """,
+            (language, topic_key),
+        ).fetchone()
+        if cached is not None:
+            return {"summary": cached["summary"]}
+        summaries = json.loads(session["topic_summaries_json"])
+        if summary := summaries.get(topic_key):
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO grammar_topic_summaries (
+                    canonical_language, topic_key, summary, generated_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (language, topic_key, summary, session["created_at"]),
+            )
+            return {"summary": summary}
+        catalogue = {
+            topic.key: topic for topic in grammar_catalogue(language)
+        }
+        topic = catalogue[topic_key]
+
+    try:
+        content = anthropic_structured_model_response(
+            "grammar topic summary",
+            messages=grammar_topic_summary_messages(
+                language=language,
+                title=topic.title,
+                category=topic.category,
+                example=topic.example,
+            ),
+            response_model=GrammarTopicSummary,
+            max_output_tokens=400,
+            effort="low",
+        )
+        generated = GrammarTopicSummary.model_validate_json(content).summary
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Grammar summary generation failed: {exc}"
+        ) from exc
+
+    with vocabulary_database() as connection:
+        session = connection.execute(
+            "SELECT topic_summaries_json FROM grammar_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if session is None:
+            raise HTTPException(status_code=404, detail="Grammar session not found")
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO grammar_topic_summaries (
+                canonical_language, topic_key, summary, generated_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (language, topic_key, generated, datetime.now(UTC).isoformat()),
+        )
+        cached = connection.execute(
+            """
+            SELECT summary FROM grammar_topic_summaries
+            WHERE canonical_language = ? AND topic_key = ?
+            """,
+            (language, topic_key),
+        ).fetchone()
+        summary = cached["summary"]
+        summaries = json.loads(session["topic_summaries_json"])
+        summaries[topic_key] = summary
+        connection.execute(
+            "UPDATE grammar_sessions SET topic_summaries_json = ? WHERE id = ?",
+            (json.dumps(summaries, ensure_ascii=False), session_id),
+        )
+        return {"summary": summary}
 
 
 @app.post("/api/grammar/session/{session_id}/exercises/{exercise_id}/answer")

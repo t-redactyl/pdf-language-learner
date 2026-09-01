@@ -121,6 +121,10 @@ class GrammarGrade(BaseModel):
     feedback: str
 
 
+class GrammarTopicSummary(BaseModel):
+    summary: str = Field(min_length=1, max_length=700)
+
+
 def normalize_grammar_answer(value: str) -> str:
     value = unicodedata.normalize("NFKC", value).casefold().strip()
     value = re.sub(r"\s+([,.;:!?%)\]}])", r"\1", value)
@@ -239,6 +243,31 @@ def grammar_generation_messages(
                 f"Saved vocabulary: {vocabulary}\n{distribution}\n"
                 "Give a concise rule summary and 2-4 useful worked examples."
             ),
+        },
+    ]
+
+
+def grammar_topic_summary_messages(
+    *,
+    language: str,
+    title: str,
+    category: str,
+    example: str,
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                f"Explain one {language} grammar rule to an adult learner in English. "
+                "Write one very brief, self-contained prose paragraph of no more than "
+                "three sentences. State the core rule and clarify the supplied example. "
+                "Do not use bullets, headings, Markdown, or introductory filler. Keep "
+                "target-language forms in the language being studied."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Rule: {title}\nCategory: {category}\nExample: {example}",
         },
     ]
 

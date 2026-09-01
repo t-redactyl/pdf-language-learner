@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=5";
-import { initI18n, languageName, t } from "./i18n.js?v=20";
+import { initI18n, languageName, t } from "./i18n.js?v=21";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);

@@ -255,8 +255,15 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .grammar-topic-heading { margin-bottom:22px; }
 .grammar-topic-heading h3 { margin:14px 0 0; text-align:left; font-size:clamp(24px,3.75vw,32px); }
 .grammar-topic-list { display:grid; gap:8px; margin:20px 0 0; padding:0; list-style:none; counter-reset:grammar-topic; }
-.grammar-topic-list li { counter-increment:grammar-topic; display:grid; grid-template-columns:28px 1fr; align-items:start; gap:10px; padding:10px 12px; border:1px solid var(--line); background:#f8f7f2; line-height:1.45; }
-.grammar-topic-list li::before { content:counter(grammar-topic); display:grid; width:24px; height:24px; place-items:center; border-radius:50%; background:#78907b1c; color:#566c59; font-size:11px; font-weight:800; }
+.grammar-topic-list li { counter-increment:grammar-topic; display:grid; grid-template-columns:28px minmax(0,1fr); align-items:start; gap:10px; padding:10px 12px; border:1px solid var(--line); background:#f8f7f2; line-height:1.45; }
+.grammar-topic-list li::before { content:counter(grammar-topic); display:grid; width:24px; height:24px; place-items:center; margin-top:1px; border-radius:50%; background:#78907b1c; color:#566c59; font-size:11px; font-weight:800; }
+.grammar-topic-disclosure summary { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; cursor:pointer; list-style:none; }
+.grammar-topic-disclosure summary::-webkit-details-marker { display:none; }
+.grammar-topic-disclosure summary:focus-visible { outline:2px solid #78907b66; outline-offset:4px; }
+.grammar-topic-chevron { width:9px; height:9px; flex:0 0 auto; margin:5px 3px 0 0; border-right:1.5px solid #667068; border-bottom:1.5px solid #667068; transform:rotate(45deg); transition:transform .15s ease; }
+.grammar-topic-disclosure[open] .grammar-topic-chevron { margin-top:8px; transform:rotate(225deg); }
+.grammar-topic-summary { margin:10px 24px 2px 0; padding-top:10px; border-top:1px solid var(--line); color:#626860; font-size:13px; line-height:1.55; }
+@media (prefers-reduced-motion:reduce) { .grammar-topic-chevron { transition:none; } }
 .grammar-lesson { margin:0 0 24px; padding:16px 18px; border-left:3px solid var(--gold); background:#f8f5e9; }
 .grammar-lesson h4 { margin:0 0 8px; color:#60675f; font-size:11px; letter-spacing:.12em; text-transform:uppercase; }
 .grammar-lesson h4:not(:first-child) { margin-top:20px; }

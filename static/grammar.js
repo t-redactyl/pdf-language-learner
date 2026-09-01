@@ -1,4 +1,4 @@
-import { t } from "./i18n.js?v=20";
+import { t } from "./i18n.js?v=21";
 
 const $ = selector => document.querySelector(selector);
 let activeSession = null;
@@ -133,10 +133,47 @@ function renderTopicHeading() {
   title.textContent = t(`grammar.reviewRules.${countKey}`, { count: topics.length });
   list.replaceChildren(...topics.map(topic => {
     const item = document.createElement("li");
-    item.textContent = topic.title;
+    const disclosure = document.createElement("details");
+    disclosure.className = "grammar-topic-disclosure";
+    const heading = document.createElement("summary");
+    const label = document.createElement("span");
+    label.textContent = topic.title;
+    const chevron = document.createElement("span");
+    chevron.className = "grammar-topic-chevron";
+    chevron.setAttribute("aria-hidden", "true");
+    heading.append(label, chevron);
+    const summary = document.createElement("p");
+    summary.className = "grammar-topic-summary";
+    if (topic.summary) summary.textContent = topic.summary;
+    disclosure.append(heading, summary);
+    disclosure.addEventListener("toggle", () => {
+      if (disclosure.open && !topic.summary && summary.dataset.loading !== "true") {
+        loadTopicSummary(topic, summary);
+      }
+    });
+    item.append(disclosure);
     return item;
   }));
   list.hidden = false;
+}
+
+async function loadTopicSummary(topic, summary) {
+  summary.dataset.loading = "true";
+  summary.textContent = t("grammar.summaryGenerating");
+  try {
+    const response = await fetch(
+      `/api/grammar/session/${activeSession.id}/topics/${encodeURIComponent(topic.key)}/summary`,
+      { method: "POST" },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || t("grammar.summaryError"));
+    topic.summary = data.summary;
+    summary.textContent = data.summary;
+  } catch {
+    summary.textContent = t("grammar.summaryError");
+  } finally {
+    summary.dataset.loading = "false";
+  }
 }
 
 function renderRuleTable(ruleTable) {

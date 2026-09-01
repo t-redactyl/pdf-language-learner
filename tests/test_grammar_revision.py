@@ -10,6 +10,7 @@ from pdf_language_learner.grammar_revision import (
     GrammarSessionKind,
     deterministic_grammar_grade,
     grammar_generation_messages,
+    grammar_topic_summary_messages,
     schedule_grammar_review,
 )
 from pdf_language_learner.revision import ScheduleState
@@ -46,6 +47,20 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "do not embed Markdown tables" in system_instruction
     assert "Format rule_summary as 3-6 short bullet points" in system_instruction
     assert "Do not write rule_summary as a prose paragraph" in system_instruction
+
+
+def test_grammar_topic_summary_is_brief_english_prose() -> None:
+    messages = grammar_topic_summary_messages(
+        language="German",
+        title="Nebensätze mit weil, wenn, dass",
+        category="Nebensätze",
+        example="…weil ich Deutsch lernen möchte",
+    )
+
+    assert "in English" in messages[0]["content"]
+    assert "one very brief, self-contained prose paragraph" in messages[0]["content"]
+    assert "Do not use bullets" in messages[0]["content"]
+    assert "Nebensätze mit weil, wenn, dass" in messages[1]["content"]
 
 
 def test_grammar_scheduler_uses_topic_level_intervals() -> None:
@@ -99,6 +114,8 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         calls.append(operation)
         if operation == "grammar answer grading":
             return json.dumps({"correct": True, "feedback": "The target form is correct."})
+        if operation == "grammar topic summary":
+            return json.dumps({"summary": "Use this form to express the core rule."})
         exercises = {}
         for exercise_type in GrammarExerciseType:
             exercises[exercise_type.value] = {
@@ -148,9 +165,36 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         }
     ]
     assert "accepted_answers" not in session["exercise"]
+    assert session["topics"][0]["summary"] is None
+
+    summary_url = (
+        f"/api/grammar/session/{session['id']}/topics/{next_topic.key}/summary"
+    )
+    first_summary = client.post(summary_url)
+    second_summary = client.post(summary_url)
+    assert first_summary.status_code == 200
+    assert first_summary.json() == {
+        "summary": "Use this form to express the core rule."
+    }
+    assert second_summary.json() == first_summary.json()
+    assert calls.count("grammar topic summary") == 1
+    with sqlite3.connect(database) as connection:
+        cached = connection.execute(
+            """
+            SELECT summary FROM grammar_topic_summaries
+            WHERE canonical_language = ? AND topic_key = ?
+            """,
+            ("spanish", next_topic.key),
+        ).fetchone()
+        assert cached == (first_summary.json()["summary"],)
+        connection.execute(
+            "UPDATE grammar_sessions SET topic_summaries_json = '{}' WHERE id = ?",
+            (session["id"],),
+        )
 
     resumed = client.post("/api/grammar/session", json={"language": "Spanish"}).json()
     assert resumed["id"] == session["id"]
+    assert resumed["topics"][0]["summary"] == first_summary.json()["summary"]
     assert calls.count("grammar session generation") == 1
     with sqlite3.connect(database) as connection:
         assert connection.execute(
