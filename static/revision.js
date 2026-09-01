@@ -817,8 +817,7 @@ async function submitAnswer(selectedAnswer) {
     $("#revision-feedback-title").textContent = data.correct
       ? t("revision.correct")
       : t("revision.incorrect", { answer: data.correct_answer });
-    $("#revision-context").replaceChildren();
-    $("#revision-context").hidden = true;
+    renderVocabularyFeedbackContext(currentCard);
     $("#revision-feedback-dictionary").hidden = false;
     $("#revision-feedback-dictionary-value").textContent = data.item.normalized_source;
     $("#revision-feedback").hidden = false;
@@ -837,6 +836,22 @@ async function submitAnswer(selectedAnswer) {
     $("#revision-feedback-dictionary").hidden = true;
     $("#revision-feedback").hidden = false;
   }
+}
+
+function renderVocabularyFeedbackContext(card) {
+  const element = $("#revision-context");
+  element.replaceChildren();
+  element.hidden = true;
+  if (card.direction !== "translation_to_source") return;
+
+  const surfaceForm = card.original_source || card.normalized_source;
+  const contextNeedle = [...String(surfaceForm).split(/\s+/)]
+    .sort((left, right) => right.length - left.length)[0];
+  const context = sentenceContaining(card.context, contextNeedle);
+  if (!context) return;
+
+  renderHighlightedSentence(element, context, [surfaceForm]);
+  element.hidden = false;
 }
 
 function updateProgress() {

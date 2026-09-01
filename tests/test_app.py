@@ -162,6 +162,8 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert "export function renderClozeSentence" in text_script
     assert "originalSource: data.original_source || selectedText" in app_script
     assert "findWholeWordIgnoringCase" in text_script
+    assert "renderVocabularyFeedbackContext(currentCard)" in revision_script
+    assert "renderHighlightedSentence(element, context, [surfaceForm])" in revision_script
     assert '$("#revision-context").hidden = true' in revision_script
     assert "const measuredRange = expandHyphenatedWordRange(range);" in app_script
     assert "drag ? range : expandHyphenatedWordRange(range)" not in app_script
