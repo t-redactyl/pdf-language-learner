@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from threading import Barrier, Event
 from types import SimpleNamespace
 
@@ -115,6 +116,8 @@ def test_home_serves_reader() -> None:
     assert "PDF language reader" in response.text
     assert 'id="saved-vocabulary-list"' in response.text
     assert 'id="revision-view"' in response.text
+    assert 'id="vocabulary-review-reminder"' in response.text
+    assert 'id="grammar-review-reminder"' in response.text
     assert 'id="interface-language"' in response.text
     assert 'id="toggle-reader-meta"' in response.text
     assert 'id="synonyms-result"' in response.text
@@ -133,9 +136,9 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=46' in response.text
-    assert '/static/revision.js?v=36' in response.text
-    assert '/static/app.js?v=47' in response.text
+    assert '/static/styles.css?v=47' in response.text
+    assert '/static/revision.js?v=37' in response.text
+    assert '/static/app.js?v=48' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -158,10 +161,10 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=21' in app_script
-    assert './i18n.js?v=21' in revision_script
-    assert './i18n.js?v=21' in grammar_script
-    assert './grammar.js?v=10' in revision_script
+    assert './i18n.js?v=22' in app_script
+    assert './i18n.js?v=22' in revision_script
+    assert './i18n.js?v=22' in grammar_script
+    assert './grammar.js?v=11' in revision_script
     assert 'revisionMode === "grammar" ? "grammar.generating"' in revision_script
     assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
     assert '"grammar.reviewRules.other": "Reviewing {count} grammar rules"' in i18n_script
@@ -2224,6 +2227,71 @@ def test_vocabulary_is_persisted(vocabulary_database) -> None:
         "repetitions": 0,
         "lapses": 0,
     }
+
+
+def test_due_review_summary_counts_due_vocabulary_and_grammar(
+    vocabulary_database,
+) -> None:
+    initial = client.get("/api/revision/due")
+    assert initial.status_code == 200
+    item = client.post("/api/vocabulary", json=vocabulary_payload()).json()["item"]
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            "UPDATE grammar_reviews SET next_review_at = ?",
+            ("2999-08-01T12:00:00+00:00",),
+        )
+        connection.execute(
+            """
+            INSERT INTO grammar_reviews (
+                canonical_language, topic_key, introduced_at, next_review_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (
+                "german",
+                "reminder-test-due",
+                "2026-08-01T12:00:00+00:00",
+                "2000-08-01T12:00:00+00:00",
+            ),
+        )
+
+    summary = client.get("/api/revision/due").json()
+
+    assert summary == {
+        "vocabulary_count": 1,
+        "grammar_count": 1,
+    }
+
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        now = datetime.now(UTC).isoformat()
+        connection.execute(
+            """
+            INSERT INTO grammar_sessions (
+                id, canonical_language, kind, topic_keys_json, rule_summary,
+                rule_tables_json, worked_examples_json, created_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "recent-review",
+                "german",
+                "review",
+                "[]",
+                "Summary",
+                "[]",
+                "[]",
+                now,
+                now,
+            ),
+        )
+    assert client.get("/api/revision/due").json()["grammar_count"] == 0
+
+    client.post(
+        f"/api/revision/{item['id']}/answer",
+        json={
+            "direction": "source_to_translation",
+            "selected_answer": "word",
+        },
+    )
+    assert client.get("/api/revision/due").json()["vocabulary_count"] == 0
 
 
 def test_vocabulary_persists_ranked_synonyms(vocabulary_database) -> None:

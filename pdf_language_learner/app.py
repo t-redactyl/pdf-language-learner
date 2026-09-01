@@ -53,6 +53,7 @@ from pdf_language_learner.grammar_revision import (
     GrammarGeneratedSession,
     GrammarGenerationResponse,
     GrammarGrade,
+    GRAMMAR_REVIEW_SESSION_INTERVAL,
     GrammarSessionKind,
     GrammarTopicSummary,
     deterministic_grammar_grade,
@@ -1429,6 +1430,11 @@ class RevisionSession(BaseModel):
     synonym_round: SynonymMatchingRound | None = None
     connector_cards: list[ConnectorRevisionCard] = Field(default_factory=list)
     connector_due_count: int = 0
+
+
+class DueReviewSummary(BaseModel):
+    vocabulary_count: int
+    grammar_count: int
 
 
 class RevisionAnswer(BaseModel):
@@ -3750,6 +3756,25 @@ def grammar_schedule_from_row(row: sqlite3.Row | None) -> ScheduleState:
     )
 
 
+def grammar_review_is_available(
+    connection: sqlite3.Connection,
+    now: datetime,
+) -> bool:
+    """Limit generated review sessions to roughly three per week."""
+
+    latest = connection.execute(
+        """
+        SELECT completed_at FROM grammar_sessions
+        WHERE kind = ? AND completed_at IS NOT NULL
+        ORDER BY completed_at DESC LIMIT 1
+        """,
+        (GrammarSessionKind.REVIEW.value,),
+    ).fetchone()
+    if latest is None:
+        return True
+    return parse_timestamp(latest["completed_at"]) + GRAMMAR_REVIEW_SESSION_INTERVAL <= now
+
+
 def select_grammar_topics(
     connection: sqlite3.Connection,
     language: str,
@@ -3783,7 +3808,7 @@ def select_grammar_topics(
     ).fetchone()[0]
     if unseen and (not due or completed % 3 < 2):
         return GrammarSessionKind.LESSON, unseen[:1]
-    if due:
+    if due and grammar_review_is_available(connection, now):
         return GrammarSessionKind.REVIEW, due[:3]
     if unseen:
         return GrammarSessionKind.LESSON, unseen[:1]
@@ -4501,6 +4526,42 @@ def revision_session(
         synonym_round=synonym_round,
         connector_cards=connector_cards,
         connector_due_count=connector_due_count,
+    )
+
+
+@app.get("/api/revision/due", response_model=DueReviewSummary)
+def due_reviews() -> DueReviewSummary:
+    """Return lightweight counts for the home-page review reminder."""
+
+    now = datetime.now(UTC)
+    with vocabulary_database() as connection:
+        vocabulary_rows = [
+            row
+            for registered in registered_language_tables(connection)
+            for row in connection.execute(
+                f"SELECT last_reviewed_at, next_review_at, repetitions, "
+                f"lapses, consecutive_correct FROM {registered['table_name']}"
+            ).fetchall()
+        ]
+        grammar_rows = (
+            connection.execute(
+                """
+                SELECT last_reviewed_at, next_review_at, repetitions,
+                    lapses, consecutive_correct
+                FROM grammar_reviews
+                """
+            ).fetchall()
+            if grammar_review_is_available(connection, now)
+            else []
+        )
+
+    return DueReviewSummary(
+        vocabulary_count=sum(
+            is_due(schedule_state(row), at=now) for row in vocabulary_rows
+        ),
+        grammar_count=sum(
+            is_due(grammar_schedule_from_row(row), at=now) for row in grammar_rows
+        ),
     )
 
 

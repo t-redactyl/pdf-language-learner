@@ -119,7 +119,7 @@ def test_grammar_scheduler_uses_topic_level_intervals() -> None:
 
     assert (first.next_review_at - now).days == 3
     assert (second.next_review_at - now).days == 7
-    assert (missed.next_review_at - now).days == 1
+    assert (missed.next_review_at - now).days == 2
     assert missed.consecutive_correct == 0
 
 

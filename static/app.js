@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=5";
-import { initI18n, languageName, t } from "./i18n.js?v=21";
+import { initI18n, languageName, t } from "./i18n.js?v=22";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -26,6 +26,7 @@ const measurementContext = document.createElement("canvas").getContext("2d");
 let selectionDragStart = null;
 let translations = [];
 let displayedTranslation = null;
+let dueReviewSummary = null;
 let activePdf = null;
 let activeHls = null;
 const pdfPageState = new WeakMap();
@@ -161,6 +162,58 @@ document.addEventListener("keydown", event => {
 initI18n();
 localizeLanguageOptions();
 setTranslationPanelCollapsed(false);
+loadDueReviewReminder();
+
+function renderDueReviewReminder() {
+  const reminders = $("#review-reminders");
+  if (!reminders || !dueReviewSummary) return;
+  const vocabularyCount = dueReviewSummary.vocabulary_count || 0;
+  const grammarCount = dueReviewSummary.grammar_count || 0;
+  const vocabularyReminder = $("#vocabulary-review-reminder");
+  const grammarReminder = $("#grammar-review-reminder");
+  reminders.hidden = vocabularyCount + grammarCount === 0;
+  vocabularyReminder.hidden = reminders.hidden;
+  grammarReminder.hidden = reminders.hidden;
+  const vocabularyButton = document.querySelector('[data-review-mode="vocabulary"]');
+  const grammarButton = document.querySelector('[data-review-mode="grammar"]');
+  vocabularyButton.disabled = vocabularyCount === 0;
+  grammarButton.disabled = grammarCount === 0;
+  if (vocabularyCount) {
+    const items = t(`reviewReminder.vocabulary.${vocabularyCount === 1 ? "one" : "other"}`, {
+      count: vocabularyCount,
+    });
+    $("#vocabulary-review-reminder-summary").textContent = t("reviewReminder.summary", { items });
+  } else {
+    $("#vocabulary-review-reminder-summary").textContent = t("reviewReminder.caughtUp");
+  }
+  if (grammarCount) {
+    const items = t(`reviewReminder.grammar.${grammarCount === 1 ? "one" : "other"}`, {
+      count: grammarCount,
+    });
+    $("#grammar-review-reminder-summary").textContent = t("reviewReminder.summary", { items });
+  } else {
+    $("#grammar-review-reminder-summary").textContent = t("reviewReminder.caughtUp");
+  }
+}
+
+async function loadDueReviewReminder() {
+  try {
+    const response = await fetch("/api/revision/due");
+    if (!response.ok) return;
+    dueReviewSummary = await response.json();
+    renderDueReviewReminder();
+  } catch {
+    // A reminder is optional; the rest of the home page remains usable offline.
+  }
+}
+
+document.querySelectorAll("[data-review-mode]").forEach(button => {
+  button.addEventListener("click", () => document.dispatchEvent(new CustomEvent(
+    "margin:open-revision",
+    { detail: { mode: button.dataset.reviewMode } },
+  )));
+});
+document.addEventListener("margin:reviews-changed", loadDueReviewReminder);
 
 document.addEventListener("margin:locale-changed", () => {
   localizeLanguageOptions();
@@ -174,6 +227,7 @@ document.addEventListener("margin:locale-changed", () => {
   setTranslationPanelCollapsed($(".translation-panel").classList.contains("is-collapsed"));
   renderPanelVocabularyToggle();
   renderSuggestions(currentSuggestions);
+  renderDueReviewReminder();
 });
 
 function localizeLanguageOptions() {

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=46">
+  <link rel="stylesheet" href="/static/styles.css?v=47">
 </head>
 <body>
   <header class="topbar">
@@ -192,6 +192,24 @@
         </div>
           <p class="web-import-status error" role="alert"></p>
         </form>
+        <div id="review-reminders" class="review-reminders" hidden>
+          <section id="vocabulary-review-reminder" class="review-reminder" aria-labelledby="vocabulary-review-reminder-title" hidden>
+            <div>
+              <p class="eyebrow" data-i18n="reviewReminder.eyebrow">Ready to practise</p>
+              <h2 id="vocabulary-review-reminder-title" data-i18n="reviewReminder.vocabularyTitle">Vocabulary review</h2>
+              <p id="vocabulary-review-reminder-summary"></p>
+            </div>
+            <button class="primary-button" type="button" data-review-mode="vocabulary" data-i18n="reviewReminder.vocabularyOpen">Review vocabulary</button>
+          </section>
+          <section id="grammar-review-reminder" class="review-reminder" aria-labelledby="grammar-review-reminder-title" hidden>
+            <div>
+              <p class="eyebrow" data-i18n="reviewReminder.eyebrow">Ready to practise</p>
+              <h2 id="grammar-review-reminder-title" data-i18n="reviewReminder.grammarTitle">Grammar review</h2>
+              <p id="grammar-review-reminder-summary"></p>
+            </div>
+            <button class="primary-button" type="button" data-review-mode="grammar" data-i18n="reviewReminder.grammarOpen">Review grammar</button>
+          </section>
+        </div>
         <section id="suggestions" class="suggestions" aria-labelledby="suggestions-title">
           <div class="suggestions-heading">
             <p class="eyebrow" data-i18n="suggestions.eyebrow">Keep learning</p>
@@ -306,7 +324,7 @@
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
-  <script type="module" src="/static/revision.js?v=36"></script>
-  <script type="module" src="/static/app.js?v=47"></script>
+  <script type="module" src="/static/revision.js?v=37"></script>
+  <script type="module" src="/static/app.js?v=48"></script>
 </body>
 </html>

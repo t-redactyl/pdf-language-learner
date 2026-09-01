@@ -3,8 +3,8 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=21";
-import { initializeGrammarRevision, loadGrammarRevision } from "./grammar.js?v=10";
+import { languageName, t } from "./i18n.js?v=22";
+import { initializeGrammarRevision, loadGrammarRevision } from "./grammar.js?v=11";
 
 const $ = selector => document.querySelector(selector);
 
@@ -82,6 +82,10 @@ $("#revision-recall-answer")?.addEventListener("input", updateRecallHintButton);
 $("#revision-language")?.addEventListener("change", loadRevisionSession);
 $("#revision-mode-vocabulary")?.addEventListener("click", () => setRevisionMode("vocabulary"));
 $("#revision-mode-grammar")?.addEventListener("click", () => setRevisionMode("grammar"));
+document.addEventListener("margin:open-revision", event => {
+  setRevisionMode(event.detail?.mode === "grammar" ? "grammar" : "vocabulary");
+  openRevision();
+});
 $("#revision-exercise-selector")?.addEventListener("change", event => {
   const selected = selectedRevisionExercises();
   if (!selected.size) {
@@ -273,6 +277,7 @@ function setRevisionMode(mode) {
 function closeRevision() {
   view.hidden = true;
   document.body.classList.remove("revision-open");
+  document.dispatchEvent(new CustomEvent("margin:reviews-changed"));
 }
 
 function showEmptySession(finished = false) {
