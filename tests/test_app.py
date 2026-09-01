@@ -2727,13 +2727,9 @@ def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:
         assert card["original_source"] == item["original_source"]
         assert card["normalized_source"] == item["normalized_source"]
         assert card["context"] == item["context"]
-        if card["direction"] == "translation_to_source":
-            assert card["exercise"] == "letter_tiles"
-            assert card["choices"] == []
-            assert card["choice_genders"] == {}
-        else:
-            assert card["exercise"] == "multiple_choice"
-            assert 2 <= len(card["choices"]) <= 4
+        assert card["exercise"] == "multiple_choice"
+        assert 2 <= len(card["choices"]) <= 4
+        if card["direction"] == "source_to_translation":
             assert card["choice_genders"] == {}
 
 
@@ -2892,26 +2888,73 @@ def test_needs_practice_revision_without_distractors_uses_letter_tiles(
     assert card["choices"] == []
 
 
-def test_familiar_due_vocabulary_uses_typed_recall(vocabulary_database) -> None:
+@pytest.mark.parametrize(
+    ("streak", "expected_exercise"),
+    [
+        (0, "multiple_choice"),
+        (1, "multiple_choice"),
+        (2, "letter_tiles"),
+        (3, "letter_tiles"),
+        (4, "typed_recall"),
+        (5, "typed_recall"),
+    ],
+)
+def test_vocabulary_exercise_advances_with_correct_answer_streak(
+    vocabulary_database, streak: int, expected_exercise: str
+) -> None:
     saved = save_revision_vocabulary()
     item = saved[0]
     with sqlite3.connect(vocabulary_database / "margin.db") as connection:
         connection.execute(
             """
             UPDATE vocabulary_german
-            SET repetitions = 1, consecutive_correct = 1,
+            SET repetitions = ?, consecutive_correct = ?,
+                next_review_at = '2026-08-22T12:00:00+00:00'
+            WHERE id = ?
+            """,
+            (streak, streak, item["id"]),
+        )
+
+    session = client.get(
+        "/api/revision/session",
+        params={"supports_letter_tiles": True},
+    ).json()
+    card = next(card for card in session["cards"] if card["item_id"] == item["id"])
+
+    assert card["exercise"] == expected_exercise
+    if expected_exercise == "multiple_choice":
+        assert len(card["choices"]) >= 2
+    else:
+        assert card["choices"] == []
+    if expected_exercise == "letter_tiles":
+        assert card["direction"] == "translation_to_source"
+
+
+def test_vocabulary_exercise_returns_to_multiple_choice_after_lapse(
+    vocabulary_database,
+) -> None:
+    saved = save_revision_vocabulary()
+    item = saved[0]
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            """
+            UPDATE vocabulary_german
+            SET repetitions = 5, lapses = 1, consecutive_correct = 0,
                 next_review_at = '2026-08-22T12:00:00+00:00'
             WHERE id = ?
             """,
             (item["id"],),
         )
 
-    session = client.get("/api/revision/session").json()
+    session = client.get(
+        "/api/revision/session",
+        params={"supports_letter_tiles": True},
+    ).json()
     card = next(card for card in session["cards"] if card["item_id"] == item["id"])
 
-    assert card["category"] == "usually_correct"
-    assert card["exercise"] == "typed_recall"
-    assert card["choices"] == []
+    assert card["category"] == "needs_practice"
+    assert card["exercise"] == "multiple_choice"
+    assert len(card["choices"]) >= 2
 
 
 def test_revision_of_unknown_word_returns_not_found(vocabulary_database) -> None:

@@ -3118,48 +3118,49 @@ def revision_card(
     *,
     supports_letter_tiles: bool = False,
 ) -> RevisionCard:
-    category = revision_category(schedule_state(row))
-    familiar = category in {
-        RevisionCategory.ALWAYS_CORRECT,
-        RevisionCategory.USUALLY_CORRECT,
-    }
-    if familiar:
-        exercise = RevisionExercise.TYPED_RECALL
-        directions = list(RevisionDirection)
-    elif supports_letter_tiles:
-        source_choices = revision_choices(
-            row, rows, RevisionDirection.SOURCE_TO_TRANSLATION
-        )
-        directions = [
-            RevisionDirection.TRANSLATION_TO_SOURCE,
-            *(
-                [RevisionDirection.SOURCE_TO_TRANSLATION]
-                if len(source_choices) >= 2
-                else []
-            ),
-        ]
-        exercise = None
-    else:
-        directions = [
-            direction
-            for direction in RevisionDirection
-            if len(revision_choices(row, rows, direction)) >= 2
-        ]
-        exercise = (
-            RevisionExercise.MULTIPLE_CHOICE
-            if directions
-            else RevisionExercise.TYPED_RECALL
-        )
-        if not directions:
+    state = schedule_state(row)
+    category = revision_category(state)
+    if supports_letter_tiles:
+        if state.consecutive_correct >= 4:
+            exercise = RevisionExercise.TYPED_RECALL
             directions = list(RevisionDirection)
+        elif state.consecutive_correct >= 2:
+            exercise = RevisionExercise.LETTER_TILES
+            directions = [RevisionDirection.TRANSLATION_TO_SOURCE]
+        else:
+            directions = [
+                direction
+                for direction in RevisionDirection
+                if len(revision_choices(row, rows, direction)) >= 2
+            ]
+            if directions:
+                exercise = RevisionExercise.MULTIPLE_CHOICE
+            else:
+                exercise = RevisionExercise.LETTER_TILES
+                directions = [RevisionDirection.TRANSLATION_TO_SOURCE]
+    else:
+        familiar = category in {
+            RevisionCategory.ALWAYS_CORRECT,
+            RevisionCategory.USUALLY_CORRECT,
+        }
+        if familiar:
+            exercise = RevisionExercise.TYPED_RECALL
+            directions = list(RevisionDirection)
+        else:
+            directions = [
+                direction
+                for direction in RevisionDirection
+                if len(revision_choices(row, rows, direction)) >= 2
+            ]
+            exercise = (
+                RevisionExercise.MULTIPLE_CHOICE
+                if directions
+                else RevisionExercise.TYPED_RECALL
+            )
+            if not directions:
+                directions = list(RevisionDirection)
 
     direction = random.SystemRandom().choice(directions)
-    if exercise is None:
-        exercise = (
-            RevisionExercise.MULTIPLE_CHOICE
-            if direction is RevisionDirection.SOURCE_TO_TRANSLATION
-            else RevisionExercise.LETTER_TILES
-        )
     prompt_field = (
         "normalized_source"
         if direction is RevisionDirection.SOURCE_TO_TRANSLATION
