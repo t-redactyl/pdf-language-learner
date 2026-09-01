@@ -252,10 +252,17 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-mode-tab { padding:8px 14px; border:0; border-radius:3px; background:transparent; color:#686d65; cursor:pointer; font:700 12px/1 sans-serif; }
 .revision-mode-tab.active { background:white; color:var(--ink); box-shadow:0 1px 4px #28261f18; }
 .grammar-card { text-align:left; }
-.grammar-card > h3 { margin:0 0 12px; font-size:clamp(25px,4vw,34px); }
+.grammar-topic-heading { margin-bottom:22px; }
+.grammar-topic-heading h3 { margin:0; text-align:left; font-size:clamp(25px,4vw,34px); }
+.grammar-topic-list { display:grid; gap:8px; margin:14px 0 0; padding:0; list-style:none; counter-reset:grammar-topic; }
+.grammar-topic-list li { counter-increment:grammar-topic; display:grid; grid-template-columns:28px 1fr; align-items:start; gap:10px; padding:10px 12px; border:1px solid var(--line); background:#f8f7f2; line-height:1.45; }
+.grammar-topic-list li::before { content:counter(grammar-topic); display:grid; width:24px; height:24px; place-items:center; border-radius:50%; background:#78907b1c; color:#566c59; font-size:11px; font-weight:800; }
 .grammar-lesson { margin:0 0 24px; padding:16px 18px; border-left:3px solid var(--gold); background:#f8f5e9; }
-.grammar-lesson p { margin-top:0; }
-.grammar-lesson ul { margin-bottom:0; padding-left:20px; }
+.grammar-lesson h4 { margin:0 0 8px; color:#60675f; font-size:11px; letter-spacing:.12em; text-transform:uppercase; }
+.grammar-lesson h4:not(:first-child) { margin-top:20px; }
+.grammar-lesson ul { margin:0; padding-left:20px; }
+.grammar-rule-summary { display:grid; gap:8px; }
+.grammar-rule-summary li { padding-left:3px; line-height:1.55; }
 .grammar-rule-table-wrap { margin:16px 0; overflow-x:auto; }
 .grammar-rule-table { width:100%; border-collapse:collapse; font-size:14px; }
 .grammar-rule-table caption { margin-bottom:7px; text-align:left; font-weight:700; }

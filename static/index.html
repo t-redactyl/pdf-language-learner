@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=43">
+  <link rel="stylesheet" href="/static/styles.css?v=45">
 </head>
 <body>
   <header class="topbar">
@@ -137,10 +137,15 @@
           </div>
           <article class="revision-card grammar-card">
             <p id="grammar-session-kind" class="eyebrow"></p>
-            <h3 id="grammar-topic-title"></h3>
+            <div class="grammar-topic-heading">
+              <h3 id="grammar-topic-title"></h3>
+              <ol id="grammar-topic-list" class="grammar-topic-list" hidden></ol>
+            </div>
             <section id="grammar-lesson" class="grammar-lesson">
-              <p id="grammar-rule-summary"></p>
+              <h4 data-i18n="grammar.keyPoints">Key points</h4>
+              <ul id="grammar-rule-summary" class="grammar-rule-summary"></ul>
               <div id="grammar-rule-tables"></div>
+              <h4 data-i18n="grammar.examples">Examples</h4>
               <ul id="grammar-examples"></ul>
             </section>
             <div id="grammar-exercise">
@@ -301,7 +306,7 @@
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
-  <script type="module" src="/static/revision.js?v=31"></script>
-  <script type="module" src="/static/app.js?v=44"></script>
+  <script type="module" src="/static/revision.js?v=33"></script>
+  <script type="module" src="/static/app.js?v=46"></script>
 </body>
 </html>

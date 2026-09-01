@@ -225,7 +225,9 @@ def grammar_generation_messages(
                 "each cell concise. Do not force a table for a rule that is clearer in prose, do not "
                 "put prose "
                 "paragraphs in cells, and do not embed Markdown tables in text fields. For a review "
-                "session, return an empty rule_tables list."
+                "session, return an empty rule_tables list. Format rule_summary as 3-6 short bullet "
+                "points, with one self-contained point per line beginning with '- '. Do not write "
+                "rule_summary as a prose paragraph."
             ),
         },
         {

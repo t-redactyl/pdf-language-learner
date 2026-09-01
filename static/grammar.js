@@ -1,4 +1,4 @@
-import { t } from "./i18n.js?v=18";
+import { t } from "./i18n.js?v=20";
 
 const $ = selector => document.querySelector(selector);
 let activeSession = null;
@@ -44,10 +44,16 @@ function renderSession() {
   });
   $("#grammar-score").textContent = t("revision.score", { count: activeSession.correct });
   $("#grammar-session-kind").textContent = t(`grammar.kind.${activeSession.kind}`);
-  $("#grammar-topic-title").textContent = activeSession.topics.map(topic => topic.title).join(" · ");
+  renderTopicHeading();
   const lesson = $("#grammar-lesson");
   lesson.hidden = activeSession.kind !== "lesson";
-  $("#grammar-rule-summary").textContent = activeSession.rule_summary;
+  $("#grammar-rule-summary").replaceChildren(
+    ...ruleSummaryPoints(activeSession.rule_summary).map(point => {
+      const item = document.createElement("li");
+      item.textContent = point;
+      return item;
+    }),
+  );
   $("#grammar-rule-tables").replaceChildren(
     ...(activeSession.rule_tables || []).map(renderRuleTable),
   );
@@ -80,6 +86,41 @@ function renderSession() {
   }
   selectedTokens = [];
   if (exercise.type === "ordering") renderOrdering();
+}
+
+function ruleSummaryPoints(summary) {
+  const text = String(summary || "").trim();
+  if (!text) return [];
+  const lines = text.split(/\r?\n/).map(line => (
+    line.trim().replace(/^(?:[-*•]|\d+[.)])\s+/, "")
+  )).filter(Boolean);
+  if (lines.length > 1) return lines;
+  if (typeof Intl.Segmenter === "function") {
+    return [...new Intl.Segmenter("en", { granularity: "sentence" }).segment(text)]
+      .map(({ segment }) => segment.trim())
+      .filter(Boolean);
+  }
+  return text.split(/(?<=[.!?])\s+/).filter(Boolean);
+}
+
+function renderTopicHeading() {
+  const topics = activeSession.topics || [];
+  const title = $("#grammar-topic-title");
+  const list = $("#grammar-topic-list");
+  list.replaceChildren();
+  if (activeSession.kind !== "review") {
+    title.textContent = topics.map(topic => topic.title).join(" · ");
+    list.hidden = true;
+    return;
+  }
+  const countKey = topics.length === 1 ? "one" : "other";
+  title.textContent = t(`grammar.reviewRules.${countKey}`, { count: topics.length });
+  list.replaceChildren(...topics.map(topic => {
+    const item = document.createElement("li");
+    item.textContent = topic.title;
+    return item;
+  }));
+  list.hidden = false;
 }
 
 function renderRuleTable(ruleTable) {

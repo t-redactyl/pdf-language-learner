@@ -44,6 +44,8 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "hablo -> habl- -> no hables" in system_instruction
     assert "include a rule_table when a compact table" in system_instruction
     assert "do not embed Markdown tables" in system_instruction
+    assert "Format rule_summary as 3-6 short bullet points" in system_instruction
+    assert "Do not write rule_summary as a prose paragraph" in system_instruction
 
 
 def test_grammar_scheduler_uses_topic_level_intervals() -> None:
