@@ -131,7 +131,7 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
     assert '/static/styles.css?v=41' in response.text
-    assert '/static/revision.js?v=29' in response.text
+    assert '/static/revision.js?v=30' in response.text
     assert '/static/app.js?v=43' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
@@ -148,12 +148,19 @@ def test_favicon_is_served() -> None:
 def test_frontend_entry_points_share_current_dependency_versions() -> None:
     app_script = client.get("/static/app.js").text
     revision_script = client.get("/static/revision.js").text
+    grammar_script = client.get("/static/grammar.js").text
     text_script = client.get("/static/text.js").text
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
     assert './i18n.js?v=17' in app_script
     assert './i18n.js?v=17' in revision_script
+    assert './grammar.js?v=4' in revision_script
+    assert (
+        'document.querySelectorAll("#grammar-exercise button, #grammar-exercise input")'
+        in grammar_script
+    )
+    assert "control.disabled = false" in grammar_script
     assert 'fetch("/api/suggestions")' in app_script
     assert 'fetch("/api/listening-history"' in app_script
     assert 'new window.Hls({ capLevelToPlayerSize: true, startLevel: 0 })' in app_script

@@ -4,7 +4,7 @@ import {
   sentenceContaining,
 } from "./text.js?v=5";
 import { languageName, t } from "./i18n.js?v=17";
-import { initializeGrammarRevision, loadGrammarRevision } from "./grammar.js?v=3";
+import { initializeGrammarRevision, loadGrammarRevision } from "./grammar.js?v=4";
 
 const $ = selector => document.querySelector(selector);
 

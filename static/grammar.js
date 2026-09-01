@@ -61,6 +61,9 @@ function renderSession() {
   if (!exercise) return;
   $("#grammar-instruction").textContent = exercise.instruction;
   $("#grammar-prompt").textContent = exercise.prompt;
+  document.querySelectorAll("#grammar-exercise button, #grammar-exercise input").forEach(control => {
+    control.disabled = false;
+  });
   const choices = $("#grammar-choices");
   choices.replaceChildren();
   $("#grammar-answer-form").hidden = exercise.type === "multiple_choice" || exercise.type === "ordering";
