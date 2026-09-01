@@ -3789,9 +3789,24 @@ def select_grammar_topics(
 def saved_grammar_vocabulary(
     connection: sqlite3.Connection, language: str
 ) -> list[str]:
+    """Return recently reviewed words, falling back only when none were reviewed."""
+
     table = language_table(connection, language)
     if table is None:
         return []
+    reviewed = [
+        row["normalized_source"]
+        for row in connection.execute(
+            f"""
+            SELECT normalized_source FROM {table}
+            WHERE last_reviewed_at IS NOT NULL
+            ORDER BY last_reviewed_at DESC, saved_at DESC
+            LIMIT 24
+            """
+        ).fetchall()
+    ]
+    if reviewed:
+        return reviewed
     return [
         row["normalized_source"]
         for row in connection.execute(

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from pdf_language_learner.app import app
+from pdf_language_learner.app import app, saved_grammar_vocabulary
 from pdf_language_learner.grammar_revision import (
     GrammarExerciseType,
     GrammarSessionKind,
@@ -61,6 +61,54 @@ def test_grammar_topic_summary_is_brief_english_prose() -> None:
     assert "one very brief, self-contained prose paragraph" in messages[0]["content"]
     assert "Do not use bullets" in messages[0]["content"]
     assert "Nebensätze mit weil, wenn, dass" in messages[1]["content"]
+
+
+def test_grammar_vocabulary_prefers_most_recently_reviewed_items(
+    tmp_path, monkeypatch
+) -> None:
+    database = tmp_path / "margin.db"
+    monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
+    item_ids = {}
+    for word in ("older review", "newer review", "never reviewed"):
+        response = client.post(
+            "/api/vocabulary",
+            json={
+                "original_source": word,
+                "normalized_source": word,
+                "translation": word,
+                "source_language": "German",
+                "target_language": "English",
+            },
+        )
+        assert response.status_code == 200
+        item_ids[word] = response.json()["item"]["id"]
+
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.executemany(
+            """
+            UPDATE vocabulary_german
+            SET saved_at = ?, last_reviewed_at = ?
+            WHERE id = ?
+            """,
+            (
+                ("2026-08-03T12:00:00+00:00", "2026-08-30T12:00:00+00:00", item_ids["older review"]),
+                ("2026-08-01T12:00:00+00:00", "2026-09-01T12:00:00+00:00", item_ids["newer review"]),
+                ("2026-09-02T12:00:00+00:00", None, item_ids["never reviewed"]),
+            ),
+        )
+
+        assert saved_grammar_vocabulary(connection, "German") == [
+            "newer review",
+            "older review",
+        ]
+
+        connection.execute("UPDATE vocabulary_german SET last_reviewed_at = NULL")
+        assert saved_grammar_vocabulary(connection, "German") == [
+            "never reviewed",
+            "older review",
+            "newer review",
+        ]
 
 
 def test_grammar_scheduler_uses_topic_level_intervals() -> None:
