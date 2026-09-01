@@ -3,7 +3,7 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=14";
+import { languageName, t } from "./i18n.js?v=15";
 
 const $ = selector => document.querySelector(selector);
 
@@ -32,6 +32,7 @@ let tilePattern = [];
 let tileOptions = [];
 let selectedTileIds = [];
 let tilesLocked = false;
+let hintUsed = false;
 const NOUN_GENDERS = new Set(["masculine", "feminine", "neutral"]);
 const ARTICLE_GENDERS = {
   german: { der: "masculine", die: "feminine", das: "neutral" },
@@ -73,6 +74,9 @@ $("#revision-tile-clear")?.addEventListener("click", () => {
   selectedTileIds = [];
   renderLetterTiles();
 });
+$("#revision-recall-hint")?.addEventListener("click", revealTypedHint);
+$("#revision-tile-hint")?.addEventListener("click", revealTileHint);
+$("#revision-recall-answer")?.addEventListener("input", updateRecallHintButton);
 $("#revision-language")?.addEventListener("change", loadRevisionSession);
 $("#revision-exercise-selector")?.addEventListener("change", event => {
   const selected = selectedRevisionExercises();
@@ -339,6 +343,7 @@ function renderNextCard() {
   const recall = $("#revision-recall");
   const tiles = $("#revision-tiles");
   const recallAnswer = $("#revision-recall-answer");
+  hintUsed = false;
   choices.replaceChildren();
   choices.hidden = currentCard.exercise !== "multiple_choice";
   recall.hidden = currentCard.exercise !== "typed_recall";
@@ -347,6 +352,7 @@ function renderNextCard() {
   recallAnswer.disabled = false;
   recall.querySelector("button[type=submit]").disabled = false;
   recallAnswer.classList.remove("is-correct", "is-incorrect");
+  updateRecallHintButton();
   currentCard.choices.forEach(choice => {
     const button = document.createElement("button");
     button.type = "button";
@@ -702,8 +708,59 @@ function renderLetterTiles() {
   });
 
   $("#revision-tile-clear").disabled = tilesLocked || !selectedTileIds.length;
+  $("#revision-tile-hint").disabled = tilesLocked || (
+    selectedTileIds.length === tileOptions.length
+    && normalize(tileAnswer()) === normalize(currentCard.hint_answer)
+  );
   $("#revision-tile-check").disabled = tilesLocked
     || selectedTileIds.length !== tileOptions.length;
+}
+
+function matchingPrefixLength(values, expected) {
+  let length = 0;
+  while (
+    length < values.length
+    && length < expected.length
+    && values[length].toLocaleLowerCase() === expected[length].toLocaleLowerCase()
+  ) length += 1;
+  return length;
+}
+
+function revealTypedHint() {
+  const input = $("#revision-recall-answer");
+  const expected = graphemes(currentCard.hint_answer);
+  const entered = graphemes(input.value);
+  if (normalize(input.value) === normalize(currentCard.hint_answer)) return;
+  const prefixLength = matchingPrefixLength(entered, expected);
+  input.value = expected.slice(0, Math.min(prefixLength + 1, expected.length)).join("");
+  hintUsed = true;
+  input.focus();
+  updateRecallHintButton();
+}
+
+function updateRecallHintButton() {
+  const button = $("#revision-recall-hint");
+  const input = $("#revision-recall-answer");
+  if (!button || !input) return;
+  button.disabled = input.disabled || !currentCard?.hint_answer
+    || normalize(input.value) === normalize(currentCard.hint_answer);
+}
+
+function revealTileHint() {
+  const optionsById = new Map(tileOptions.map(option => [option.id, option]));
+  const expectedIds = tilePattern
+    .map((entry, index) => entry.selectable ? String(index) : null)
+    .filter(value => value !== null);
+  const selectedValues = selectedTileIds.map(id => optionsById.get(id)?.value || "");
+  const expectedValues = expectedIds.map(id => optionsById.get(id).value);
+  const prefixLength = matchingPrefixLength(selectedValues, expectedValues);
+  if (prefixLength >= expectedIds.length) return;
+  selectedTileIds = [
+    ...selectedTileIds.slice(0, prefixLength),
+    expectedIds[prefixLength],
+  ];
+  hintUsed = true;
+  renderLetterTiles();
 }
 
 function tileAnswer() {
@@ -736,6 +793,7 @@ async function removeCurrentCard() {
   choiceButtons.forEach(choice => { choice.disabled = true; });
   recallAnswer.disabled = true;
   recallButton.disabled = true;
+  $("#revision-recall-hint").disabled = true;
   setTileControlsDisabled(true);
   $("#revision-action-error").textContent = "";
   try {
@@ -766,6 +824,7 @@ async function removeCurrentCard() {
       recallAnswer.disabled = false;
       recallButton.disabled = false;
       setTileControlsDisabled(false);
+      updateRecallHintButton();
     }
     $("#revision-action-error").textContent = error.message;
   }
@@ -779,6 +838,7 @@ async function submitAnswer(selectedAnswer) {
   buttons.forEach(button => { button.disabled = true; });
   recallAnswer.disabled = true;
   recallButton.disabled = true;
+  $("#revision-recall-hint").disabled = true;
   setTileControlsDisabled(true);
   removeButton.disabled = true;
   try {
@@ -788,6 +848,7 @@ async function submitAnswer(selectedAnswer) {
       body: JSON.stringify({
         direction: currentCard.direction,
         selected_answer: selectedAnswer,
+        hint_used: hintUsed,
       }),
     });
     const data = await response.json();
@@ -814,9 +875,11 @@ async function submitAnswer(selectedAnswer) {
         data.correct ? "is-correct" : "is-incorrect",
       );
     }
-    $("#revision-feedback-title").textContent = data.correct
-      ? t("revision.correct")
-      : t("revision.incorrect", { answer: data.correct_answer });
+    $("#revision-feedback-title").textContent = hintUsed
+      ? t("revision.hintNotCounted", { answer: data.correct_answer })
+      : data.correct
+        ? t("revision.correct")
+        : t("revision.incorrect", { answer: data.correct_answer });
     renderVocabularyFeedbackContext(currentCard);
     $("#revision-feedback-dictionary").hidden = false;
     $("#revision-feedback-dictionary-value").textContent = data.item.normalized_source;
@@ -829,6 +892,7 @@ async function submitAnswer(selectedAnswer) {
     recallAnswer.disabled = false;
     recallButton.disabled = false;
     setTileControlsDisabled(false);
+    updateRecallHintButton();
     removeButton.disabled = false;
     $("#revision-feedback-title").textContent = error.message;
     $("#revision-context").textContent = "";

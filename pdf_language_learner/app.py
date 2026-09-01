@@ -1245,6 +1245,7 @@ class VocabularySaveResult(BaseModel):
 class RevisionCard(BaseModel):
     item_id: str
     prompt: str
+    hint_answer: str
     original_source: str
     normalized_source: str
     context: str
@@ -1300,6 +1301,7 @@ class RevisionSession(BaseModel):
 class RevisionAnswer(BaseModel):
     direction: RevisionDirection
     selected_answer: str = Field(min_length=1, max_length=2_000)
+    hint_used: bool = False
 
     @field_validator("selected_answer")
     @classmethod
@@ -3186,6 +3188,11 @@ def revision_card(
     return RevisionCard(
         item_id=row["id"],
         prompt=row[prompt_field],
+        hint_answer=row[
+            "translation"
+            if direction is RevisionDirection.SOURCE_TO_TRANSLATION
+            else "normalized_source"
+        ],
         original_source=row["original_source"],
         normalized_source=row["normalized_source"],
         context=row["context"],
@@ -3677,7 +3684,10 @@ def answer_revision(item_id: str, request: RevisionAnswer) -> RevisionAnswerResu
             else "normalized_source"
         )
         correct_answer = row[answer_field]
-        correct = canonicalize(request.selected_answer) == canonicalize(correct_answer)
+        correct = (
+            not request.hint_used
+            and canonicalize(request.selected_answer) == canonicalize(correct_answer)
+        )
         updated = schedule_review(
             schedule_state(row), correct=correct, reviewed_at=reviewed_at
         )

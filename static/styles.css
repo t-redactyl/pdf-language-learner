@@ -202,6 +202,7 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-recall input.is-correct { border-color:#608465; background:#6084651a; color:#38583d; }
 .revision-recall input.is-incorrect { border-color:#b15a4d; background:#b15a4d12; color:#8b3e34; }
 .revision-recall .primary-button { flex:0 0 auto; }
+.revision-recall .text-button { flex:0 0 auto; }
 .revision-tiles-label { margin:0 0 8px; color:#777c74; font-size:12px; font-weight:700; }
 .revision-tile-answer { display:flex; min-height:70px; align-items:center; justify-content:center; flex-wrap:wrap; gap:7px; padding:10px; border:1px solid var(--line); border-radius:3px; background:white; }
 .revision-tile-answer.is-correct { border-color:#608465; background:#6084651a; }
@@ -215,6 +216,7 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-tile-separator { min-width:10px; text-align:center; font:600 21px/1 Georgia,serif; }
 .revision-tile-pool { display:flex; min-height:66px; align-items:center; justify-content:center; flex-wrap:wrap; gap:8px; margin-top:18px; padding-top:18px; border-top:1px solid var(--line); }
 .revision-tile-controls { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:18px; }
+.revision-tile-submit-controls { display:flex; align-items:center; gap:12px; }
 .revision-tile-controls .text-button:disabled { cursor:default; opacity:.45; }
 .revision-matching > h3 { margin:0 0 8px; font-size:clamp(28px,5vw,38px); }
 .revision-matching-instructions { margin:0 0 24px; color:#686d65; text-align:center; }

@@ -121,9 +121,9 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=38' in response.text
-    assert '/static/revision.js?v=25' in response.text
-    assert '/static/app.js?v=40' in response.text
+    assert '/static/styles.css?v=39' in response.text
+    assert '/static/revision.js?v=26' in response.text
+    assert '/static/app.js?v=41' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -143,8 +143,8 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=14' in app_script
-    assert './i18n.js?v=14' in revision_script
+    assert './i18n.js?v=15' in app_script
+    assert './i18n.js?v=15' in revision_script
     assert 'fetch("/api/suggestions")' in app_script
     assert 'fetch("/api/listening-history"' in app_script
     assert 'new window.Hls({ capLevelToPlayerSize: true, startLevel: 0 })' in app_script
@@ -159,6 +159,9 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert "const remainingOptions = tileOptions.filter" in revision_script
     assert "pool.hidden = !remainingOptions.length || tilesLocked" in revision_script
     assert "controls.hidden = tilesLocked" in revision_script
+    assert "hint_used: hintUsed" in revision_script
+    assert "function revealTypedHint()" in revision_script
+    assert "function revealTileHint()" in revision_script
     assert "export function renderClozeSentence" in text_script
     assert "originalSource: data.original_source || selectedText" in app_script
     assert "findWholeWordIgnoringCase" in text_script
@@ -2727,6 +2730,12 @@ def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:
         assert card["original_source"] == item["original_source"]
         assert card["normalized_source"] == item["normalized_source"]
         assert card["context"] == item["context"]
+        expected_hint = (
+            item["translation"]
+            if card["direction"] == "source_to_translation"
+            else item["normalized_source"]
+        )
+        assert card["hint_answer"] == expected_hint
         assert card["exercise"] == "multiple_choice"
         assert 2 <= len(card["choices"]) <= 4
         if card["direction"] == "source_to_translation":
@@ -2835,6 +2844,27 @@ def test_incorrect_revision_records_lapse(vocabulary_database) -> None:
     result = response.json()
     assert result["correct"] is False
     assert result["correct_answer"] == "Wort"
+    assert result["category"] == "needs_practice"
+    assert result["item"]["review"]["repetitions"] == 0
+    assert result["item"]["review"]["lapses"] == 1
+
+
+def test_hinted_revision_is_recorded_as_incorrect(vocabulary_database) -> None:
+    item = save_revision_vocabulary()[0]
+
+    response = client.post(
+        f"/api/revision/{item['id']}/answer",
+        json={
+            "direction": "translation_to_source",
+            "selected_answer": item["normalized_source"],
+            "hint_used": True,
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["correct"] is False
+    assert result["correct_answer"] == item["normalized_source"]
     assert result["category"] == "needs_practice"
     assert result["item"]["review"]["repetitions"] == 0
     assert result["item"]["review"]["lapses"] == 1

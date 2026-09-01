@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=38">
+  <link rel="stylesheet" href="/static/styles.css?v=39">
 </head>
 <body>
   <header class="topbar">
@@ -81,6 +81,7 @@
               <label for="revision-recall-answer" data-i18n="revision.typeAnswer">Type your answer</label>
               <div class="revision-recall-controls">
                 <input id="revision-recall-answer" type="text" required maxlength="2000" autocomplete="off" autocapitalize="off" spellcheck="false">
+                <button id="revision-recall-hint" class="text-button" type="button" data-i18n="revision.hint">Hint</button>
                 <button class="primary-button" type="submit" data-i18n="revision.check">Check answer</button>
               </div>
             </form>
@@ -90,7 +91,10 @@
               <div id="revision-tile-pool" class="revision-tile-pool" aria-label="Available letters" data-i18n-aria-label="revision.availableLetters"></div>
               <div class="revision-tile-controls">
                 <button id="revision-tile-clear" class="text-button" type="button" data-i18n="revision.clearLetters">Clear</button>
-                <button id="revision-tile-check" class="primary-button" type="submit" data-i18n="revision.check" disabled>Check answer</button>
+                <div class="revision-tile-submit-controls">
+                  <button id="revision-tile-hint" class="text-button" type="button" data-i18n="revision.hint">Hint</button>
+                  <button id="revision-tile-check" class="primary-button" type="submit" data-i18n="revision.check" disabled>Check answer</button>
+                </div>
               </div>
             </form>
             <section id="revision-matching" class="revision-matching" aria-labelledby="revision-matching-title" hidden>
@@ -250,7 +254,7 @@
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
-  <script type="module" src="/static/revision.js?v=25"></script>
-  <script type="module" src="/static/app.js?v=40"></script>
+  <script type="module" src="/static/revision.js?v=26"></script>
+  <script type="module" src="/static/app.js?v=41"></script>
 </body>
 </html>
