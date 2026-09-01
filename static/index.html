@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=41">
+  <link rel="stylesheet" href="/static/styles.css?v=43">
 </head>
 <body>
   <header class="topbar">
@@ -54,7 +54,10 @@
           </div>
           <button id="close-revision" class="text-button" type="button" data-i18n="revision.close">Close</button>
         </div>
-        <p id="revision-loading" class="revision-message" data-i18n="revision.preparing">Preparing your due words…</p>
+        <div id="revision-loading" class="revision-message revision-loading" aria-live="polite">
+          <div class="revision-loading-mark" aria-hidden="true"><span>M</span></div>
+          <p id="revision-loading-copy" data-i18n="revision.preparing">Preparing your due words…</p>
+        </div>
         <div id="revision-empty" class="revision-message" hidden>
           <h3 id="revision-empty-title" data-i18n="revision.nothingDue">Nothing due right now</h3>
           <p id="revision-empty-copy" data-i18n="revision.savePrompt">Save vocabulary while reading to build future revision sessions.</p>
@@ -298,7 +301,7 @@
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
-  <script type="module" src="/static/revision.js?v=30"></script>
-  <script type="module" src="/static/app.js?v=43"></script>
+  <script type="module" src="/static/revision.js?v=31"></script>
+  <script type="module" src="/static/app.js?v=44"></script>
 </body>
 </html>

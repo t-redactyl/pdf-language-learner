@@ -123,6 +123,8 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-exercise-selector"' in response.text
     assert 'id="revision-mode-grammar"' in response.text
     assert 'id="grammar-session"' in response.text
+    assert 'id="revision-loading-copy"' in response.text
+    assert 'class="revision-loading-mark"' in response.text
     assert 'data-i18n="hero.title"' in response.text
     assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">' in response.text
     assert 'id="pdf-zoom-toolbar"' in response.text
@@ -130,9 +132,9 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=41' in response.text
-    assert '/static/revision.js?v=30' in response.text
-    assert '/static/app.js?v=43' in response.text
+    assert '/static/styles.css?v=43' in response.text
+    assert '/static/revision.js?v=31' in response.text
+    assert '/static/app.js?v=44' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -149,13 +151,21 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     app_script = client.get("/static/app.js").text
     revision_script = client.get("/static/revision.js").text
     grammar_script = client.get("/static/grammar.js").text
+    i18n_script = client.get("/static/i18n.js").text
+    styles = client.get("/static/styles.css").text
     text_script = client.get("/static/text.js").text
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=17' in app_script
-    assert './i18n.js?v=17' in revision_script
-    assert './grammar.js?v=4' in revision_script
+    assert './i18n.js?v=18' in app_script
+    assert './i18n.js?v=18' in revision_script
+    assert './i18n.js?v=18' in grammar_script
+    assert './grammar.js?v=5' in revision_script
+    assert 'revisionMode === "grammar" ? "grammar.generating"' in revision_script
+    assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
+    assert "@keyframes margin-loading-bounce" not in styles
+    assert "@keyframes margin-loading-typeface" in styles
+    assert "@media (prefers-reduced-motion:reduce)" in styles
     assert (
         'document.querySelectorAll("#grammar-exercise button, #grammar-exercise input")'
         in grammar_script

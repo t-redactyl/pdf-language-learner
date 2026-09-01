@@ -3,8 +3,8 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=17";
-import { initializeGrammarRevision, loadGrammarRevision } from "./grammar.js?v=4";
+import { languageName, t } from "./i18n.js?v=18";
+import { initializeGrammarRevision, loadGrammarRevision } from "./grammar.js?v=5";
 
 const $ = selector => document.querySelector(selector);
 
@@ -180,6 +180,9 @@ async function populateLanguageSelector() {
 }
 
 async function loadRevisionSession() {
+  const loadingKey = revisionMode === "grammar" ? "grammar.generating" : "revision.preparing";
+  $("#revision-loading-copy").dataset.i18n = loadingKey;
+  $("#revision-loading-copy").textContent = t(loadingKey);
   loading.hidden = false;
   empty.hidden = true;
   session.hidden = true;

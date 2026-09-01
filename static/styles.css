@@ -168,6 +168,18 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-message { padding:34px; border:1px solid var(--line); background:var(--card); text-align:center; }
 .revision-message h3 { margin:0 0 8px; font:500 27px/1.2 Georgia,serif; }
 .revision-message p { margin:0; color:#6a6e67; }
+.revision-loading { display:grid; justify-items:center; gap:17px; }
+.revision-loading-mark { width:52px; height:52px; display:grid; place-items:center; border:1px solid var(--ink); border-radius:50%; }
+.revision-loading-mark span { font:italic 27px/1 Georgia,serif; animation:margin-loading-typeface 2.4s steps(1,end) infinite; }
+@keyframes margin-loading-typeface {
+  0%,100% { font-family:Georgia,serif; font-style:italic; font-weight:400; }
+  25% { font-family:"Courier New",monospace; font-style:normal; font-weight:700; }
+  50% { font-family:Arial,sans-serif; font-style:normal; font-weight:800; }
+  75% { font-family:"Times New Roman",serif; font-style:normal; font-weight:400; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .revision-loading-mark span { animation:none; }
+}
 .revision-progress { display:flex; justify-content:space-between; margin-bottom:12px; color:#777c74; font-size:12px; }
 .revision-card { padding:clamp(24px,4vw,40px); border:1px solid var(--line); background:var(--card); box-shadow:0 12px 38px #28261f10; }
 .revision-card.noun-masculine,.revision-card.noun-feminine,.revision-card.noun-neutral { border:2px solid var(--noun-colour); background:var(--card); }
