@@ -2643,6 +2643,20 @@ def save_synonym_revision_vocabulary(count: int) -> list[dict]:
     ]
 
 
+def mark_vocabulary_mastered(
+    vocabulary_database, items: list[dict], streak: int = 5
+) -> None:
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.executemany(
+            """
+            UPDATE vocabulary_german
+            SET repetitions = ?, consecutive_correct = ?
+            WHERE id = ?
+            """,
+            [(streak, streak, item["id"]) for item in items],
+        )
+
+
 @pytest.mark.parametrize(
     ("count", "expected_pair_count"),
     [(3, None), (4, 4), (6, 5)],
@@ -2653,6 +2667,7 @@ def test_revision_session_builds_synonym_round_with_four_or_five_pairs(
     expected_pair_count: int | None,
 ) -> None:
     saved = save_synonym_revision_vocabulary(count)
+    mark_vocabulary_mastered(vocabulary_database, saved)
 
     synonym_round = client.get(
         "/api/revision/session",
@@ -2685,16 +2700,20 @@ def test_synonym_round_avoids_cross_column_text_collisions(
         ("delta", "two"),
         ("epsilon", "three"),
     )
+    saved = []
     for source, synonym in pairs:
-        client.post(
-            "/api/vocabulary",
-            json=vocabulary_payload(
-                original_source=source,
-                normalized_source=source,
-                translation=source,
-                synonyms=[{"text": synonym}],
-            ),
+        saved.append(
+            client.post(
+                "/api/vocabulary",
+                json=vocabulary_payload(
+                    original_source=source,
+                    normalized_source=source,
+                    translation=source,
+                    synonyms=[{"text": synonym}],
+                ),
+            ).json()["item"]
         )
+    mark_vocabulary_mastered(vocabulary_database, saved)
 
     synonym_round = client.get(
         "/api/revision/session",
@@ -2707,6 +2726,27 @@ def test_synonym_round_avoids_cross_column_text_collisions(
     synonyms = {pair["synonym"].casefold() for pair in synonym_round["pairs"]}
     assert sources.isdisjoint(synonyms)
     assert len(synonyms) == len(synonym_round["pairs"])
+
+
+def test_synonym_round_requires_five_consecutive_correct_reviews(
+    vocabulary_database,
+) -> None:
+    saved = save_synonym_revision_vocabulary(4)
+    mark_vocabulary_mastered(vocabulary_database, saved, streak=4)
+
+    session = client.get(
+        "/api/revision/session",
+        params={"language": "German"},
+    ).json()
+    assert session["synonym_round"] is None
+
+    mark_vocabulary_mastered(vocabulary_database, saved, streak=5)
+    session = client.get(
+        "/api/revision/session",
+        params={"language": "German"},
+    ).json()
+    assert session["synonym_round"] is not None
+    assert len(session["synonym_round"]["pairs"]) == 4
 
 
 def test_revision_session_uses_due_vocabulary(vocabulary_database) -> None:

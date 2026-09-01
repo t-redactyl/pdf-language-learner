@@ -3213,6 +3213,8 @@ def synonym_matching_round(
 ) -> SynonymMatchingRound | None:
     groups: dict[str, list[tuple[sqlite3.Row, list[SynonymValue]]]] = {}
     for row in rows:
+        if schedule_state(row).consecutive_correct < 5:
+            continue
         synonyms = vocabulary_synonyms(connection, row["id"])
         if synonyms:
             groups.setdefault(canonicalize(row["source_language"]), []).append(
