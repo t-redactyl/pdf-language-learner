@@ -85,22 +85,23 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         calls.append(operation)
         if operation == "grammar answer grading":
             return json.dumps({"correct": True, "feedback": "The target form is correct."})
-        exercises = []
+        exercises = {}
         for exercise_type in GrammarExerciseType:
-            exercises.append(
-                {
-                    "topic_key": next_topic.key,
-                    "type": exercise_type.value,
-                    "instruction": "Use the target grammar.",
-                    "prompt": "Complete the task.",
-                    "choices": ["correct", "other", "another"] if exercise_type is GrammarExerciseType.MULTIPLE_CHOICE else [],
-                    "tokens": ["correct"] if exercise_type is GrammarExerciseType.ORDERING else [],
-                    "accepted_answers": ["correct"],
-                    "reference_answer": "correct",
-                    "grading_rubric": "The target structure must be correct.",
-                    "explanation": "This uses the target structure.",
-                }
-            )
+            exercises[exercise_type.value] = {
+                "topic_key": next_topic.key,
+                "instruction": "Use the target grammar.",
+                "prompt": "Complete the task.",
+                "choices": ["correct", "other", "another"]
+                if exercise_type is GrammarExerciseType.MULTIPLE_CHOICE
+                else [],
+                "tokens": ["correct"]
+                if exercise_type is GrammarExerciseType.ORDERING
+                else [],
+                "accepted_answers": ["correct"],
+                "reference_answer": "correct",
+                "grading_rubric": "The target structure must be correct.",
+                "explanation": "This uses the target structure.",
+            }
         return json.dumps(
             {
                 "rule_summary": "A concise explanation.",
@@ -112,7 +113,7 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
                     }
                 ],
                 "worked_examples": ["Example one.", "Example two."],
-                "exercises": exercises,
+                **exercises,
             }
         )
 

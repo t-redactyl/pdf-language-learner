@@ -29,7 +29,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from dotenv import load_dotenv
 
 from pdf_language_learner.revision import (
@@ -51,6 +51,7 @@ from pdf_language_learner.german_grammar_catalogue import GRAMMAR_TOPICS
 from pdf_language_learner.grammar_revision import (
     GrammarExerciseType,
     GrammarGeneratedSession,
+    GrammarGenerationResponse,
     GrammarGrade,
     GrammarSessionKind,
     deterministic_grammar_grade,
@@ -562,6 +563,22 @@ def anthropic_grammar_model() -> str:
     return model
 
 
+def anthropic_grammar_generation_tokens() -> int:
+    value = int(os.getenv("ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS", "12000"))
+    if value < 1000:
+        raise ValueError("ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS must be at least 1000")
+    return value
+
+
+def anthropic_grammar_effort() -> str:
+    effort = os.getenv("ANTHROPIC_GRAMMAR_EFFORT", "medium").strip().casefold()
+    if effort not in {"low", "medium", "high", "xhigh", "max"}:
+        raise ValueError(
+            "ANTHROPIC_GRAMMAR_EFFORT must be low, medium, high, xhigh, or max"
+        )
+    return effort
+
+
 @lru_cache(maxsize=1)
 def openai_client() -> OpenAI:
     """Return one process-wide client so HTTP connections can be reused."""
@@ -577,7 +594,7 @@ def anthropic_client() -> Anthropic:
     """Return one process-wide Anthropic client for grammar requests."""
 
     return Anthropic(
-        timeout=float(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "60")),
+        timeout=float(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "180")),
         max_retries=1,
     )
 
@@ -668,6 +685,7 @@ def anthropic_structured_model_response(
     messages: list[dict[str, str]],
     response_model: type[BaseModel],
     max_output_tokens: int,
+    effort: str = "low",
 ) -> str:
     """Return a Pydantic-validated structured response from Anthropic."""
 
@@ -692,7 +710,23 @@ def anthropic_structured_model_response(
             system=system,
             messages=conversation,
             output_format=response_model,
+            output_config={"effort": effort},
         )
+    except ValidationError as exc:
+        logger.warning(
+            "Anthropic %s returned invalid structured output after %.1fms",
+            operation,
+            (time.perf_counter() - started) * 1_000,
+        )
+        if any(
+            error["type"] == "json_invalid" and "EOF" in error["msg"]
+            for error in exc.errors()
+        ):
+            raise ValueError(
+                "Anthropic structured output was truncated before the JSON "
+                f"completed (max_tokens={max_output_tokens})"
+            ) from exc
+        raise
     except Exception:
         logger.warning(
             "Anthropic %s failed after %.1fms",
@@ -714,7 +748,7 @@ def anthropic_structured_model_response(
     if parsed is None:
         raise ValueError(
             "Anthropic returned no structured output "
-            f"(stop reason: {response.stop_reason})"
+            f"(stop reason: {response.stop_reason}, max_tokens={max_output_tokens})"
         )
     return parsed.model_dump_json()
 
@@ -3737,10 +3771,13 @@ def generate_grammar_content(
             topics=topic_data,
             saved_vocabulary=vocabulary,
         ),
-        response_model=GrammarGeneratedSession,
-        max_output_tokens=5000,
+        response_model=GrammarGenerationResponse,
+        max_output_tokens=anthropic_grammar_generation_tokens(),
+        effort=anthropic_grammar_effort(),
     )
-    generated = GrammarGeneratedSession.model_validate_json(content)
+    generated = GrammarGenerationResponse.model_validate_json(
+        content
+    ).to_generated_session()
     allowed = {topic.key for topic in topics}
     if any(exercise.topic_key not in allowed for exercise in generated.exercises):
         raise ValueError("generated exercise referred to an unselected grammar topic")

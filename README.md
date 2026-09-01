@@ -51,7 +51,9 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | `OPENAI_MODEL`                 | `gpt-5.6-luna`             | OpenAI model used for translation            |
 | `OPENAI_TIMEOUT_SECONDS`       | `30`                       | OpenAI request timeout                        |
 | `ANTHROPIC_GRAMMAR_MODEL`      | required                   | Anthropic model used for grammar             |
-| `ANTHROPIC_TIMEOUT_SECONDS`    | `60`                       | Anthropic request timeout                     |
+| `ANTHROPIC_TIMEOUT_SECONDS`    | `180`                      | Anthropic request timeout                    |
+| `ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS` | `12000`           | Grammar generation token ceiling            |
+| `ANTHROPIC_GRAMMAR_EFFORT`     | `medium`                   | Claude effort for lesson generation         |
 | `MARGIN_DATABASE_PATH`         | `/data/margin.db`          | Vocabulary database location                 |
 | `MARGIN_OPEN_THESAURUS_PATH`   | `/data/openthesaurus.txt`  | German thesaurus location                    |
 | `STANZA_RESOURCES_DIR`         | `/data/stanza`             | Stanza model directory                       |
@@ -87,6 +89,33 @@ locally. Margin derives definite articles from that gender for normalized
 sources, translations, and synonym results; Spanish stressed-a nouns such as
 `agua` use the singular article `el`. Other source languages retain the model
 grammar fallback.
+
+## Preview generated grammar lessons
+
+Generate grammar lessons in batches for human review without creating sessions
+or changing revision progress. First list the available topic keys:
+
+```bash
+uv run python scripts/preview_grammar.py --language Spanish --list-topics
+```
+
+Then select topics by key, level, or category. Filters can be repeated and are
+combined; `--samples` generates independent versions of each selected topic:
+
+```bash
+uv run python scripts/preview_grammar.py \
+  --language Spanish \
+  --level A2 \
+  --limit 12 \
+  --samples 1 \
+  --output eval/results/spanish-a2.html
+```
+
+The self-contained HTML report includes the rule explanations, tables,
+exercises, raw structured output, and a review rubric. Decisions and notes are
+saved in that browser's local storage. Reports are checkpointed after every
+model response and ignored by Git. Use `--all` explicitly to generate the full
+catalogue; this guard helps prevent accidental API spend.
 
 There is no startup model request, so starting or restarting the Space incurs no
 OpenAI charge. OpenAI request and Stanza initialization/inference timings are

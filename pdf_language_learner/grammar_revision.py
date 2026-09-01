@@ -43,6 +43,20 @@ class GrammarGeneratedExercise(BaseModel):
     explanation: str
 
 
+class GrammarGeneratedExerciseContent(BaseModel):
+    """Exercise fields shared by the six structurally named response slots."""
+
+    topic_key: str
+    instruction: str
+    prompt: str
+    choices: list[str] = Field(default_factory=list)
+    tokens: list[str] = Field(default_factory=list)
+    accepted_answers: list[str] = Field(default_factory=list)
+    reference_answer: str
+    grading_rubric: str
+    explanation: str
+
+
 class GrammarRuleTable(BaseModel):
     title: str
     headers: list[str] = Field(min_length=2, max_length=6)
@@ -58,7 +72,7 @@ class GrammarRuleTable(BaseModel):
 class GrammarGeneratedSession(BaseModel):
     rule_summary: str
     rule_tables: list[GrammarRuleTable] = Field(default_factory=list, max_length=2)
-    worked_examples: list[str] = Field(min_length=2, max_length=3)
+    worked_examples: list[str] = Field(min_length=2, max_length=4)
     exercises: list[GrammarGeneratedExercise] = Field(min_length=6, max_length=6)
 
     @model_validator(mode="after")
@@ -67,6 +81,39 @@ class GrammarGeneratedSession(BaseModel):
         if exercise_types != set(GrammarExerciseType):
             raise ValueError("grammar sessions require one of each exercise type")
         return self
+
+
+class GrammarGenerationResponse(BaseModel):
+    """Provider response with all six exercise types structurally required."""
+
+    rule_summary: str
+    rule_tables: list[GrammarRuleTable] = Field(default_factory=list)
+    worked_examples: list[str] = Field(min_length=2, max_length=4)
+    multiple_choice: GrammarGeneratedExerciseContent
+    fill_blank: GrammarGeneratedExerciseContent
+    ordering: GrammarGeneratedExerciseContent
+    transformation: GrammarGeneratedExerciseContent
+    translation: GrammarGeneratedExerciseContent
+    production: GrammarGeneratedExerciseContent
+
+    def to_generated_session(self) -> GrammarGeneratedSession:
+        exercises = [
+            GrammarGeneratedExercise(type=exercise_type, **content.model_dump())
+            for exercise_type, content in (
+                (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice),
+                (GrammarExerciseType.FILL_BLANK, self.fill_blank),
+                (GrammarExerciseType.ORDERING, self.ordering),
+                (GrammarExerciseType.TRANSFORMATION, self.transformation),
+                (GrammarExerciseType.TRANSLATION, self.translation),
+                (GrammarExerciseType.PRODUCTION, self.production),
+            )
+        ]
+        return GrammarGeneratedSession(
+            rule_summary=self.rule_summary,
+            rule_tables=self.rule_tables,
+            worked_examples=self.worked_examples,
+            exercises=exercises,
+        )
 
 
 class GrammarGrade(BaseModel):
@@ -155,7 +202,8 @@ def grammar_generation_messages(
             "content": (
                 f"You create precise {language} grammar revision for an adult learner. "
                 "Return exactly six exercises: one multiple_choice, one fill_blank, one ordering, "
-                "one transformation, one translation, and one production. Never create error-finding "
+                "one transformation, one translation, and one production. Put each exercise in its "
+                "correspondingly named response field; do not return an exercises array. Never create error-finding "
                 "or error-correction tasks. Keep production tightly constrained. Use saved vocabulary "
                 "naturally when it fits, never at the expense of the target grammar. Multiple choice "
                 "must have 3-4 choices. Ordering must supply every token. Closed tasks must include all "
@@ -185,7 +233,7 @@ def grammar_generation_messages(
             "content": (
                 f"Create a {kind.value} session.\nTopics:\n{topic_lines}\n"
                 f"Saved vocabulary: {vocabulary}\n{distribution}\n"
-                "Give a concise rule summary and 2-3 useful worked examples."
+                "Give a concise rule summary and 2-4 useful worked examples."
             ),
         },
     ]

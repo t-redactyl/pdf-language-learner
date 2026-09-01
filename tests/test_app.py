@@ -19,6 +19,8 @@ from pdf_language_learner.app import (
     WordAnalysis,
     analyze_word_in_context,
     anthropic_client,
+    anthropic_grammar_effort,
+    anthropic_grammar_generation_tokens,
     anthropic_grammar_model,
     anthropic_structured_model_response,
     app,
@@ -289,6 +291,18 @@ def test_anthropic_grammar_model_is_required(monkeypatch) -> None:
     assert anthropic_grammar_model() == "example-claude-model"
 
 
+def test_anthropic_grammar_generation_settings(monkeypatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("ANTHROPIC_GRAMMAR_EFFORT", raising=False)
+    assert anthropic_grammar_generation_tokens() == 12000
+    assert anthropic_grammar_effort() == "medium"
+
+    monkeypatch.setenv("ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS", "16000")
+    monkeypatch.setenv("ANTHROPIC_GRAMMAR_EFFORT", "high")
+    assert anthropic_grammar_generation_tokens() == 16000
+    assert anthropic_grammar_effort() == "high"
+
+
 def test_anthropic_structured_response_separates_system_message(
     monkeypatch,
 ) -> None:
@@ -334,6 +348,7 @@ def test_anthropic_structured_response_separates_system_message(
                 {"role": "user", "content": "Learner answer: hablo"}
             ],
             "output_format": GrammarGrade,
+            "output_config": {"effort": "low"},
         }
     ]
 
