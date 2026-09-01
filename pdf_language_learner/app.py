@@ -53,6 +53,7 @@ from pdf_language_learner.grammar_revision import (
     GrammarGeneratedSession,
     GrammarGenerationResponse,
     GrammarGrade,
+    GRAMMAR_NEW_TOPIC_LIMIT,
     GRAMMAR_REVIEW_SESSION_INTERVAL,
     GRAMMAR_REVIEW_TOPIC_LIMIT,
     GrammarSessionKind,
@@ -1436,6 +1437,8 @@ class RevisionSession(BaseModel):
 class DueReviewSummary(BaseModel):
     vocabulary_count: int
     grammar_count: int
+    grammar_review_count: int
+    grammar_new_count: int
 
 
 class RevisionAnswer(BaseModel):
@@ -3810,7 +3813,13 @@ def select_grammar_topics(
     if unseen and (not due or completed % 3 < 2):
         return GrammarSessionKind.LESSON, unseen[:1]
     if due and grammar_review_is_available(connection, now):
-        return GrammarSessionKind.REVIEW, due[:GRAMMAR_REVIEW_TOPIC_LIMIT]
+        review_topics = due[:GRAMMAR_REVIEW_TOPIC_LIMIT]
+        if unseen:
+            return (
+                GrammarSessionKind.MIXED,
+                review_topics + unseen[:GRAMMAR_NEW_TOPIC_LIMIT],
+            )
+        return GrammarSessionKind.REVIEW, review_topics
     if unseen:
         return GrammarSessionKind.LESSON, unseen[:1]
     return None
@@ -4555,14 +4564,33 @@ def due_reviews() -> DueReviewSummary:
             if grammar_review_is_available(connection, now)
             else []
         )
+        introduced_grammar_topics = {
+            row["topic_key"]
+            for row in connection.execute(
+                "SELECT topic_key FROM grammar_reviews"
+            ).fetchall()
+        }
+
+    due_grammar_count = min(
+        sum(is_due(grammar_schedule_from_row(row), at=now) for row in grammar_rows),
+        GRAMMAR_REVIEW_TOPIC_LIMIT,
+    )
+    has_new_grammar_topic = any(
+        topic.key not in introduced_grammar_topics
+        for topic in (*GRAMMAR_TOPICS, *SPANISH_GRAMMAR_TOPICS)
+    )
 
     return DueReviewSummary(
         vocabulary_count=sum(
             is_due(schedule_state(row), at=now) for row in vocabulary_rows
         ),
-        grammar_count=min(
-            sum(is_due(grammar_schedule_from_row(row), at=now) for row in grammar_rows),
-            GRAMMAR_REVIEW_TOPIC_LIMIT,
+        grammar_count=due_grammar_count
+        + (GRAMMAR_NEW_TOPIC_LIMIT if due_grammar_count and has_new_grammar_topic else 0),
+        grammar_review_count=due_grammar_count,
+        grammar_new_count=(
+            GRAMMAR_NEW_TOPIC_LIMIT
+            if due_grammar_count and has_new_grammar_topic
+            else 0
         ),
     )
 

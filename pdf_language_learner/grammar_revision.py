@@ -16,11 +16,13 @@ GRAMMAR_CORRECT_INTERVAL_DAYS = (3, 7, 14, 30, 60, 120)
 GRAMMAR_INCORRECT_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_SESSION_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_TOPIC_LIMIT = 3
+GRAMMAR_NEW_TOPIC_LIMIT = 1
 
 
 class GrammarSessionKind(StrEnum):
     LESSON = "lesson"
     REVIEW = "review"
+    MIXED = "mixed"
 
 
 class GrammarExerciseType(StrEnum):
@@ -198,12 +200,19 @@ def grammar_generation_messages(
         for topic in topics
     )
     vocabulary = ", ".join(saved_vocabulary) or "none available"
-    distribution = (
-        "All six exercises must target the one topic and progress from recognition "
-        "toward constrained production."
-        if kind is GrammarSessionKind.LESSON
-        else "Interleave the topics evenly; when there are three topics, assign two exercises to each."
-    )
+    if kind is GrammarSessionKind.LESSON:
+        distribution = (
+            "All six exercises must target the one topic and progress from recognition "
+            "toward constrained production."
+        )
+    elif kind is GrammarSessionKind.MIXED and len(topics) == 4:
+        distribution = (
+            "This is a mixed session: the final topic is new and the first three are "
+            "reviews. Give the new topic two exercises, and distribute the other four "
+            "across the review topics so every topic is practised."
+        )
+    else:
+        distribution = "Interleave the topics as evenly as possible."
     return [
         {
             "role": "system",
@@ -233,7 +242,9 @@ def grammar_generation_messages(
                 "each cell concise. Do not force a table for a rule that is clearer in prose, do not "
                 "put prose "
                 "paragraphs in cells, and do not embed Markdown tables in text fields. For a review "
-                "session, return an empty rule_tables list. Format rule_summary as 3-6 short bullet "
+                "session, return an empty rule_tables list. For a mixed session, the final listed "
+                "topic is new; explain it clearly and include a rule table when that materially "
+                "helps. Format rule_summary as 3-6 short bullet "
                 "points, with one self-contained point per line beginning with '- '. Do not write "
                 "rule_summary as a prose paragraph."
             ),

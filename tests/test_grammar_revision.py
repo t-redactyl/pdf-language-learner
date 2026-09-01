@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from pdf_language_learner.app import app, saved_grammar_vocabulary
+from pdf_language_learner.app import app, saved_grammar_vocabulary, select_grammar_topics
 from pdf_language_learner.grammar_revision import (
     GrammarExerciseType,
     GrammarSessionKind,
@@ -121,6 +121,40 @@ def test_grammar_scheduler_uses_topic_level_intervals() -> None:
     assert (second.next_review_at - now).days == 7
     assert (missed.next_review_at - now).days == 2
     assert missed.consecutive_correct == 0
+
+
+def test_scheduled_grammar_review_includes_three_reviews_and_one_new_topic(
+    tmp_path, monkeypatch
+) -> None:
+    database = tmp_path / "margin.db"
+    monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
+    client.get("/api/grammar/topics", params={"language": "Spanish"})
+    completed_at = "2026-08-01T12:00:00+00:00"
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.executemany(
+            """
+            INSERT INTO grammar_sessions (
+                id, canonical_language, kind, topic_keys_json, rule_summary,
+                worked_examples_json, created_at, completed_at
+            ) VALUES (?, 'spanish', 'lesson', '[]', '', '[]', ?, ?)
+            """,
+            (
+                ("completed-lesson-1", completed_at, completed_at),
+                ("completed-lesson-2", completed_at, completed_at),
+            ),
+        )
+        selection = select_grammar_topics(
+            connection,
+            "Spanish",
+            datetime(2026, 9, 1, tzinfo=UTC),
+        )
+
+    assert selection is not None
+    kind, topics = selection
+    assert kind is GrammarSessionKind.MIXED
+    assert len(topics) == 4
+    assert topics[-1].key == SPANISH_GRAMMAR_TOPICS[61].key
 
 
 def test_closed_grammar_grading_normalizes_punctuation() -> None:

@@ -47,7 +47,7 @@ function renderSession() {
   $("#grammar-session-kind").textContent = t(`grammar.kind.${activeSession.kind}`);
   renderTopicHeading();
   const lesson = $("#grammar-lesson");
-  lesson.hidden = activeSession.kind !== "lesson";
+  lesson.hidden = activeSession.kind === "review";
   $("#grammar-rule-summary").replaceChildren(
     ...ruleSummaryPoints(activeSession.rule_summary).map(point => {
       const item = document.createElement("li");

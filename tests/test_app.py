@@ -2261,7 +2261,9 @@ def test_due_review_summary_counts_due_vocabulary_and_grammar(
 
     assert summary == {
         "vocabulary_count": 1,
-        "grammar_count": 3,
+        "grammar_count": 4,
+        "grammar_review_count": 3,
+        "grammar_new_count": 1,
     }
 
     with sqlite3.connect(vocabulary_database / "margin.db") as connection:

@@ -169,6 +169,8 @@ function renderDueReviewReminder() {
   if (!reminders || !dueReviewSummary) return;
   const vocabularyCount = dueReviewSummary.vocabulary_count || 0;
   const grammarCount = dueReviewSummary.grammar_count || 0;
+  const grammarReviewCount = dueReviewSummary.grammar_review_count || 0;
+  const grammarNewCount = dueReviewSummary.grammar_new_count || 0;
   const vocabularyReminder = $("#vocabulary-review-reminder");
   const grammarReminder = $("#grammar-review-reminder");
   reminders.hidden = vocabularyCount + grammarCount === 0;
@@ -187,10 +189,20 @@ function renderDueReviewReminder() {
     $("#vocabulary-review-reminder-summary").textContent = t("reviewReminder.caughtUp");
   }
   if (grammarCount) {
-    const items = t(`reviewReminder.grammar.${grammarCount === 1 ? "one" : "other"}`, {
-      count: grammarCount,
+    const items = [];
+    if (grammarReviewCount) {
+      items.push(t(`reviewReminder.reviewTopic.${grammarReviewCount === 1 ? "one" : "other"}`, {
+        count: grammarReviewCount,
+      }));
+    }
+    if (grammarNewCount) {
+      items.push(t(`reviewReminder.newTopic.${grammarNewCount === 1 ? "one" : "other"}`, {
+        count: grammarNewCount,
+      }));
+    }
+    $("#grammar-review-reminder-summary").textContent = t("reviewReminder.nextSession", {
+      items: items.join(" · "),
     });
-    $("#grammar-review-reminder-summary").textContent = t("reviewReminder.summary", { items });
   } else {
     $("#grammar-review-reminder-summary").textContent = t("reviewReminder.caughtUp");
   }
