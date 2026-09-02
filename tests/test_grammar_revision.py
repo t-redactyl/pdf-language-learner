@@ -2,11 +2,14 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from pdf_language_learner.app import app, saved_grammar_vocabulary, select_grammar_topics
 from pdf_language_learner.grammar_revision import (
     GrammarExerciseType,
+    GrammarGeneratedExercise,
     GrammarSessionKind,
     deterministic_grammar_grade,
     grammar_generation_messages,
@@ -47,6 +50,29 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "do not embed Markdown tables" in system_instruction
     assert "Format rule_summary as 3-6 short bullet points" in system_instruction
     assert "Do not write rule_summary as a prose paragraph" in system_instruction
+    assert "answerable using only information visible" in system_instruction
+    assert "explicitly name its source form" in system_instruction
+    assert "past participle of herstellen" in system_instruction
+    assert "A blank sentence plus a grammatical description" in system_instruction
+    assert "no more than 12 words" in system_instruction
+    assert "no more than 7 selectable tiles" in system_instruction
+    assert "one multiword tile" in system_instruction
+    assert "unless every valid order is accepted" in system_instruction
+
+
+def test_grammar_ordering_exercise_rejects_too_many_tiles() -> None:
+    with pytest.raises(ValidationError):
+        GrammarGeneratedExercise(
+            topic_key="word-order",
+            type=GrammarExerciseType.ORDERING,
+            instruction="Arrange the tiles.",
+            prompt="Build a sentence.",
+            tokens=[str(index) for index in range(8)],
+            accepted_answers=["0 1 2 3 4 5 6 7"],
+            reference_answer="0 1 2 3 4 5 6 7",
+            grading_rubric="Use the target order.",
+            explanation="This is the target order.",
+        )
 
 
 def test_grammar_topic_summary_is_brief_english_prose() -> None:

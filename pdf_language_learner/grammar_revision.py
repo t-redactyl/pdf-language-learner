@@ -40,7 +40,7 @@ class GrammarGeneratedExercise(BaseModel):
     instruction: str
     prompt: str
     choices: list[str] = Field(default_factory=list)
-    tokens: list[str] = Field(default_factory=list)
+    tokens: list[str] = Field(default_factory=list, max_length=7)
     accepted_answers: list[str] = Field(default_factory=list)
     reference_answer: str
     grading_rubric: str
@@ -54,7 +54,7 @@ class GrammarGeneratedExerciseContent(BaseModel):
     instruction: str
     prompt: str
     choices: list[str] = Field(default_factory=list)
-    tokens: list[str] = Field(default_factory=list)
+    tokens: list[str] = Field(default_factory=list, max_length=7)
     accepted_answers: list[str] = Field(default_factory=list)
     reference_answer: str
     grading_rubric: str
@@ -223,8 +223,22 @@ def grammar_generation_messages(
                 "correspondingly named response field; do not return an exercises array. Never create error-finding "
                 "or error-correction tasks. Keep production tightly constrained. Use saved vocabulary "
                 "naturally when it fits, never at the expense of the target grammar. Multiple choice "
-                "must have 3-4 choices. Ordering must supply every token. Closed tasks must include all "
-                "valid accepted answers. Explain every grammar rule in English. In particular, write "
+                "must have 3-4 choices. Keep the ordering exercise short and focused: its completed "
+                "sentence must contain no more than 12 words and its tokens list must contain no more "
+                "than 7 selectable tiles. Group words that are not meaningfully reordered for the "
+                "target rule into one multiword tile, such as 'wegen des Mangels an Wohnraum' or 'die "
+                "Auflagen'. Supply every tile needed for the sentence, and avoid sentences with several "
+                "grammatically valid orders unless every valid order is accepted. Closed tasks must "
+                "include all "
+                "valid accepted answers. Every exercise must be answerable using only information visible "
+                "to the learner before submission; never rely on the reference answer or explanation to "
+                "identify what they are meant to write. When an exercise asks the learner to inflect, "
+                "conjugate, decline, transform, or insert a particular word or phrase, explicitly name its "
+                "source form in the instruction or prompt. For example, write 'Complete the sentence with "
+                "the past participle of herstellen' or include '(herstellen)' beside the blank. A blank "
+                "sentence plus a grammatical description such as 'insert the correct past participle' is "
+                "invalid because several different words could fit. Explain every grammar rule in "
+                "English. In particular, write "
                 "the rule_summary and every exercise explanation in English, even when the language "
                 "being studied is not English. Keep target-language forms, example sentences, prompts, "
                 "and answers in the language being studied where the exercise requires them. Rule "
