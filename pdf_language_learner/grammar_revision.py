@@ -26,6 +26,7 @@ class GrammarSessionKind(StrEnum):
 
 
 class GrammarExerciseType(StrEnum):
+    # Multiple choice and transformation remain readable for unfinished legacy sessions.
     MULTIPLE_CHOICE = "multiple_choice"
     FILL_BLANK = "fill_blank"
     ORDERING = "ordering"
@@ -48,7 +49,7 @@ class GrammarGeneratedExercise(BaseModel):
 
 
 class GrammarGeneratedExerciseContent(BaseModel):
-    """Exercise fields shared by the six structurally named response slots."""
+    """Exercise fields shared by the seven structurally named response slots."""
 
     topic_key: str
     instruction: str
@@ -77,38 +78,59 @@ class GrammarGeneratedSession(BaseModel):
     rule_summary: str
     rule_tables: list[GrammarRuleTable] = Field(default_factory=list, max_length=2)
     worked_examples: list[str] = Field(min_length=2, max_length=4)
-    exercises: list[GrammarGeneratedExercise] = Field(min_length=6, max_length=6)
+    exercises: list[GrammarGeneratedExercise] = Field(min_length=7, max_length=7)
 
     @model_validator(mode="after")
     def validate_exercise_mix(self) -> "GrammarGeneratedSession":
-        exercise_types = {exercise.type for exercise in self.exercises}
-        if exercise_types != set(GrammarExerciseType):
-            raise ValueError("grammar sessions require one of each exercise type")
+        expected = {
+            GrammarExerciseType.FILL_BLANK: 2,
+            GrammarExerciseType.ORDERING: 2,
+            GrammarExerciseType.TRANSLATION: 2,
+            GrammarExerciseType.PRODUCTION: 1,
+        }
+        actual = {
+            exercise_type: sum(
+                exercise.type is exercise_type for exercise in self.exercises
+            )
+            for exercise_type in GrammarExerciseType
+        }
+        actual = {
+            exercise_type: count
+            for exercise_type, count in actual.items()
+            if count
+        }
+        if actual != expected:
+            raise ValueError(
+                "grammar sessions require two fill blanks, two ordering exercises, "
+                "two translations, and one production exercise"
+            )
         return self
 
 
 class GrammarGenerationResponse(BaseModel):
-    """Provider response with all six exercise types structurally required."""
+    """Provider response with the required seven-exercise mix."""
 
     rule_summary: str
     rule_tables: list[GrammarRuleTable] = Field(default_factory=list)
     worked_examples: list[str] = Field(min_length=2, max_length=4)
-    multiple_choice: GrammarGeneratedExerciseContent
-    fill_blank: GrammarGeneratedExerciseContent
-    ordering: GrammarGeneratedExerciseContent
-    transformation: GrammarGeneratedExerciseContent
-    translation: GrammarGeneratedExerciseContent
+    fill_blank_1: GrammarGeneratedExerciseContent
+    fill_blank_2: GrammarGeneratedExerciseContent
+    ordering_1: GrammarGeneratedExerciseContent
+    ordering_2: GrammarGeneratedExerciseContent
+    translation_1: GrammarGeneratedExerciseContent
+    translation_2: GrammarGeneratedExerciseContent
     production: GrammarGeneratedExerciseContent
 
     def to_generated_session(self) -> GrammarGeneratedSession:
         exercises = [
             GrammarGeneratedExercise(type=exercise_type, **content.model_dump())
             for exercise_type, content in (
-                (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice),
-                (GrammarExerciseType.FILL_BLANK, self.fill_blank),
-                (GrammarExerciseType.ORDERING, self.ordering),
-                (GrammarExerciseType.TRANSFORMATION, self.transformation),
-                (GrammarExerciseType.TRANSLATION, self.translation),
+                (GrammarExerciseType.FILL_BLANK, self.fill_blank_1),
+                (GrammarExerciseType.FILL_BLANK, self.fill_blank_2),
+                (GrammarExerciseType.ORDERING, self.ordering_1),
+                (GrammarExerciseType.ORDERING, self.ordering_2),
+                (GrammarExerciseType.TRANSLATION, self.translation_1),
+                (GrammarExerciseType.TRANSLATION, self.translation_2),
                 (GrammarExerciseType.PRODUCTION, self.production),
             )
         ]
@@ -202,13 +224,13 @@ def grammar_generation_messages(
     vocabulary = ", ".join(saved_vocabulary) or "none available"
     if kind is GrammarSessionKind.LESSON:
         distribution = (
-            "All six exercises must target the one topic and progress from recognition "
+            "All seven exercises must target the one topic and progress from recognition "
             "toward constrained production."
         )
     elif kind is GrammarSessionKind.MIXED and len(topics) == 4:
         distribution = (
             "This is a mixed session: the final topic is new and the first three are "
-            "reviews. Give the new topic two exercises, and distribute the other four "
+            "reviews. Give the new topic two exercises, and distribute the other five "
             "across the review topics so every topic is practised."
         )
     else:
@@ -218,12 +240,13 @@ def grammar_generation_messages(
             "role": "system",
             "content": (
                 f"You create precise {language} grammar revision for an adult learner. "
-                "Return exactly six exercises: one multiple_choice, one fill_blank, one ordering, "
-                "one transformation, one translation, and one production. Put each exercise in its "
+                "Return exactly seven exercises: two fill_blank, two ordering, two translation, "
+                "and one production. Do not create multiple-choice or transformation exercises. Put "
+                "each exercise in its "
                 "correspondingly named response field; do not return an exercises array. Never create error-finding "
                 "or error-correction tasks. Keep production tightly constrained. Use saved vocabulary "
-                "naturally when it fits, never at the expense of the target grammar. Multiple choice "
-                "must have 3-4 choices. Keep the ordering exercise short and focused: its completed "
+                "naturally when it fits, never at the expense of the target grammar. Keep each ordering "
+                "exercise short and focused: its completed "
                 "sentence must contain no more than 12 words and its tokens list must contain no more "
                 "than 7 selectable tiles. Group words that are not meaningfully reordered for the "
                 "target rule into one multiword tile, such as 'wegen des Mangels an Wohnraum' or 'die "

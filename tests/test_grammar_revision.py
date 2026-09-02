@@ -58,6 +58,9 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "no more than 7 selectable tiles" in system_instruction
     assert "one multiword tile" in system_instruction
     assert "unless every valid order is accepted" in system_instruction
+    assert "Return exactly seven exercises" in system_instruction
+    assert "two fill_blank, two ordering, two translation" in system_instruction
+    assert "Do not create multiple-choice or transformation exercises" in system_instruction
 
 
 def test_grammar_ordering_exercise_rejects_too_many_tiles() -> None:
@@ -227,8 +230,17 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         if operation == "grammar topic summary":
             return json.dumps({"summary": "Use this form to express the core rule."})
         exercises = {}
-        for exercise_type in GrammarExerciseType:
-            exercises[exercise_type.value] = {
+        exercise_slots = (
+            ("fill_blank_1", GrammarExerciseType.FILL_BLANK),
+            ("fill_blank_2", GrammarExerciseType.FILL_BLANK),
+            ("ordering_1", GrammarExerciseType.ORDERING),
+            ("ordering_2", GrammarExerciseType.ORDERING),
+            ("translation_1", GrammarExerciseType.TRANSLATION),
+            ("translation_2", GrammarExerciseType.TRANSLATION),
+            ("production", GrammarExerciseType.PRODUCTION),
+        )
+        for slot, exercise_type in exercise_slots:
+            exercises[slot] = {
                 "topic_key": next_topic.key,
                 "instruction": "Use the target grammar.",
                 "prompt": "Complete the task.",
@@ -311,17 +323,28 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
             "SELECT 1 FROM grammar_reviews WHERE topic_key = ?", (next_topic.key,)
         ).fetchone() is None
 
-    for _ in range(6):
+    exercise_types = []
+    for _ in range(7):
         current = client.post(
             "/api/grammar/session", json={"language": "Spanish"}
         ).json()
         exercise = current["exercise"]
+        exercise_types.append(exercise["type"])
         result = client.post(
             f"/api/grammar/session/{current['id']}/exercises/{exercise['id']}/answer",
             json={"answer": "correct"},
         )
         assert result.status_code == 200
     assert result.json()["session_complete"] is True
+    assert exercise_types == [
+        "fill_blank",
+        "fill_blank",
+        "ordering",
+        "ordering",
+        "translation",
+        "translation",
+        "production",
+    ]
     assert calls.count("grammar answer grading") == 3
     assert grading_token_budgets == [1000, 1000, 1000]
     with sqlite3.connect(database) as connection:

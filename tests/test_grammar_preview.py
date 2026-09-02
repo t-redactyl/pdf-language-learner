@@ -41,6 +41,15 @@ def topic(
 
 
 def generated_session() -> GrammarGeneratedSession:
+    exercise_types = (
+        GrammarExerciseType.FILL_BLANK,
+        GrammarExerciseType.FILL_BLANK,
+        GrammarExerciseType.ORDERING,
+        GrammarExerciseType.ORDERING,
+        GrammarExerciseType.TRANSLATION,
+        GrammarExerciseType.TRANSLATION,
+        GrammarExerciseType.PRODUCTION,
+    )
     exercises = [
         GrammarGeneratedExercise(
             topic_key="present",
@@ -58,7 +67,7 @@ def generated_session() -> GrammarGeneratedSession:
             grading_rubric="The verb must agree with yo.",
             explanation="The -o ending marks first-person singular.",
         )
-        for exercise_type in GrammarExerciseType
+        for exercise_type in exercise_types
     ]
     return GrammarGeneratedSession(
         rule_summary="Never render <script>alert('x')</script> as HTML.",
