@@ -17,7 +17,7 @@ GRAMMAR_INCORRECT_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_SESSION_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_TOPIC_LIMIT = 3
 GRAMMAR_NEW_TOPIC_LIMIT = 1
-GRAMMAR_NEW_EXAMPLE_EXPLANATION = """
+GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION = """
 Verbposition in Satzverbindungen (Verb Position in Connected Sentences)
 
 The Rule
@@ -44,6 +44,29 @@ Common Connectors by Type
 Type 1 (Position 0): und, aber, oder, denn, sondern
 Type 2 (Position 1): deshalb, trotzdem, dennoch, außerdem, danach, dann, daher, deswegen
 Type 3 (Nebensatz): weil, obwohl, dass, wenn, falls, damit, obwohl, nachdem, während
+"""
+
+GRAMMAR_SPANISH_NEW_EXAMPLE_EXPLANATION = """
+Objeto Indirecto (OI) — Indirect Object Pronouns
+
+The rule: Indirect object pronouns indicate to whom or for whom an action is done. They do not change for gender.
+
+| Person | Pronoun |
+| ------ | ------- |
+| yo | me |
+| tú | te | 
+| él/ella/usted | le |
+| nosotros/as | nos | 
+| vosotros/as | os |
+| ellos/ellas/ustedes | les |
+
+They go before the conjugated verb. Common verbs that take an indirect object: dar, decir, escribir, mandar, preguntar, regalar, gustar, encantar, parecer.
+
+Le doy el libro a María. (I give the book to María.)
+
+Important: When OI and OD pronouns appear together in the same sentence, the indirect comes first. And le/les changes to se before lo/la/los/las:
+
+¿Le das el libro a María? → Se lo doy. (NOT le lo)
 """
 
 
@@ -289,23 +312,13 @@ def grammar_generation_messages(
                 "the past participle of herstellen' or include '(herstellen)' beside the blank. A blank "
                 "sentence plus a grammatical description such as 'insert the correct past participle' is "
                 "invalid because several different words could fit. Explain every grammar rule in "
-                "English. In particular, write "
-                "the rule_summary and every exercise explanation in English, even when the language "
+                "English. In particular, write the rule_summary and every exercise explanation in English, even when the language "
                 "being studied is not English. Keep target-language forms, example sentences, prompts, "
                 "and answers in the language being studied where the exercise requires them. "
-                f"Please make new grammar rul explanations concise and clear, in the style of {GRAMMAR_NEW_EXAMPLE_EXPLANATION}. "
-                "Use tables to display the information when it makes sense, such as when presenting verb conjugations. "
-                "Do not force a table for a rule that is clearer in prose, do not "
-                "put prose "
-                "paragraphs in cells, and do not embed Markdown tables in text fields. For a review "
-                "session, return an empty rule_tables list. For a mixed session, the final listed "
-                "topic is new; explain it clearly and include a rule table when that materially "
-                "helps. Format rule_summary as 2-5 succinct bullet points, with one self-contained "
-                "point per line beginning with '- '. State the core pattern before exceptions, use "
-                "no introductory filler, and keep the complete summary under 220 words. For a "
-                "connector or word-order topic, group connectors by the word-order pattern they "
-                "trigger and state the resulting pattern explicitly (for example, connector - verb "
-                "- subject). Multiple-choice tasks must ask the learner to select the form or "
+                "For new exercises, please give a succinct explanation of the grammar rule, in the style of Grammatik Aktiv. "
+                f"There is an example of how to format the German grammar instructions in {GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION}, "
+                f"and an example of how to format the Spanish grammar instructions in {GRAMMAR_SPANISH_NEW_EXAMPLE_EXPLANATION}. "
+                "Multiple-choice tasks must ask the learner to select the form or "
                 "connector that makes the displayed sentence correct. Fill-blank tasks should be "
                 "guided sentence completion or sentence combination: supply any required connector "
                 "or source form explicitly and make clear whether the learner writes only the blank "
