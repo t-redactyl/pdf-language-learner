@@ -136,9 +136,9 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=47' in response.text
-    assert '/static/revision.js?v=37' in response.text
-    assert '/static/app.js?v=48' in response.text
+    assert '/static/styles.css?v=48' in response.text
+    assert '/static/revision.js?v=39' in response.text
+    assert '/static/app.js?v=49' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -161,12 +161,22 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=22' in app_script
-    assert './i18n.js?v=22' in revision_script
-    assert './i18n.js?v=22' in grammar_script
-    assert './grammar.js?v=11' in revision_script
+    assert './i18n.js?v=23' in app_script
+    assert './i18n.js?v=23' in revision_script
+    assert './i18n.js?v=23' in grammar_script
+    assert './grammar.js?v=13' in revision_script
     assert 'revisionMode === "grammar" ? "grammar.generating"' in revision_script
     assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
+    assert '"grammar.checking": "Checking your answer…"' in i18n_script
+    assert "const GRAMMAR_REQUEST_TIMEOUT_MS = 190_000" in grammar_script
+    assert "if (continuationPending) return" in grammar_script
+    assert "const button = event.currentTarget" in grammar_script
+    assert "button.disabled = false" in grammar_script
+    assert "export function cancelGrammarRequests()" in grammar_script
+    assert 'new CustomEvent("margin:revision-opened")' in revision_script
+    assert 'new CustomEvent("margin:revision-closed")' in revision_script
+    assert 'document.addEventListener("margin:revision-opened"' in app_script
+    assert 'document.addEventListener("margin:revision-closed"' in app_script
     assert '"grammar.reviewRules.other": "Reviewing {count} grammar rules"' in i18n_script
     assert "function renderTopicHeading()" in grammar_script
     assert "function loadTopicSummary(topic, summary)" in grammar_script

@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=5";
-import { initI18n, languageName, t } from "./i18n.js?v=22";
+import { initI18n, languageName, t } from "./i18n.js?v=23";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -30,12 +30,24 @@ let dueReviewSummary = null;
 let activePdf = null;
 let activeHls = null;
 const pdfPageState = new WeakMap();
+let pdfRenderingSuspended = false;
 const pdfPageRenderObserver = new IntersectionObserver(entries => {
   entries.forEach(entry => {
-    if (entry.isIntersecting) renderPdfPage(entry.target);
+    if (entry.isIntersecting && !pdfRenderingSuspended) renderPdfPage(entry.target);
     else releasePdfPage(entry.target);
   });
 }, { rootMargin: "1200px 0px" });
+document.addEventListener("margin:revision-opened", () => {
+  pdfRenderingSuspended = true;
+  pages.querySelectorAll(".pdf-page").forEach(page => {
+    pdfPageRenderObserver.unobserve(page);
+    releasePdfPage(page);
+  });
+});
+document.addEventListener("margin:revision-closed", () => {
+  pdfRenderingSuspended = false;
+  pages.querySelectorAll(".pdf-page").forEach(page => pdfPageRenderObserver.observe(page));
+});
 const LEGACY_SAVED_VOCABULARY_STORAGE_KEY = "margin:saved-vocabulary:v1";
 let savedVocabulary = [];
 const pdfPageResizeObserver = new ResizeObserver(entries => {

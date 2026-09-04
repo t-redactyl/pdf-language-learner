@@ -44,9 +44,11 @@ def generated_session() -> GrammarGeneratedSession:
     exercise_types = (
         GrammarExerciseType.MULTIPLE_CHOICE,
         GrammarExerciseType.MULTIPLE_CHOICE,
+        GrammarExerciseType.MULTIPLE_CHOICE,
         GrammarExerciseType.FILL_BLANK,
         GrammarExerciseType.FILL_BLANK,
         GrammarExerciseType.FILL_BLANK,
+        GrammarExerciseType.TRANSLATION,
         GrammarExerciseType.TRANSLATION,
         GrammarExerciseType.TRANSLATION,
     )
@@ -58,9 +60,6 @@ def generated_session() -> GrammarGeneratedSession:
             prompt="Complete <this> sentence.",
             choices=["Hablo.", "Hablas.", "Habla.", "Hablan."]
             if exercise_type is GrammarExerciseType.MULTIPLE_CHOICE
-            else [],
-            tokens=["Yo", "hablo"]
-            if exercise_type is GrammarExerciseType.ORDERING
             else [],
             accepted_answers=["Hablo."],
             reference_answer="Hablo.",

@@ -3,8 +3,12 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=22";
-import { initializeGrammarRevision, loadGrammarRevision } from "./grammar.js?v=11";
+import { languageName, t } from "./i18n.js?v=23";
+import {
+  cancelGrammarRequests,
+  initializeGrammarRevision,
+  loadGrammarRevision,
+} from "./grammar.js?v=13";
 
 const $ = selector => document.querySelector(selector);
 
@@ -137,6 +141,7 @@ document.addEventListener("margin:locale-changed", () => {
 async function openRevision() {
   view.hidden = false;
   document.body.classList.add("revision-open");
+  document.dispatchEvent(new CustomEvent("margin:revision-opened"));
   try {
     await populateLanguageSelector();
   } catch (error) {
@@ -215,7 +220,7 @@ async function loadRevisionSession() {
       await loadGrammarRevision(language);
       loading.hidden = true;
     } catch (error) {
-      showRevisionError(error);
+      if (error.name !== "AbortError") showRevisionError(error);
     }
     return;
   }
@@ -275,8 +280,10 @@ function setRevisionMode(mode) {
 }
 
 function closeRevision() {
+  cancelGrammarRequests();
   view.hidden = true;
   document.body.classList.remove("revision-open");
+  document.dispatchEvent(new CustomEvent("margin:revision-closed"));
   document.dispatchEvent(new CustomEvent("margin:reviews-changed"));
 }
 

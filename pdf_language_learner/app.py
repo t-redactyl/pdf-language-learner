@@ -148,6 +148,9 @@ CONNECTOR_BACKFILL_VERSION = "connector-sentences-v2"
 # budget can therefore expire before even this small structured grade is
 # emitted, especially for open-ended production exercises.
 GRAMMAR_GRADING_MAX_OUTPUT_TOKENS = 1000
+GRAMMAR_SESSION_GENERATION_LOCKS = {
+    language: threading.Lock() for language in ("german", "spanish")
+}
 GERMAN_CONNECTORS = {
     "obwohl": {
         "categories": ("subordinating conjunction",),
@@ -3952,7 +3955,7 @@ def persist_grammar_session(
                 str(uuid.uuid4()), session_id, position, exercise.topic_key,
                 exercise.type.value, exercise.instruction, exercise.prompt,
                 json.dumps(exercise.choices, ensure_ascii=False),
-                json.dumps(exercise.tokens, ensure_ascii=False),
+                "[]",
                 json.dumps(exercise.accepted_answers, ensure_ascii=False),
                 exercise.reference_answer, exercise.grading_rubric,
                 exercise.explanation,
@@ -4056,37 +4059,40 @@ def start_grammar_session(request: GrammarSessionRequest) -> dict[str, Any]:
     now = datetime.now(UTC)
     catalogue = grammar_catalogue(request.language)
     canonical_language = catalogue[0].language.value
-    with vocabulary_database() as connection:
-        existing = connection.execute(
-            """
-            SELECT id FROM grammar_sessions
-            WHERE canonical_language = ? AND completed_at IS NULL
-                AND content_version = ?
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            (canonical_language, GRAMMAR_CONTENT_VERSION),
-        ).fetchone()
-        if existing is not None:
-            return grammar_session_payload(connection, existing["id"])
-        selection = select_grammar_topics(connection, canonical_language, now)
-        if selection is None:
-            raise HTTPException(status_code=404, detail="No grammar topics are due")
-        kind, topics = selection
-        vocabulary = saved_grammar_vocabulary(connection, canonical_language)
-    try:
-        generated = generate_grammar_content(
-            canonical_language, kind, topics, vocabulary
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Grammar session generation failed: {exc}"
-        ) from exc
-    with vocabulary_database() as connection:
-        session_id = persist_grammar_session(
-            connection, language=canonical_language, kind=kind,
-            topics=topics, generated=generated, now=now,
-        )
-        return grammar_session_payload(connection, session_id)
+    with GRAMMAR_SESSION_GENERATION_LOCKS[canonical_language]:
+        # Another request may have completed generation while this request was
+        # waiting, so the existing-session check belongs inside the lock.
+        with vocabulary_database() as connection:
+            existing = connection.execute(
+                """
+                SELECT id FROM grammar_sessions
+                WHERE canonical_language = ? AND completed_at IS NULL
+                    AND content_version = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (canonical_language, GRAMMAR_CONTENT_VERSION),
+            ).fetchone()
+            if existing is not None:
+                return grammar_session_payload(connection, existing["id"])
+            selection = select_grammar_topics(connection, canonical_language, now)
+            if selection is None:
+                raise HTTPException(status_code=404, detail="No grammar topics are due")
+            kind, topics = selection
+            vocabulary = saved_grammar_vocabulary(connection, canonical_language)
+        try:
+            generated = generate_grammar_content(
+                canonical_language, kind, topics, vocabulary
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Grammar session generation failed: {exc}"
+            ) from exc
+        with vocabulary_database() as connection:
+            session_id = persist_grammar_session(
+                connection, language=canonical_language, kind=kind,
+                topics=topics, generated=generated, now=now,
+            )
+            return grammar_session_payload(connection, session_id)
 
 
 @app.post("/api/grammar/session/{session_id}/topics/{topic_key}/summary")

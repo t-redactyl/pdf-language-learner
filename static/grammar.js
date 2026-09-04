@@ -1,10 +1,50 @@
-import { t } from "./i18n.js?v=22";
+import { t } from "./i18n.js?v=23";
 
 const $ = selector => document.querySelector(selector);
 let activeSession = null;
 let selectedTokens = [];
 let orderingTokens = [];
 let loadCurrent = null;
+let sessionLoadController = null;
+let answerController = null;
+const summaryControllers = new Set();
+let continuationPending = false;
+const GRAMMAR_REQUEST_TIMEOUT_MS = 190_000;
+
+async function grammarFetch(url, options = {}, controller) {
+  let timedOut = false;
+  const timeout = window.setTimeout(
+    () => {
+      timedOut = true;
+      controller.abort();
+    },
+    GRAMMAR_REQUEST_TIMEOUT_MS,
+  );
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const data = await response.json();
+    return { response, data };
+  } catch (error) {
+    if (timedOut) {
+      const timeoutError = new Error(t("grammar.requestTimeout"));
+      timeoutError.name = "TimeoutError";
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+export function cancelGrammarRequests() {
+  sessionLoadController?.abort();
+  answerController?.abort();
+  summaryControllers.forEach(controller => controller.abort());
+  summaryControllers.clear();
+  sessionLoadController = null;
+  answerController = null;
+  continuationPending = false;
+}
 
 export function initializeGrammarRevision(reload) {
   loadCurrent = reload;
@@ -20,20 +60,39 @@ export function initializeGrammarRevision(reload) {
   $("#grammar-order-check")?.addEventListener("click", () => {
     if (selectedTokens.length) submitGrammarAnswer(orderingAnswer());
   });
-  $("#grammar-continue")?.addEventListener("click", () => loadCurrent());
+  $("#grammar-continue")?.addEventListener("click", async event => {
+    if (continuationPending) return;
+    const button = event.currentTarget;
+    continuationPending = true;
+    button.disabled = true;
+    button.textContent = t("grammar.loadingNext");
+    try {
+      await loadCurrent();
+    } finally {
+      continuationPending = false;
+      button.disabled = false;
+    }
+  });
 }
 
 export async function loadGrammarRevision(language) {
+  sessionLoadController?.abort();
+  const controller = new AbortController();
+  sessionLoadController = controller;
   $("#grammar-session").hidden = true;
-  const response = await fetch("/api/grammar/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ language }),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || t("grammar.loadError"));
-  activeSession = data;
-  renderSession();
+  try {
+    const { response, data } = await grammarFetch("/api/grammar/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language }),
+    }, controller);
+    if (!response.ok) throw new Error(data.detail || t("grammar.loadError"));
+    if (controller.signal.aborted) return;
+    activeSession = data;
+    renderSession();
+  } finally {
+    if (sessionLoadController === controller) sessionLoadController = null;
+  }
 }
 
 function renderSession() {
@@ -158,20 +217,23 @@ function renderTopicHeading() {
 }
 
 async function loadTopicSummary(topic, summary) {
+  const controller = new AbortController();
+  summaryControllers.add(controller);
   summary.dataset.loading = "true";
   summary.textContent = t("grammar.summaryGenerating");
   try {
-    const response = await fetch(
+    const { response, data } = await grammarFetch(
       `/api/grammar/session/${activeSession.id}/topics/${encodeURIComponent(topic.key)}/summary`,
       { method: "POST" },
+      controller,
     );
-    const data = await response.json();
     if (!response.ok) throw new Error(data.detail || t("grammar.summaryError"));
     topic.summary = data.summary;
     summary.textContent = data.summary;
   } catch {
     summary.textContent = t("grammar.summaryError");
   } finally {
+    summaryControllers.delete(controller);
     summary.dataset.loading = "false";
   }
 }
@@ -235,15 +297,23 @@ function orderingAnswer() {
 }
 
 async function submitGrammarAnswer(answer) {
+  if (answerController) return;
+  const controller = new AbortController();
+  answerController = controller;
   document.querySelectorAll("#grammar-exercise button, #grammar-exercise input").forEach(control => { control.disabled = true; });
+  $("#grammar-feedback-title").textContent = t("grammar.checking");
+  $("#grammar-feedback-copy").textContent = "";
+  $("#grammar-reference-row").hidden = true;
+  $("#grammar-explanation").hidden = true;
+  $("#grammar-continue").hidden = true;
+  $("#grammar-feedback").hidden = false;
   try {
     const exercise = activeSession.exercise;
-    const response = await fetch(`/api/grammar/session/${activeSession.id}/exercises/${exercise.id}/answer`, {
+    const { response, data: result } = await grammarFetch(`/api/grammar/session/${activeSession.id}/exercises/${exercise.id}/answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ answer }),
-    });
-    const result = await response.json();
+    }, controller);
     if (!response.ok) throw new Error(result.detail || t("revision.answerSaveError"));
     $("#grammar-feedback-title").textContent = result.correct ? t("revision.correct") : t("grammar.notQuite");
     $("#grammar-feedback-copy").textContent = result.feedback;
@@ -255,6 +325,7 @@ async function submitGrammarAnswer(answer) {
     $("#grammar-continue").hidden = false;
     $("#grammar-feedback").hidden = false;
   } catch (error) {
+    if (error.name === "AbortError") return;
     document.querySelectorAll("#grammar-exercise button, #grammar-exercise input").forEach(control => { control.disabled = false; });
     $("#grammar-feedback-title").textContent = error.message;
     $("#grammar-feedback-copy").textContent = "";
@@ -264,5 +335,7 @@ async function submitGrammarAnswer(answer) {
     $("#grammar-explanation").hidden = true;
     $("#grammar-continue").hidden = true;
     $("#grammar-feedback").hidden = false;
+  } finally {
+    if (answerController === controller) answerController = null;
   }
 }

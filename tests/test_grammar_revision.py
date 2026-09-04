@@ -44,12 +44,6 @@ def test_grammar_generation_explains_rules_in_english() -> None:
         "rule_summary and every exercise explanation in English"
         in system_instruction
     )
-    assert "accurate, self-contained, and internally consistent" in system_instruction
-    assert "hablo -> habl- -> no hables" in system_instruction
-    assert "include a rule_table when a compact table" in system_instruction
-    assert "do not embed Markdown tables" in system_instruction
-    assert "Format rule_summary as 2-5 succinct bullet points" in system_instruction
-    assert "keep the complete summary under 220 words" in system_instruction
     assert "answerable using only information visible" in system_instruction
     assert "explicitly name its source form" in system_instruction
     assert "past participle of herstellen" in system_instruction
@@ -58,24 +52,8 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "exactly one unambiguously correct choice" in system_instruction
     assert "guided sentence completion or sentence combination" in system_instruction
     assert "Translation tasks must name the required construction" in system_instruction
-    assert "Return exactly seven exercises" in system_instruction
-    assert "two multiple_choice, three fill_blank" in system_instruction
-    assert "Do not create ordering" in system_instruction
-
-
-def test_grammar_ordering_exercise_rejects_too_many_tiles() -> None:
-    with pytest.raises(ValidationError):
-        GrammarGeneratedExercise(
-            topic_key="word-order",
-            type=GrammarExerciseType.ORDERING,
-            instruction="Arrange the tiles.",
-            prompt="Build a sentence.",
-            tokens=[str(index) for index in range(8)],
-            accepted_answers=["0 1 2 3 4 5 6 7"],
-            reference_answer="0 1 2 3 4 5 6 7",
-            grading_rubric="Use the target order.",
-            explanation="This is the target order.",
-        )
+    assert "Return exactly nine exercises" in system_instruction
+    assert "three multiple_choice, three fill_blank, and three translation" in system_instruction
 
 
 def test_grammar_topic_summary_is_brief_english_prose() -> None:
@@ -194,18 +172,6 @@ def test_closed_grammar_grading_normalizes_punctuation() -> None:
         "Hablo",
     ) is True
     assert deterministic_grammar_grade(
-        GrammarExerciseType.ORDERING,
-        "Ich besuche einen netten Mann .",
-        ["Ich besuche einen netten Mann."],
-        "Ich besuche einen netten Mann.",
-    ) is True
-    assert deterministic_grammar_grade(
-        GrammarExerciseType.ORDERING,
-        "Obwohl es regnet , bleibe ich hier .",
-        ["Obwohl es regnet, bleibe ich hier."],
-        "Obwohl es regnet, bleibe ich hier.",
-    ) is True
-    assert deterministic_grammar_grade(
         GrammarExerciseType.TRANSLATION,
         "Hablo",
         [],
@@ -233,11 +199,13 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         exercise_slots = (
             ("multiple_choice_1", GrammarExerciseType.MULTIPLE_CHOICE),
             ("multiple_choice_2", GrammarExerciseType.MULTIPLE_CHOICE),
+            ("multiple_choice_3", GrammarExerciseType.MULTIPLE_CHOICE),
             ("fill_blank_1", GrammarExerciseType.FILL_BLANK),
             ("fill_blank_2", GrammarExerciseType.FILL_BLANK),
             ("fill_blank_3", GrammarExerciseType.FILL_BLANK),
             ("translation_1", GrammarExerciseType.TRANSLATION),
             ("translation_2", GrammarExerciseType.TRANSLATION),
+            ("translation_3", GrammarExerciseType.TRANSLATION),
         )
         for slot, exercise_type in exercise_slots:
             exercises[slot] = {
@@ -246,9 +214,6 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
                 "prompt": "Complete the task.",
                 "choices": ["correct", "other", "another", "last"]
                 if exercise_type is GrammarExerciseType.MULTIPLE_CHOICE
-                else [],
-                "tokens": ["correct"]
-                if exercise_type is GrammarExerciseType.ORDERING
                 else [],
                 "accepted_answers": ["correct"],
                 "reference_answer": "correct",
@@ -344,7 +309,7 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         ).fetchone() is None
 
     exercise_types = []
-    for _ in range(7):
+    for _ in range(9):
         current = client.post(
             "/api/grammar/session", json={"language": "Spanish"}
         ).json()
@@ -359,14 +324,16 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
     assert exercise_types == [
         "multiple_choice",
         "multiple_choice",
+        "multiple_choice",
         "fill_blank",
         "fill_blank",
         "fill_blank",
+        "translation",
         "translation",
         "translation",
     ]
-    assert calls.count("grammar answer grading") == 2
-    assert grading_token_budgets == [1000, 1000]
+    assert calls.count("grammar answer grading") == 3
+    assert grading_token_budgets == [1000, 1000, 1000]
     with sqlite3.connect(database) as connection:
         progress = connection.execute(
             "SELECT repetitions, lapses FROM grammar_reviews WHERE topic_key = ?",

@@ -262,6 +262,7 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-mode-tab { padding:8px 14px; border:0; border-radius:3px; background:transparent; color:#686d65; cursor:pointer; font:700 12px/1 sans-serif; }
 .revision-mode-tab.active { background:white; color:var(--ink); box-shadow:0 1px 4px #28261f18; }
 .grammar-card { text-align:left; }
+.grammar-card .primary-button:disabled { cursor:wait; opacity:.65; }
 .grammar-topic-heading { margin-bottom:22px; }
 .grammar-topic-heading h3 { margin:14px 0 0; text-align:left; font-size:clamp(24px,3.75vw,32px); }
 .grammar-topic-list { display:grid; gap:8px; margin:20px 0 0; padding:0; list-style:none; counter-reset:grammar-topic; }
