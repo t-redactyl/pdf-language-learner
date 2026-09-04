@@ -137,8 +137,8 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
     assert '/static/styles.css?v=48' in response.text
-    assert '/static/revision.js?v=40' in response.text
-    assert '/static/app.js?v=49' in response.text
+    assert '/static/revision.js?v=41' in response.text
+    assert '/static/app.js?v=50' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -2307,6 +2307,20 @@ def test_due_review_summary_counts_due_vocabulary_and_grammar(
             ),
         )
     assert client.get("/api/revision/due").json()["grammar_count"] == 0
+
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            """
+            UPDATE grammar_reviews SET next_review_at = NULL
+            WHERE canonical_language = 'spanish' AND topic_key = (
+                SELECT topic_key FROM grammar_reviews
+                WHERE canonical_language = 'spanish' LIMIT 1
+            )
+            """
+        )
+    spanish_due = client.get("/api/revision/due").json()
+    assert spanish_due["grammar_count"] == 1
+    assert spanish_due["grammar_review_count"] == 1
 
     client.post(
         f"/api/revision/{item['id']}/answer",

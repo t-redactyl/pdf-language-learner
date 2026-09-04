@@ -3772,16 +3772,17 @@ def grammar_schedule_from_row(row: sqlite3.Row | None) -> ScheduleState:
 def grammar_review_is_available(
     connection: sqlite3.Connection,
     now: datetime,
+    canonical_language: str,
 ) -> bool:
-    """Limit generated review sessions to roughly three per week."""
+    """Limit each language's generated review sessions to roughly three per week."""
 
     latest = connection.execute(
         """
         SELECT completed_at FROM grammar_sessions
-        WHERE kind = ? AND completed_at IS NOT NULL
+        WHERE canonical_language = ? AND kind = ? AND completed_at IS NOT NULL
         ORDER BY completed_at DESC LIMIT 1
         """,
-        (GrammarSessionKind.REVIEW.value,),
+        (canonical_language, GrammarSessionKind.REVIEW.value),
     ).fetchone()
     if latest is None:
         return True
@@ -3821,7 +3822,7 @@ def select_grammar_topics(
     ).fetchone()[0]
     if unseen and (not due or completed % 3 < 2):
         return GrammarSessionKind.LESSON, unseen[:1]
-    if due and grammar_review_is_available(connection, now):
+    if due and grammar_review_is_available(connection, now, canonical_language):
         review_topics = due[:GRAMMAR_REVIEW_TOPIC_LIMIT]
         return GrammarSessionKind.REVIEW, review_topics
     if unseen:
@@ -4562,17 +4563,23 @@ def due_reviews() -> DueReviewSummary:
                 f"lapses, consecutive_correct FROM {registered['table_name']}"
             ).fetchall()
         ]
-        grammar_rows = (
-            connection.execute(
-                """
-                SELECT last_reviewed_at, next_review_at, repetitions,
-                    lapses, consecutive_correct
-                FROM grammar_reviews
-                """
-            ).fetchall()
-            if grammar_review_is_available(connection, now)
-            else []
-        )
+        all_grammar_rows = connection.execute(
+            """
+            SELECT canonical_language, last_reviewed_at, next_review_at,
+                repetitions, lapses, consecutive_correct
+            FROM grammar_reviews
+            """
+        ).fetchall()
+        available_grammar_languages = {
+            language
+            for language in {row["canonical_language"] for row in all_grammar_rows}
+            if grammar_review_is_available(connection, now, language)
+        }
+        grammar_rows = [
+            row
+            for row in all_grammar_rows
+            if row["canonical_language"] in available_grammar_languages
+        ]
     due_grammar_count = min(
         sum(is_due(grammar_schedule_from_row(row), at=now) for row in grammar_rows),
         GRAMMAR_REVIEW_TOPIC_LIMIT,
