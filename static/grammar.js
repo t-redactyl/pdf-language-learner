@@ -1,14 +1,16 @@
-import { t } from "./i18n.js?v=23";
+import { t } from "./i18n.js?v=24";
 
 const $ = selector => document.querySelector(selector);
 let activeSession = null;
 let selectedTokens = [];
 let orderingTokens = [];
 let loadCurrent = null;
+let finishCurrent = null;
 let sessionLoadController = null;
 let answerController = null;
 const summaryControllers = new Set();
 let continuationPending = false;
+let completedSessionSummary = null;
 const GRAMMAR_REQUEST_TIMEOUT_MS = 190_000;
 
 async function grammarFetch(url, options = {}, controller) {
@@ -44,10 +46,12 @@ export function cancelGrammarRequests() {
   sessionLoadController = null;
   answerController = null;
   continuationPending = false;
+  completedSessionSummary = null;
 }
 
-export function initializeGrammarRevision(reload) {
+export function initializeGrammarRevision(reload, finish) {
   loadCurrent = reload;
+  finishCurrent = finish;
   $("#grammar-answer-form")?.addEventListener("submit", event => {
     event.preventDefault();
     const answer = $("#grammar-answer").value.trim();
@@ -62,6 +66,12 @@ export function initializeGrammarRevision(reload) {
   });
   $("#grammar-continue")?.addEventListener("click", async event => {
     if (continuationPending) return;
+    if (completedSessionSummary) {
+      const summary = completedSessionSummary;
+      completedSessionSummary = null;
+      finishCurrent(summary);
+      return;
+    }
     const button = event.currentTarget;
     continuationPending = true;
     button.disabled = true;
@@ -77,6 +87,7 @@ export function initializeGrammarRevision(reload) {
 
 export async function loadGrammarRevision(language) {
   sessionLoadController?.abort();
+  completedSessionSummary = null;
   const controller = new AbortController();
   sessionLoadController = controller;
   $("#grammar-session").hidden = true;
@@ -330,7 +341,15 @@ async function submitGrammarAnswer(answer) {
     $("#grammar-reference-row").hidden = false;
     $("#grammar-explanation").textContent = result.explanation;
     $("#grammar-explanation").hidden = false;
-    $("#grammar-continue").textContent = result.session_complete ? t("grammar.nextSession") : t("revision.continue");
+    if (result.session_complete) {
+      completedSessionSummary = {
+        answered: activeSession.answered + 1,
+        correct: activeSession.correct + Number(result.correct),
+      };
+    }
+    $("#grammar-continue").textContent = result.session_complete
+      ? t("grammar.finish")
+      : t("revision.continue");
     $("#grammar-continue").hidden = false;
     $("#grammar-feedback").hidden = false;
   } catch (error) {

@@ -16,7 +16,6 @@ GRAMMAR_CORRECT_INTERVAL_DAYS = (3, 7, 14, 30, 60, 120)
 GRAMMAR_INCORRECT_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_SESSION_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_TOPIC_LIMIT = 3
-GRAMMAR_NEW_TOPIC_LIMIT = 1
 GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION = """
 Verbposition in Satzverbindungen (Verb Position in Connected Sentences)
 
@@ -289,6 +288,12 @@ def grammar_generation_messages(
             "reviews. Give the new topic two exercises, and distribute the other seven "
             "across the review topics so every topic is practised."
         )
+    elif kind is GrammarSessionKind.REVIEW:
+        distribution = (
+            "This is a review-only session. Use only the supplied, previously studied "
+            "topics and do not introduce or teach any additional grammar topic. "
+            "Interleave the three topics as evenly as possible."
+        )
     else:
         distribution = "Interleave the topics as evenly as possible."
     return [
@@ -327,7 +332,8 @@ def grammar_generation_messages(
                 "scrambled order. Never present them in the target order, and never reveal that order "
                 "through their labels or surrounding explanation. Translation tasks must name the required construction or "
                 "connector in parentheses. Keep prompts short, natural, level-appropriate, and "
-                "semantically coherent. Test only rules taught in the summary or worked examples."
+                "semantically coherent. Test only the supplied topics and rules taught in the "
+                "summary or worked examples."
             ),
         },
         {

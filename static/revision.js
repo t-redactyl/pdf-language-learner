@@ -3,12 +3,12 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=23";
+import { languageName, t } from "./i18n.js?v=24";
 import {
   cancelGrammarRequests,
   initializeGrammarRevision,
   loadGrammarRevision,
-} from "./grammar.js?v=14";
+} from "./grammar.js?v=15";
 
 const $ = selector => document.querySelector(selector);
 
@@ -1018,5 +1018,12 @@ function normalize(value) {
   return value.normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/g, " ");
 }
 
+function finishGrammarRevision(summary) {
+  answered = summary.answered;
+  correctAnswers = summary.correct;
+  $("#grammar-session").hidden = true;
+  showEmptySession(true);
+}
+
 restoreRevisionExercisePreferences();
-initializeGrammarRevision(loadRevisionSession);
+initializeGrammarRevision(loadRevisionSession, finishGrammarRevision);

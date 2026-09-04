@@ -53,7 +53,6 @@ from pdf_language_learner.grammar_revision import (
     GrammarGeneratedSession,
     GrammarGenerationResponse,
     GrammarGrade,
-    GRAMMAR_NEW_TOPIC_LIMIT,
     GRAMMAR_REVIEW_SESSION_INTERVAL,
     GRAMMAR_REVIEW_TOPIC_LIMIT,
     GrammarSessionKind,
@@ -74,7 +73,7 @@ from pdf_language_learner.web_import import WebImportError, fetch_web_document
 logger = logging.getLogger("uvicorn.error").getChild("margin")
 
 ROOT = Path(__file__).resolve().parent.parent
-GRAMMAR_CONTENT_VERSION = 3
+GRAMMAR_CONTENT_VERSION = 4
 
 
 def load_local_environment(path: Path = ROOT / ".env") -> None:
@@ -3824,11 +3823,6 @@ def select_grammar_topics(
         return GrammarSessionKind.LESSON, unseen[:1]
     if due and grammar_review_is_available(connection, now):
         review_topics = due[:GRAMMAR_REVIEW_TOPIC_LIMIT]
-        if unseen:
-            return (
-                GrammarSessionKind.MIXED,
-                review_topics + unseen[:GRAMMAR_NEW_TOPIC_LIMIT],
-            )
         return GrammarSessionKind.REVIEW, review_topics
     if unseen:
         return GrammarSessionKind.LESSON, unseen[:1]
@@ -4579,34 +4573,20 @@ def due_reviews() -> DueReviewSummary:
             if grammar_review_is_available(connection, now)
             else []
         )
-        introduced_grammar_topics = {
-            row["topic_key"]
-            for row in connection.execute(
-                "SELECT topic_key FROM grammar_reviews"
-            ).fetchall()
-        }
-
     due_grammar_count = min(
         sum(is_due(grammar_schedule_from_row(row), at=now) for row in grammar_rows),
         GRAMMAR_REVIEW_TOPIC_LIMIT,
-    )
-    has_new_grammar_topic = any(
-        topic.key not in introduced_grammar_topics
-        for topic in (*GRAMMAR_TOPICS, *SPANISH_GRAMMAR_TOPICS)
     )
 
     return DueReviewSummary(
         vocabulary_count=sum(
             is_due(schedule_state(row), at=now) for row in vocabulary_rows
         ),
-        grammar_count=due_grammar_count
-        + (GRAMMAR_NEW_TOPIC_LIMIT if due_grammar_count and has_new_grammar_topic else 0),
+        grammar_count=due_grammar_count,
         grammar_review_count=due_grammar_count,
-        grammar_new_count=(
-            GRAMMAR_NEW_TOPIC_LIMIT
-            if due_grammar_count and has_new_grammar_topic
-            else 0
-        ),
+        # Kept in the response shape for older clients. Grammar review sessions
+        # no longer mix in unseen topics.
+        grammar_new_count=0,
     )
 
 

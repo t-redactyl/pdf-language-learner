@@ -132,7 +132,7 @@ def test_grammar_scheduler_uses_topic_level_intervals() -> None:
     assert missed.consecutive_correct == 0
 
 
-def test_scheduled_grammar_review_includes_three_reviews_and_one_new_topic(
+def test_scheduled_grammar_review_includes_only_three_seen_topics(
     tmp_path, monkeypatch
 ) -> None:
     database = tmp_path / "margin.db"
@@ -161,9 +161,35 @@ def test_scheduled_grammar_review_includes_three_reviews_and_one_new_topic(
 
     assert selection is not None
     kind, topics = selection
-    assert kind is GrammarSessionKind.MIXED
-    assert len(topics) == 4
-    assert topics[-1].key == SPANISH_GRAMMAR_TOPICS[61].key
+    assert kind is GrammarSessionKind.REVIEW
+    assert len(topics) == 3
+    seen_topic_keys = {topic.key for topic in SPANISH_GRAMMAR_TOPICS[:61]}
+    assert {topic.key for topic in topics} <= seen_topic_keys
+
+
+def test_grammar_review_prompt_forbids_new_topics() -> None:
+    topics = [
+        {
+            "key": topic.key,
+            "title": topic.title,
+            "level": topic.level.value,
+            "example": topic.example,
+        }
+        for topic in SPANISH_GRAMMAR_TOPICS[:3]
+    ]
+
+    messages = grammar_generation_messages(
+        language="Spanish",
+        kind=GrammarSessionKind.REVIEW,
+        topics=topics,
+        saved_vocabulary=[],
+    )
+
+    assert "review-only session" in messages[1]["content"]
+    assert (
+        "do not introduce or teach any additional grammar topic"
+        in messages[1]["content"]
+    )
 
 
 def test_closed_grammar_grading_normalizes_punctuation() -> None:

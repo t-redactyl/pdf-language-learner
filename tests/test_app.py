@@ -161,10 +161,10 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=23' in app_script
-    assert './i18n.js?v=23' in revision_script
-    assert './i18n.js?v=23' in grammar_script
-    assert './grammar.js?v=14' in revision_script
+    assert './i18n.js?v=24' in app_script
+    assert './i18n.js?v=24' in revision_script
+    assert './i18n.js?v=24' in grammar_script
+    assert './grammar.js?v=15' in revision_script
     assert 'revisionMode === "grammar" ? "grammar.generating"' in revision_script
     assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
     assert '"grammar.checking": "Checking your answer…"' in i18n_script
@@ -173,6 +173,13 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert "const button = event.currentTarget" in grammar_script
     assert "button.disabled = false" in grammar_script
     assert "export function cancelGrammarRequests()" in grammar_script
+    assert "finishCurrent(summary)" in grammar_script
+    assert 't("grammar.finish")' in grammar_script
+    assert (
+        "initializeGrammarRevision(loadRevisionSession, finishGrammarRevision)"
+        in revision_script
+    )
+    assert '"grammar.finish": "Finish"' in i18n_script
     assert 'new CustomEvent("margin:revision-opened")' in revision_script
     assert 'new CustomEvent("margin:revision-closed")' in revision_script
     assert 'document.addEventListener("margin:revision-opened"' in app_script
@@ -2273,9 +2280,9 @@ def test_due_review_summary_counts_due_vocabulary_and_grammar(
 
     assert summary == {
         "vocabulary_count": 1,
-        "grammar_count": 4,
+        "grammar_count": 3,
         "grammar_review_count": 3,
-        "grammar_new_count": 1,
+        "grammar_new_count": 0,
     }
 
     with sqlite3.connect(vocabulary_database / "margin.db") as connection:
