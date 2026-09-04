@@ -51,6 +51,8 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "exactly four choices" in system_instruction
     assert "exactly one unambiguously correct choice" in system_instruction
     assert "guided sentence completion or sentence combination" in system_instruction
+    assert "list those elements in a deliberately scrambled order" in system_instruction
+    assert "Never present them in the target order" in system_instruction
     assert "Translation tasks must name the required construction" in system_instruction
     assert "Return exactly nine exercises" in system_instruction
     assert "three multiple_choice, three fill_blank, and three translation" in system_instruction

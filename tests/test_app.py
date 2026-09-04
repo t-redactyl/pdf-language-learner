@@ -137,7 +137,7 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
     assert '/static/styles.css?v=48' in response.text
-    assert '/static/revision.js?v=39' in response.text
+    assert '/static/revision.js?v=40' in response.text
     assert '/static/app.js?v=49' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
@@ -164,7 +164,7 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert './i18n.js?v=23' in app_script
     assert './i18n.js?v=23' in revision_script
     assert './i18n.js?v=23' in grammar_script
-    assert './grammar.js?v=13' in revision_script
+    assert './grammar.js?v=14' in revision_script
     assert 'revisionMode === "grammar" ? "grammar.generating"' in revision_script
     assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
     assert '"grammar.checking": "Checking your answer…"' in i18n_script
@@ -183,6 +183,8 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert 'disclosure.className = "grammar-topic-disclosure"' in grammar_script
     assert "function ruleSummaryPoints(summary)" in grammar_script
     assert "function shuffledOrderingTokens(tokens)" in grammar_script
+    assert "function shuffledChoices(choices)" in grammar_script
+    assert "shuffledChoices(exercise.choices).forEach" in grammar_script
     assert "orderingTokens.forEach(({ index, token })" in grammar_script
     assert "function orderingAnswer()" in grammar_script
     assert "@keyframes margin-loading-bounce" not in styles

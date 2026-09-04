@@ -74,7 +74,7 @@ from pdf_language_learner.web_import import WebImportError, fetch_web_document
 logger = logging.getLogger("uvicorn.error").getChild("margin")
 
 ROOT = Path(__file__).resolve().parent.parent
-GRAMMAR_CONTENT_VERSION = 2
+GRAMMAR_CONTENT_VERSION = 3
 
 
 def load_local_environment(path: Path = ROOT / ".env") -> None:

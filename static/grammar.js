@@ -136,7 +136,7 @@ function renderSession() {
   $("#grammar-ordering").hidden = exercise.type !== "ordering";
   $("#grammar-answer").value = "";
   if (exercise.type === "multiple_choice") {
-    exercise.choices.forEach(choice => {
+    shuffledChoices(exercise.choices).forEach(choice => {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = choice;
@@ -149,6 +149,15 @@ function renderSession() {
     ? shuffledOrderingTokens(exercise.tokens)
     : [];
   if (exercise.type === "ordering") renderOrdering();
+}
+
+function shuffledChoices(choices) {
+  const shuffled = [...choices];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]];
+  }
+  return shuffled;
 }
 
 function shuffledOrderingTokens(tokens) {

@@ -322,7 +322,10 @@ def grammar_generation_messages(
                 "connector that makes the displayed sentence correct. Fill-blank tasks should be "
                 "guided sentence completion or sentence combination: supply any required connector "
                 "or source form explicitly and make clear whether the learner writes only the blank "
-                "or a complete clause. Translation tasks must name the required construction or "
+                "or a complete clause. If a task asks the learner to put supplied words, phrases, or "
+                "sentence elements into the correct order, list those elements in a deliberately "
+                "scrambled order. Never present them in the target order, and never reveal that order "
+                "through their labels or surrounding explanation. Translation tasks must name the required construction or "
                 "connector in parentheses. Keep prompts short, natural, level-appropriate, and "
                 "semantically coherent. Test only rules taught in the summary or worked examples."
             ),

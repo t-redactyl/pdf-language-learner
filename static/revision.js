@@ -8,7 +8,7 @@ import {
   cancelGrammarRequests,
   initializeGrammarRevision,
   loadGrammarRevision,
-} from "./grammar.js?v=13";
+} from "./grammar.js?v=14";
 
 const $ = selector => document.querySelector(selector);
 
