@@ -125,12 +125,6 @@ def _render_exercise(exercise, position: int) -> str:
             + " · ".join(_escape(item) for item in exercise.choices)
             + "</p>"
         )
-    if exercise.tokens:
-        extras.append(
-            "<p><strong>Tokens:</strong> "
-            + " · ".join(_escape(item) for item in exercise.tokens)
-            + "</p>"
-        )
     accepted = exercise.accepted_answers or [exercise.reference_answer]
     return (
         '<article class="exercise">'

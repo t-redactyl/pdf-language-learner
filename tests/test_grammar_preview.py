@@ -42,13 +42,13 @@ def topic(
 
 def generated_session() -> GrammarGeneratedSession:
     exercise_types = (
+        GrammarExerciseType.MULTIPLE_CHOICE,
+        GrammarExerciseType.MULTIPLE_CHOICE,
         GrammarExerciseType.FILL_BLANK,
         GrammarExerciseType.FILL_BLANK,
-        GrammarExerciseType.ORDERING,
-        GrammarExerciseType.ORDERING,
+        GrammarExerciseType.FILL_BLANK,
         GrammarExerciseType.TRANSLATION,
         GrammarExerciseType.TRANSLATION,
-        GrammarExerciseType.PRODUCTION,
     )
     exercises = [
         GrammarGeneratedExercise(
@@ -56,7 +56,7 @@ def generated_session() -> GrammarGeneratedSession:
             type=exercise_type,
             instruction="Use the present tense.",
             prompt="Complete <this> sentence.",
-            choices=["hablo", "hablas", "habla"]
+            choices=["Hablo.", "Hablas.", "Habla.", "Hablan."]
             if exercise_type is GrammarExerciseType.MULTIPLE_CHOICE
             else [],
             tokens=["Yo", "hablo"]

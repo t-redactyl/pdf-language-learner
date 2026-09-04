@@ -74,6 +74,7 @@ from pdf_language_learner.web_import import WebImportError, fetch_web_document
 logger = logging.getLogger("uvicorn.error").getChild("margin")
 
 ROOT = Path(__file__).resolve().parent.parent
+GRAMMAR_CONTENT_VERSION = 2
 
 
 def load_local_environment(path: Path = ROOT / ".env") -> None:
@@ -2865,6 +2866,7 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
             id TEXT PRIMARY KEY,
             canonical_language TEXT NOT NULL,
             kind TEXT NOT NULL,
+            content_version INTEGER NOT NULL DEFAULT 1,
             topic_keys_json TEXT NOT NULL,
             rule_summary TEXT NOT NULL,
             topic_summaries_json TEXT NOT NULL DEFAULT '{}',
@@ -2888,6 +2890,11 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE grammar_sessions "
             "ADD COLUMN topic_summaries_json TEXT NOT NULL DEFAULT '{}'"
+        )
+    if "content_version" not in session_columns:
+        connection.execute(
+            "ALTER TABLE grammar_sessions "
+            "ADD COLUMN content_version INTEGER NOT NULL DEFAULT 1"
         )
     connection.execute(
         """
@@ -3913,14 +3920,15 @@ def persist_grammar_session(
     connection.execute(
         """
         INSERT INTO grammar_sessions (
-            id, canonical_language, kind, topic_keys_json, rule_summary,
-            rule_tables_json, worked_examples_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            id, canonical_language, kind, content_version, topic_keys_json,
+            rule_summary, rule_tables_json, worked_examples_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             session_id,
             canonicalize(language),
             kind.value,
+            GRAMMAR_CONTENT_VERSION,
             json.dumps([topic.key for topic in topics]),
             generated.rule_summary,
             json.dumps(
@@ -4053,9 +4061,10 @@ def start_grammar_session(request: GrammarSessionRequest) -> dict[str, Any]:
             """
             SELECT id FROM grammar_sessions
             WHERE canonical_language = ? AND completed_at IS NULL
+                AND content_version = ?
             ORDER BY created_at DESC LIMIT 1
             """,
-            (canonical_language,),
+            (canonical_language, GRAMMAR_CONTENT_VERSION),
         ).fetchone()
         if existing is not None:
             return grammar_session_payload(connection, existing["id"])

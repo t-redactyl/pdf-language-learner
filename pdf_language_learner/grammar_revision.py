@@ -17,6 +17,34 @@ GRAMMAR_INCORRECT_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_SESSION_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_TOPIC_LIMIT = 3
 GRAMMAR_NEW_TOPIC_LIMIT = 1
+GRAMMAR_NEW_EXAMPLE_EXPLANATION = """
+Verbposition in Satzverbindungen (Verb Position in Connected Sentences)
+
+The Rule
+In German, when you connect two clauses, the position of the verb depends on the type of connecting word you use. There are three main types:
+
+Type 1 — Koordinierende Konnektoren (Position 0)
+Words like und, aber, oder, denn, sondern connect two main clauses. The word order in both clauses stays normal — subject first, verb second. These connectors occupy "position 0", meaning they don't count as part of the clause.
+* Ich arbeite viel, aber ich verdiene wenig.
+* Er kommt nicht, denn er ist krank.
+
+Type 2 — Adverbiale Konnektoren (Position 1)
+Words like deshalb, trotzdem, dennoch, außerdem, dann, danach are adverbs, not conjunctions. They sit in position 1, which pushes the verb to position 2 and the subject to position 3.
+* Ich war müde. Deshalb bin ich früh ins Bett gegangen.
+* Er hat wenig Geld. Trotzdem kauft er teure Kleidung.
+
+Notice the pattern: Konnektor — Verb — Subjekt
+
+Type 3 — Subordinierende Konnektoren (Nebensatz)
+Words like weil, obwohl, dass, wenn, obwohl, damit send the verb to the end of the clause.
+* Ich gehe nicht aus, weil ich müde bin.
+* Er kauft teure Kleidung, obwohl er wenig Geld hat.
+
+Common Connectors by Type
+Type 1 (Position 0): und, aber, oder, denn, sondern
+Type 2 (Position 1): deshalb, trotzdem, dennoch, außerdem, danach, dann, daher, deswegen
+Type 3 (Nebensatz): weil, obwohl, dass, wenn, falls, damit, obwohl, nachdem, während
+"""
 
 
 class GrammarSessionKind(StrEnum):
@@ -26,13 +54,10 @@ class GrammarSessionKind(StrEnum):
 
 
 class GrammarExerciseType(StrEnum):
-    # Multiple choice and transformation remain readable for unfinished legacy sessions.
+    # Multiple choice remains readable for unfinished legacy sessions.
     MULTIPLE_CHOICE = "multiple_choice"
     FILL_BLANK = "fill_blank"
-    ORDERING = "ordering"
-    TRANSFORMATION = "transformation"
     TRANSLATION = "translation"
-    PRODUCTION = "production"
 
 
 class GrammarGeneratedExercise(BaseModel):
@@ -41,7 +66,6 @@ class GrammarGeneratedExercise(BaseModel):
     instruction: str
     prompt: str
     choices: list[str] = Field(default_factory=list)
-    tokens: list[str] = Field(default_factory=list, max_length=7)
     accepted_answers: list[str] = Field(default_factory=list)
     reference_answer: str
     grading_rubric: str
@@ -49,13 +73,12 @@ class GrammarGeneratedExercise(BaseModel):
 
 
 class GrammarGeneratedExerciseContent(BaseModel):
-    """Exercise fields shared by the seven structurally named response slots."""
+    """Exercise fields shared by the nine structurally named response slots."""
 
     topic_key: str
     instruction: str
     prompt: str
     choices: list[str] = Field(default_factory=list)
-    tokens: list[str] = Field(default_factory=list, max_length=7)
     accepted_answers: list[str] = Field(default_factory=list)
     reference_answer: str
     grading_rubric: str
@@ -78,15 +101,14 @@ class GrammarGeneratedSession(BaseModel):
     rule_summary: str
     rule_tables: list[GrammarRuleTable] = Field(default_factory=list, max_length=2)
     worked_examples: list[str] = Field(min_length=2, max_length=4)
-    exercises: list[GrammarGeneratedExercise] = Field(min_length=7, max_length=7)
+    exercises: list[GrammarGeneratedExercise] = Field(min_length=9, max_length=9)
 
     @model_validator(mode="after")
     def validate_exercise_mix(self) -> "GrammarGeneratedSession":
         expected = {
-            GrammarExerciseType.FILL_BLANK: 2,
-            GrammarExerciseType.ORDERING: 2,
-            GrammarExerciseType.TRANSLATION: 2,
-            GrammarExerciseType.PRODUCTION: 1,
+            GrammarExerciseType.MULTIPLE_CHOICE: 3,
+            GrammarExerciseType.FILL_BLANK: 3,
+            GrammarExerciseType.TRANSLATION: 3,
         }
         actual = {
             exercise_type: sum(
@@ -101,37 +123,49 @@ class GrammarGeneratedSession(BaseModel):
         }
         if actual != expected:
             raise ValueError(
-                "grammar sessions require two fill blanks, two ordering exercises, "
-                "two translations, and one production exercise"
+                "grammar sessions require three multiple-choice questions, three fill "
+                "blanks, and three translations"
             )
+        for exercise in self.exercises:
+            if exercise.type is GrammarExerciseType.MULTIPLE_CHOICE:
+                if len(exercise.choices) != 4:
+                    raise ValueError("multiple-choice questions require four choices")
+                if exercise.reference_answer not in exercise.choices:
+                    raise ValueError(
+                        "a multiple-choice reference answer must appear in its choices"
+                    )
         return self
 
 
 class GrammarGenerationResponse(BaseModel):
-    """Provider response with the required seven-exercise mix."""
+    """Provider response with the required nine-exercise mix."""
 
     rule_summary: str
     rule_tables: list[GrammarRuleTable] = Field(default_factory=list)
     worked_examples: list[str] = Field(min_length=2, max_length=4)
+    multiple_choice_1: GrammarGeneratedExerciseContent
+    multiple_choice_2: GrammarGeneratedExerciseContent
+    multiple_choice_3: GrammarGeneratedExerciseContent
     fill_blank_1: GrammarGeneratedExerciseContent
     fill_blank_2: GrammarGeneratedExerciseContent
-    ordering_1: GrammarGeneratedExerciseContent
-    ordering_2: GrammarGeneratedExerciseContent
+    fill_blank_3: GrammarGeneratedExerciseContent
     translation_1: GrammarGeneratedExerciseContent
     translation_2: GrammarGeneratedExerciseContent
-    production: GrammarGeneratedExerciseContent
+    translation_3: GrammarGeneratedExerciseContent
 
     def to_generated_session(self) -> GrammarGeneratedSession:
         exercises = [
             GrammarGeneratedExercise(type=exercise_type, **content.model_dump())
             for exercise_type, content in (
+                (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice_1),
+                (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice_2),
+                (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice_3),
                 (GrammarExerciseType.FILL_BLANK, self.fill_blank_1),
                 (GrammarExerciseType.FILL_BLANK, self.fill_blank_2),
-                (GrammarExerciseType.ORDERING, self.ordering_1),
-                (GrammarExerciseType.ORDERING, self.ordering_2),
+                (GrammarExerciseType.FILL_BLANK, self.fill_blank_3),
                 (GrammarExerciseType.TRANSLATION, self.translation_1),
                 (GrammarExerciseType.TRANSLATION, self.translation_2),
-                (GrammarExerciseType.PRODUCTION, self.production),
+                (GrammarExerciseType.TRANSLATION, self.translation_3),
             )
         ]
         return GrammarGeneratedSession(
@@ -170,7 +204,6 @@ def deterministic_grammar_grade(
     if exercise_type not in {
         GrammarExerciseType.MULTIPLE_CHOICE,
         GrammarExerciseType.FILL_BLANK,
-        GrammarExerciseType.ORDERING,
     }:
         return None
     expected = accepted_answers or [reference_answer]
@@ -224,13 +257,13 @@ def grammar_generation_messages(
     vocabulary = ", ".join(saved_vocabulary) or "none available"
     if kind is GrammarSessionKind.LESSON:
         distribution = (
-            "All seven exercises must target the one topic and progress from recognition "
-            "toward constrained production."
+            "All nine exercises must target the one topic and progress from recognition "
+            "through guided completion to translation."
         )
     elif kind is GrammarSessionKind.MIXED and len(topics) == 4:
         distribution = (
             "This is a mixed session: the final topic is new and the first three are "
-            "reviews. Give the new topic two exercises, and distribute the other five "
+            "reviews. Give the new topic two exercises, and distribute the other seven "
             "across the review topics so every topic is practised."
         )
     else:
@@ -240,19 +273,14 @@ def grammar_generation_messages(
             "role": "system",
             "content": (
                 f"You create precise {language} grammar revision for an adult learner. "
-                "Return exactly seven exercises: two fill_blank, two ordering, two translation, "
-                "and one production. Do not create multiple-choice or transformation exercises. Put "
-                "each exercise in its "
-                "correspondingly named response field; do not return an exercises array. Never create error-finding "
-                "or error-correction tasks. Keep production tightly constrained. Use saved vocabulary "
-                "naturally when it fits, never at the expense of the target grammar. Keep each ordering "
-                "exercise short and focused: its completed "
-                "sentence must contain no more than 12 words and its tokens list must contain no more "
-                "than 7 selectable tiles. Group words that are not meaningfully reordered for the "
-                "target rule into one multiword tile, such as 'wegen des Mangels an Wohnraum' or 'die "
-                "Auflagen'. Supply every tile needed for the sentence, and avoid sentences with several "
-                "grammatically valid orders unless every valid order is accepted. Closed tasks must "
-                "include all "
+                "Return exactly nine exercises in this order: three multiple_choice, three "
+                "fill_blank, and three translation. Put each exercise in its correspondingly "
+                "named response field; do not return an exercises array. Use saved "
+                "vocabulary naturally when it fits, never at the expense of the target grammar. "
+                "Keep choices and tokens lists empty except that every multiple_choice task must "
+                "have exactly four choices and exactly one unambiguously correct choice. Its "
+                "distractors should be plausible for the target rule, not random vocabulary, and "
+                "the reference answer must match one choice exactly. Closed tasks must include all "
                 "valid accepted answers. Every exercise must be answerable using only information visible "
                 "to the learner before submission; never rely on the reference answer or explanation to "
                 "identify what they are meant to write. When an exercise asks the learner to inflect, "
@@ -264,26 +292,26 @@ def grammar_generation_messages(
                 "English. In particular, write "
                 "the rule_summary and every exercise explanation in English, even when the language "
                 "being studied is not English. Keep target-language forms, example sentences, prompts, "
-                "and answers in the language being studied where the exercise requires them. Rule "
-                "explanations must be accurate, self-contained, and internally consistent: define "
-                "technical or shorthand terms, distinguish regular patterns from exceptions, and do "
-                "not claim that a regular shortcut covers irregular forms. When describing a sequence "
-                "of transformations, make each example begin with the form named in the instructions "
-                "and show the relevant intermediate step. For example, do not say to start from a "
-                "Spanish verb's present-tense yo form and then illustrate the rule with an unexplained "
-                "arrow directly from the infinitive; show a sequence such as hablo -> habl- -> no "
-                "hables and state explicitly which endings apply to -ar versus -er/-ir verbs. For a "
-                "lesson, include a rule_table when a compact table makes the rule easier to understand, "
-                "especially for conjugations, declensions, person-by-person endings, or comparisons of "
-                "forms. Use at most two tables, give each a clear English title and headers, and keep "
-                "each cell concise. Do not force a table for a rule that is clearer in prose, do not "
+                "and answers in the language being studied where the exercise requires them. "
+                f"Please make new grammar rul explanations concise and clear, in the style of {GRAMMAR_NEW_EXAMPLE_EXPLANATION}. "
+                "Use tables to display the information when it makes sense, such as when presenting verb conjugations. "
+                "Do not force a table for a rule that is clearer in prose, do not "
                 "put prose "
                 "paragraphs in cells, and do not embed Markdown tables in text fields. For a review "
                 "session, return an empty rule_tables list. For a mixed session, the final listed "
                 "topic is new; explain it clearly and include a rule table when that materially "
-                "helps. Format rule_summary as 3-6 short bullet "
-                "points, with one self-contained point per line beginning with '- '. Do not write "
-                "rule_summary as a prose paragraph."
+                "helps. Format rule_summary as 2-5 succinct bullet points, with one self-contained "
+                "point per line beginning with '- '. State the core pattern before exceptions, use "
+                "no introductory filler, and keep the complete summary under 220 words. For a "
+                "connector or word-order topic, group connectors by the word-order pattern they "
+                "trigger and state the resulting pattern explicitly (for example, connector - verb "
+                "- subject). Multiple-choice tasks must ask the learner to select the form or "
+                "connector that makes the displayed sentence correct. Fill-blank tasks should be "
+                "guided sentence completion or sentence combination: supply any required connector "
+                "or source form explicitly and make clear whether the learner writes only the blank "
+                "or a complete clause. Translation tasks must name the required construction or "
+                "connector in parentheses. Keep prompts short, natural, level-appropriate, and "
+                "semantically coherent. Test only rules taught in the summary or worked examples."
             ),
         },
         {
@@ -291,7 +319,8 @@ def grammar_generation_messages(
             "content": (
                 f"Create a {kind.value} session.\nTopics:\n{topic_lines}\n"
                 f"Saved vocabulary: {vocabulary}\n{distribution}\n"
-                "Give a concise rule summary and 2-4 useful worked examples."
+                "Give a concise rule summary and 2-4 useful worked examples. Model the "
+                "clarity of a compact textbook exercise rather than a comprehensive grammar reference."
             ),
         },
     ]

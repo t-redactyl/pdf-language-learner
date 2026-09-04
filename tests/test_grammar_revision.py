@@ -48,19 +48,19 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "hablo -> habl- -> no hables" in system_instruction
     assert "include a rule_table when a compact table" in system_instruction
     assert "do not embed Markdown tables" in system_instruction
-    assert "Format rule_summary as 3-6 short bullet points" in system_instruction
-    assert "Do not write rule_summary as a prose paragraph" in system_instruction
+    assert "Format rule_summary as 2-5 succinct bullet points" in system_instruction
+    assert "keep the complete summary under 220 words" in system_instruction
     assert "answerable using only information visible" in system_instruction
     assert "explicitly name its source form" in system_instruction
     assert "past participle of herstellen" in system_instruction
     assert "A blank sentence plus a grammatical description" in system_instruction
-    assert "no more than 12 words" in system_instruction
-    assert "no more than 7 selectable tiles" in system_instruction
-    assert "one multiword tile" in system_instruction
-    assert "unless every valid order is accepted" in system_instruction
+    assert "exactly four choices" in system_instruction
+    assert "exactly one unambiguously correct choice" in system_instruction
+    assert "guided sentence completion or sentence combination" in system_instruction
+    assert "Translation tasks must name the required construction" in system_instruction
     assert "Return exactly seven exercises" in system_instruction
-    assert "two fill_blank, two ordering, two translation" in system_instruction
-    assert "Do not create multiple-choice or transformation exercises" in system_instruction
+    assert "two multiple_choice, three fill_blank" in system_instruction
+    assert "Do not create ordering" in system_instruction
 
 
 def test_grammar_ordering_exercise_rejects_too_many_tiles() -> None:
@@ -231,20 +231,20 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
             return json.dumps({"summary": "Use this form to express the core rule."})
         exercises = {}
         exercise_slots = (
+            ("multiple_choice_1", GrammarExerciseType.MULTIPLE_CHOICE),
+            ("multiple_choice_2", GrammarExerciseType.MULTIPLE_CHOICE),
             ("fill_blank_1", GrammarExerciseType.FILL_BLANK),
             ("fill_blank_2", GrammarExerciseType.FILL_BLANK),
-            ("ordering_1", GrammarExerciseType.ORDERING),
-            ("ordering_2", GrammarExerciseType.ORDERING),
+            ("fill_blank_3", GrammarExerciseType.FILL_BLANK),
             ("translation_1", GrammarExerciseType.TRANSLATION),
             ("translation_2", GrammarExerciseType.TRANSLATION),
-            ("production", GrammarExerciseType.PRODUCTION),
         )
         for slot, exercise_type in exercise_slots:
             exercises[slot] = {
                 "topic_key": next_topic.key,
                 "instruction": "Use the target grammar.",
                 "prompt": "Complete the task.",
-                "choices": ["correct", "other", "another"]
+                "choices": ["correct", "other", "another", "last"]
                 if exercise_type is GrammarExerciseType.MULTIPLE_CHOICE
                 else [],
                 "tokens": ["correct"]
@@ -274,9 +274,29 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         "pdf_language_learner.app.anthropic_structured_model_response",
         fake_structured,
     )
+    client.get("/api/grammar/topics", params={"language": "Spanish"})
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO grammar_sessions (
+                id, canonical_language, kind, topic_keys_json, rule_summary,
+                worked_examples_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-unfinished-session",
+                "spanish",
+                "lesson",
+                json.dumps([next_topic.key]),
+                "Old explanation.",
+                "[]",
+                "2026-08-01T12:00:00+00:00",
+            ),
+        )
     response = client.post("/api/grammar/session", json={"language": "Spanish"})
     assert response.status_code == 200
     session = response.json()
+    assert session["id"] != "legacy-unfinished-session"
     assert session["kind"] == "lesson"
     assert session["topics"][0]["key"] == next_topic.key
     assert session["rule_tables"] == [
@@ -337,16 +357,16 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         assert result.status_code == 200
     assert result.json()["session_complete"] is True
     assert exercise_types == [
+        "multiple_choice",
+        "multiple_choice",
         "fill_blank",
         "fill_blank",
-        "ordering",
-        "ordering",
+        "fill_blank",
         "translation",
         "translation",
-        "production",
     ]
-    assert calls.count("grammar answer grading") == 3
-    assert grading_token_budgets == [1000, 1000, 1000]
+    assert calls.count("grammar answer grading") == 2
+    assert grading_token_budgets == [1000, 1000]
     with sqlite3.connect(database) as connection:
         progress = connection.execute(
             "SELECT repetitions, lapses FROM grammar_reviews WHERE topic_key = ?",
