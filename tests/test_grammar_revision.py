@@ -48,6 +48,8 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "explicitly name its source form" in system_instruction
     assert "past participle of herstellen" in system_instruction
     assert "A blank sentence plus a grammatical description" in system_instruction
+    assert "conjugation tasks must show the target pronoun" in system_instruction
+    assert "tú, usted, or ustedes" in system_instruction
     assert "exactly four choices" in system_instruction
     assert "exactly one unambiguously correct choice" in system_instruction
     assert "guided sentence completion or sentence combination" in system_instruction
