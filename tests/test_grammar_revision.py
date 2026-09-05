@@ -10,9 +10,12 @@ from pdf_language_learner.app import app, saved_grammar_vocabulary, select_gramm
 from pdf_language_learner.grammar_revision import (
     GRAMMAR_CYCLE_INTERVAL,
     GRAMMAR_REVIEW_TOPIC_LIMIT,
+    GRAMMAR_RULE_TABLE_LIMIT,
     GrammarCycleStage,
     GrammarExerciseType,
     GrammarGeneratedExercise,
+    GrammarGeneratedSession,
+    GrammarGenerationResponse,
     GrammarSessionKind,
     deterministic_grammar_grade,
     grammar_cycle_stage,
@@ -62,6 +65,66 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "Translation tasks must name the required construction" in system_instruction
     assert "Return exactly nine exercises" in system_instruction
     assert "three multiple_choice, three fill_blank, and three translation" in system_instruction
+
+
+def test_rule_table_limit_is_sent_to_the_model_and_not_only_checked() -> None:
+    """A cap the model never sees can only reject a response already paid for.
+
+    The provider schema is built from GrammarGenerationResponse, so a limit set
+    only on GrammarGeneratedSession shapes nothing and fails late instead.
+    """
+
+    sent = GrammarGenerationResponse.model_json_schema()["properties"]["rule_tables"]
+    validated = GrammarGeneratedSession.model_json_schema()["properties"]["rule_tables"]
+
+    assert sent.get("maxItems") == GRAMMAR_RULE_TABLE_LIMIT
+    assert validated.get("maxItems") == GRAMMAR_RULE_TABLE_LIMIT
+    assert sent == validated
+
+
+def test_rule_tables_fit_a_three_pattern_paradigm() -> None:
+    """German adjective declension needs one table per article pattern."""
+
+    table = {
+        "title": "Adjektivendungen",
+        "headers": ["Kasus", "maskulin"],
+        "rows": [["Nominativ", "-e"]],
+    }
+    exercise = {
+        "topic_key": "a1b1_nominativ_akkusativ_dativ_adjektivdeklination",
+        "instruction": "Use the target grammar.",
+        "prompt": "Complete the task.",
+        "choices": ["netter", "nette", "netten", "nettes"],
+        "accepted_answers": ["netter"],
+        "reference_answer": "netter",
+        "grading_rubric": "The ending must be correct.",
+        "explanation": "Strong ending after no article.",
+    }
+    payload = {
+        "rule_summary": "Adjective endings depend on the preceding article.",
+        "worked_examples": ["Ein netter Mann.", "Der nette Mann."],
+        **{
+            slot: dict(exercise, choices=exercise["choices"] if mc else [])
+            for slot, mc in (
+                ("multiple_choice_1", True), ("multiple_choice_2", True),
+                ("multiple_choice_3", True), ("fill_blank_1", False),
+                ("fill_blank_2", False), ("fill_blank_3", False),
+                ("translation_1", False), ("translation_2", False),
+                ("translation_3", False),
+            )
+        },
+    }
+
+    session = GrammarGenerationResponse.model_validate(
+        {**payload, "rule_tables": [table] * GRAMMAR_RULE_TABLE_LIMIT}
+    ).to_generated_session()
+    assert len(session.rule_tables) == GRAMMAR_RULE_TABLE_LIMIT
+
+    # One past the limit is still refused, and refused before the model call.
+    with pytest.raises(ValidationError):
+        GrammarGenerationResponse.model_validate(
+            {**payload, "rule_tables": [table] * (GRAMMAR_RULE_TABLE_LIMIT + 1)}
+        )
 
 
 def test_grammar_topic_summary_is_brief_english_prose() -> None:

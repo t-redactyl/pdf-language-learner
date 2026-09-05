@@ -16,6 +16,11 @@ GRAMMAR_CORRECT_INTERVAL_DAYS = (3, 7, 14, 30, 60, 120)
 GRAMMAR_INCORRECT_INTERVAL = timedelta(days=2)
 GRAMMAR_CYCLE_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_TOPIC_LIMIT = 3
+# Three fits the paradigm topics that need one table per pattern, such as
+# adjective declension after a definite article, an indefinite article, and no
+# article at all.  This must stay on both the provider response and the internal
+# session: only the former reaches the model as a schema constraint.
+GRAMMAR_RULE_TABLE_LIMIT = 3
 GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION = """
 Verbposition in Satzverbindungen (Verb Position in Connected Sentences)
 
@@ -129,7 +134,9 @@ class GrammarRuleTable(BaseModel):
 
 class GrammarGeneratedSession(BaseModel):
     rule_summary: str
-    rule_tables: list[GrammarRuleTable] = Field(default_factory=list, max_length=2)
+    rule_tables: list[GrammarRuleTable] = Field(
+        default_factory=list, max_length=GRAMMAR_RULE_TABLE_LIMIT
+    )
     worked_examples: list[str] = Field(min_length=2, max_length=4)
     exercises: list[GrammarGeneratedExercise] = Field(min_length=9, max_length=9)
 
@@ -171,7 +178,12 @@ class GrammarGenerationResponse(BaseModel):
     """Provider response with the required nine-exercise mix."""
 
     rule_summary: str
-    rule_tables: list[GrammarRuleTable] = Field(default_factory=list)
+    # The cap belongs here as well as on GrammarGeneratedSession: this is the
+    # model the provider schema is built from, so a cap set only downstream
+    # would reject a finished response instead of shaping it.
+    rule_tables: list[GrammarRuleTable] = Field(
+        default_factory=list, max_length=GRAMMAR_RULE_TABLE_LIMIT
+    )
     worked_examples: list[str] = Field(min_length=2, max_length=4)
     multiple_choice_1: GrammarGeneratedExerciseContent
     multiple_choice_2: GrammarGeneratedExerciseContent
@@ -368,6 +380,8 @@ def grammar_generation_messages(
                 "being studied is not English. Keep target-language forms, example sentences, prompts, "
                 "and answers in the language being studied where the exercise requires them. "
                 "For new exercises, please give a succinct explanation of the grammar rule.  "
+                "Use rule_tables only for genuine paradigms, such as one table per declension or "
+                f"conjugation pattern, and never more than {GRAMMAR_RULE_TABLE_LIMIT}. Prose belongs in the rule summary. "
                 f"There is an example of how to format the German grammar instructions in {GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION}, "
                 f"and an example of how to format the Spanish grammar instructions in {GRAMMAR_SPANISH_NEW_EXAMPLE_EXPLANATION}. "
                 "Multiple-choice tasks must ask the learner to select the form or "
