@@ -131,7 +131,9 @@ def test_home_serves_reader() -> None:
     assert 'id="revision-connector-hint"' in response.text
     assert 'id="revision-exercise-selector"' in response.text
     assert 'id="revision-mode-grammar"' in response.text
+    assert 'id="revision-mode-conjugation"' in response.text
     assert 'id="grammar-session"' in response.text
+    assert 'id="conjugation-session"' in response.text
     assert 'id="grammar-topic-list"' in response.text
     assert 'id="revision-loading-copy"' in response.text
     assert 'class="revision-loading-mark"' in response.text
@@ -142,8 +144,8 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=48' in response.text
-    assert '/static/revision.js?v=42' in response.text
+    assert '/static/styles.css?v=49' in response.text
+    assert '/static/revision.js?v=44' in response.text
     assert '/static/app.js?v=51' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
@@ -161,17 +163,21 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     app_script = client.get("/static/app.js").text
     revision_script = client.get("/static/revision.js").text
     grammar_script = client.get("/static/grammar.js").text
+    conjugation_script = client.get("/static/conjugation.js").text
     i18n_script = client.get("/static/i18n.js").text
     styles = client.get("/static/styles.css").text
     text_script = client.get("/static/text.js").text
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=25' in app_script
-    assert './i18n.js?v=25' in revision_script
-    assert './i18n.js?v=25' in grammar_script
+    assert './i18n.js?v=26' in app_script
+    assert './i18n.js?v=26' in revision_script
+    assert './i18n.js?v=26' in grammar_script
     assert './grammar.js?v=16' in revision_script
-    assert 'revisionMode === "grammar" ? "grammar.generating"' in revision_script
+    assert '"conjugation.preparing"' in revision_script
+    assert './conjugation.js?v=1' in revision_script
+    assert './i18n.js?v=26' in conjugation_script
+    assert '/api/conjugation/session' in conjugation_script
     assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
     assert '"grammar.checking": "Checking your answer…"' in i18n_script
     assert "const GRAMMAR_REQUEST_TIMEOUT_MS = 190_000" in grammar_script
@@ -181,10 +187,9 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert "export function cancelGrammarRequests()" in grammar_script
     assert "finishCurrent(summary)" in grammar_script
     assert 't("grammar.finish")' in grammar_script
-    assert (
-        "initializeGrammarRevision(loadRevisionSession, finishGrammarRevision)"
-        in revision_script
-    )
+    assert "startFocusedConjugationWorkout" in revision_script
+    assert 'id="grammar-conjugation"' in client.get("/").text
+    assert 'options.topicKeys.join(",")' in conjugation_script
     assert '"grammar.finish": "Finish"' in i18n_script
     assert 'new CustomEvent("margin:revision-opened")' in revision_script
     assert 'new CustomEvent("margin:revision-closed")' in revision_script

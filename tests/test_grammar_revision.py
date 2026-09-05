@@ -707,6 +707,9 @@ def test_finished_lesson_hands_straight_over_to_its_review(
     assert lesson["kind"] == "lesson"
     assert len(lesson["topics"]) == 1
     assert lesson["session_complete"] is True
+    assert lesson["conjugation_topic_keys"] == [
+        "es_a2_u7_negative_imperative"
+    ]
     # The client uses this to offer "Continue to review" instead of "Finish".
     assert lesson["next_session_kind"] == GrammarSessionKind.REVIEW.value
 
@@ -717,6 +720,7 @@ def test_finished_lesson_hands_straight_over_to_its_review(
     assert all("summary" in topic for topic in review["topics"])
     # The cycle is closed, so the sitting ends here.
     assert review["next_session_kind"] is None
+    assert isinstance(review["conjugation_topic_keys"], list)
     assert client.post(
         "/api/grammar/session", json={"language": "Spanish"}
     ).status_code == 404

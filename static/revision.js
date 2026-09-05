@@ -3,12 +3,17 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=25";
+import { languageName, t } from "./i18n.js?v=26";
 import {
   cancelGrammarRequests,
   initializeGrammarRevision,
   loadGrammarRevision,
 } from "./grammar.js?v=16";
+import {
+  cancelConjugationRequests,
+  initializeConjugationWorkout,
+  loadConjugationWorkout,
+} from "./conjugation.js?v=1";
 
 const $ = selector => document.querySelector(selector);
 
@@ -39,6 +44,7 @@ let selectedTileIds = [];
 let tilesLocked = false;
 let hintUsed = false;
 let revisionMode = "vocabulary";
+let conjugationFocus = null;
 const NOUN_GENDERS = new Set(["masculine", "feminine", "neutral"]);
 const ARTICLE_GENDERS = {
   german: { der: "masculine", die: "feminine", das: "neutral" },
@@ -86,8 +92,10 @@ $("#revision-recall-answer")?.addEventListener("input", updateRecallHintButton);
 $("#revision-language")?.addEventListener("change", loadRevisionSession);
 $("#revision-mode-vocabulary")?.addEventListener("click", () => setRevisionMode("vocabulary"));
 $("#revision-mode-grammar")?.addEventListener("click", () => setRevisionMode("grammar"));
+$("#revision-mode-conjugation")?.addEventListener("click", () => setRevisionMode("conjugation"));
 document.addEventListener("margin:open-revision", event => {
-  setRevisionMode(event.detail?.mode === "grammar" ? "grammar" : "vocabulary");
+  const requested = event.detail?.mode;
+  setRevisionMode(["grammar", "conjugation"].includes(requested) ? requested : "vocabulary");
   openRevision();
 });
 $("#revision-exercise-selector")?.addEventListener("change", event => {
@@ -120,9 +128,7 @@ document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !view.hidden) closeRevision();
 });
 document.addEventListener("margin:locale-changed", () => {
-  $("#revision-title").textContent = t(
-    revisionMode === "grammar" ? "grammar.title" : "revision.title"
-  );
+  $("#revision-title").textContent = t(revisionTitleKey());
   localizeRevisionLanguageOptions();
   if (currentCard?.exercise === "connector_cloze") {
     renderConnectorDirection();
@@ -189,13 +195,18 @@ async function populateLanguageSelector() {
 }
 
 async function loadRevisionSession() {
-  const loadingKey = revisionMode === "grammar" ? "grammar.generating" : "revision.preparing";
+  const loadingKey = revisionMode === "grammar"
+    ? "grammar.generating"
+    : revisionMode === "conjugation"
+      ? "conjugation.preparing"
+      : "revision.preparing";
   $("#revision-loading-copy").dataset.i18n = loadingKey;
   $("#revision-loading-copy").textContent = t(loadingKey);
   loading.hidden = false;
   empty.hidden = true;
   session.hidden = true;
   $("#grammar-session").hidden = true;
+  $("#conjugation-session").hidden = true;
   queue = [];
   currentCard = null;
   answered = 0;
@@ -216,6 +227,7 @@ async function loadRevisionSession() {
   }
 
   if (revisionMode === "grammar") {
+    cancelConjugationRequests();
     try {
       await loadGrammarRevision(language);
       loading.hidden = true;
@@ -226,6 +238,27 @@ async function loadRevisionSession() {
     }
     return;
   }
+
+  if (revisionMode === "conjugation") {
+    cancelGrammarRequests();
+    try {
+      const focus = conjugationFocus;
+      conjugationFocus = null;
+      const available = await loadConjugationWorkout(
+        language,
+        focus ? { topicKeys: focus.topicKeys, limit: 8 } : {},
+      );
+      loading.hidden = true;
+      if (!available) showEmptySession();
+    } catch (error) {
+      loading.hidden = true;
+      if (error.name !== "AbortError") showRevisionError(error);
+    }
+    return;
+  }
+
+  cancelGrammarRequests();
+  cancelConjugationRequests();
 
   try {
     const params = new URLSearchParams({
@@ -259,30 +292,43 @@ function showRevisionError(error) {
   empty.hidden = false;
   session.hidden = true;
   $("#grammar-session").hidden = true;
+  $("#conjugation-session").hidden = true;
   $("#revision-empty-title").textContent = t("revision.loadError");
   $("#revision-empty-copy").textContent = error.message;
 }
 
-function setRevisionMode(mode) {
+function setRevisionMode(mode, reload = true, focus = null) {
   revisionMode = mode;
+  conjugationFocus = mode === "conjugation" ? focus : null;
   const grammar = mode === "grammar";
-  $("#revision-mode-vocabulary").classList.toggle("active", !grammar);
-  $("#revision-mode-vocabulary").setAttribute("aria-selected", String(!grammar));
+  const conjugation = mode === "conjugation";
+  const vocabulary = mode === "vocabulary";
+  $("#revision-mode-vocabulary").classList.toggle("active", vocabulary);
+  $("#revision-mode-vocabulary").setAttribute("aria-selected", String(vocabulary));
   $("#revision-mode-grammar").classList.toggle("active", grammar);
   $("#revision-mode-grammar").setAttribute("aria-selected", String(grammar));
-  $("#revision-exercise-selector").hidden = grammar;
-  $("#revision-title").textContent = t(grammar ? "grammar.title" : "revision.title");
+  $("#revision-mode-conjugation").classList.toggle("active", conjugation);
+  $("#revision-mode-conjugation").setAttribute("aria-selected", String(conjugation));
+  $("#revision-exercise-selector").hidden = !vocabulary;
+  $("#revision-title").textContent = t(revisionTitleKey());
   const select = $("#revision-language");
   [...select.options].forEach(option => {
-    option.disabled = grammar && option.value
+    option.disabled = !vocabulary && option.value
       && !["german", "spanish"].includes(normalize(option.value));
   });
-  if (grammar && select.selectedOptions[0]?.disabled) select.value = "";
-  if (!view.hidden) loadRevisionSession();
+  if (!vocabulary && select.selectedOptions[0]?.disabled) select.value = "";
+  if (reload && !view.hidden) loadRevisionSession();
+}
+
+function revisionTitleKey() {
+  if (revisionMode === "grammar") return "grammar.title";
+  if (revisionMode === "conjugation") return "conjugation.title";
+  return "revision.title";
 }
 
 function closeRevision() {
   cancelGrammarRequests();
+  cancelConjugationRequests();
   view.hidden = true;
   document.body.classList.remove("revision-open");
   document.dispatchEvent(new CustomEvent("margin:revision-closed"));
@@ -1027,5 +1073,21 @@ function finishGrammarRevision(summary) {
   showEmptySession(true);
 }
 
+function finishConjugationWorkout(summary) {
+  answered = summary.answered;
+  correctAnswers = summary.correct;
+  $("#conjugation-session").hidden = true;
+  showEmptySession(true);
+}
+
+function startFocusedConjugationWorkout(details) {
+  setRevisionMode("conjugation", true, details);
+}
+
 restoreRevisionExercisePreferences();
-initializeGrammarRevision(loadRevisionSession, finishGrammarRevision);
+initializeGrammarRevision(
+  loadRevisionSession,
+  finishGrammarRevision,
+  startFocusedConjugationWorkout,
+);
+initializeConjugationWorkout(finishConjugationWorkout);

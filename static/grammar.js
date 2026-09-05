@@ -1,4 +1,4 @@
-import { t } from "./i18n.js?v=25";
+import { t } from "./i18n.js?v=26";
 
 const $ = selector => document.querySelector(selector);
 let activeSession = null;
@@ -6,6 +6,7 @@ let selectedTokens = [];
 let orderingTokens = [];
 let loadCurrent = null;
 let finishCurrent = null;
+let startWorkoutCurrent = null;
 let sessionLoadController = null;
 let answerController = null;
 const summaryControllers = new Set();
@@ -47,11 +48,13 @@ export function cancelGrammarRequests() {
   answerController = null;
   continuationPending = false;
   completedSessionSummary = null;
+  $("#grammar-conjugation").hidden = true;
 }
 
-export function initializeGrammarRevision(reload, finish) {
+export function initializeGrammarRevision(reload, finish, startWorkout) {
   loadCurrent = reload;
   finishCurrent = finish;
+  startWorkoutCurrent = startWorkout;
   $("#grammar-answer-form")?.addEventListener("submit", event => {
     event.preventDefault();
     const answer = $("#grammar-answer").value.trim();
@@ -81,6 +84,12 @@ export function initializeGrammarRevision(reload, finish) {
     } finally {
       continuationPending = false;
       button.disabled = false;
+    }
+  });
+  $("#grammar-conjugation")?.addEventListener("click", () => {
+    const topicKeys = JSON.parse($("#grammar-conjugation").dataset.topicKeys || "[]");
+    if (topicKeys.length) {
+      startWorkoutCurrent({ language: activeSession.language, topicKeys });
     }
   });
 }
@@ -115,6 +124,7 @@ export async function loadGrammarRevision(language) {
 function renderSession() {
   const exercise = activeSession.exercise;
   $("#grammar-session").hidden = false;
+  $("#grammar-conjugation").hidden = true;
   $("#grammar-progress").textContent = t("grammar.progress", {
     current: Math.min(activeSession.answered + 1, activeSession.total),
     total: activeSession.total,
@@ -332,6 +342,7 @@ async function submitGrammarAnswer(answer) {
   $("#grammar-reference-row").hidden = true;
   $("#grammar-explanation").hidden = true;
   $("#grammar-continue").hidden = true;
+  $("#grammar-conjugation").hidden = true;
   $("#grammar-feedback").hidden = false;
   try {
     const exercise = activeSession.exercise;
@@ -348,6 +359,11 @@ async function submitGrammarAnswer(answer) {
     $("#grammar-explanation").textContent = result.explanation;
     $("#grammar-explanation").hidden = false;
     const nextSession = result.session_complete ? result.next_session_kind : null;
+    const conjugationTopics = result.session_complete
+      ? result.conjugation_topic_keys || []
+      : [];
+    $("#grammar-conjugation").dataset.topicKeys = JSON.stringify(conjugationTopics);
+    $("#grammar-conjugation").hidden = !conjugationTopics.length;
     if (result.session_complete && !nextSession) {
       completedSessionSummary = {
         answered: activeSession.answered + 1,

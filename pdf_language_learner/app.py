@@ -65,6 +65,16 @@ from pdf_language_learner.grammar_revision import (
 )
 from pdf_language_learner.grammar_topics import GrammarLanguage, GrammarTopic
 from pdf_language_learner.spanish_grammar_catalogue import SPANISH_GRAMMAR_TOPICS
+from pdf_language_learner.conjugation_workout import (
+    CONJUGATION_ITEMS,
+    CONJUGATION_ITEMS_BY_KEY,
+    CONJUGATION_TOPIC_KEYS,
+    WORKOUT_LIMIT,
+    ConjugationItem,
+    grade_conjugation,
+    schedule_conjugation,
+    validate_conjugation_inventory,
+)
 from pdf_language_learner.suggestions import canonical_url, suggestions_for
 from pdf_language_learner.web_import import WebImportError, fetch_web_document
 
@@ -74,6 +84,8 @@ logger = logging.getLogger("uvicorn.error").getChild("margin")
 
 ROOT = Path(__file__).resolve().parent.parent
 GRAMMAR_CONTENT_VERSION = 4
+
+validate_conjugation_inventory((*GRAMMAR_TOPICS, *SPANISH_GRAMMAR_TOPICS))
 
 
 def load_local_environment(path: Path = ROOT / ".env") -> None:
@@ -2909,6 +2921,20 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS conjugation_reviews (
+            canonical_language TEXT NOT NULL,
+            item_key TEXT NOT NULL,
+            last_reviewed_at TEXT,
+            next_review_at TEXT,
+            repetitions INTEGER NOT NULL DEFAULT 0,
+            lapses INTEGER NOT NULL DEFAULT 0,
+            consecutive_correct INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (canonical_language, item_key)
+        )
+        """
+    )
     summary_cache_migrated = connection.execute(
         "SELECT 1 FROM schema_migrations WHERE name = ?",
         ("grammar_topic_summary_cache_v1",),
@@ -3702,6 +3728,10 @@ class GrammarAnswerRequest(BaseModel):
     answer: str = Field(min_length=1, max_length=2000)
 
 
+class ConjugationAnswerRequest(BaseModel):
+    answer: str = Field(min_length=1, max_length=200)
+
+
 def grammar_catalogue(language: str) -> tuple[GrammarTopic, ...]:
     normalized = canonicalize(language)
     if normalized in {"german", "deutsch"}:
@@ -3721,6 +3751,85 @@ def grammar_schedule_from_row(row: sqlite3.Row | None) -> ScheduleState:
         last_reviewed_at=parse_timestamp(row["last_reviewed_at"]),
         next_review_at=parse_timestamp(row["next_review_at"]),
     )
+
+
+def conjugation_items_for_language(language: str) -> list[ConjugationItem]:
+    canonical_language = grammar_catalogue(language)[0].language
+    return [item for item in CONJUGATION_ITEMS if item.language is canonical_language]
+
+
+def introduced_conjugation_topic_keys(
+    connection: sqlite3.Connection, canonical_language: str
+) -> set[str]:
+    return {
+        row["topic_key"]
+        for row in connection.execute(
+            "SELECT topic_key FROM grammar_reviews WHERE canonical_language = ?",
+            (canonical_language,),
+        ).fetchall()
+    }
+
+
+def conjugation_session_items(
+    connection: sqlite3.Connection,
+    language: str,
+    *,
+    now: datetime,
+    limit: int = WORKOUT_LIMIT,
+    topic_keys: set[str] | None = None,
+    include_not_due: bool = False,
+) -> tuple[list[ConjugationItem], int]:
+    """Pick introduced forms, with failures first and unseen topics interleaved."""
+
+    items = conjugation_items_for_language(language)
+    canonical_language = items[0].language.value
+    introduced = introduced_conjugation_topic_keys(connection, canonical_language)
+    allowed_topics = introduced if topic_keys is None else introduced & topic_keys
+    items = [item for item in items if item.topic_key in allowed_topics]
+    review_rows = {
+        row["item_key"]: row
+        for row in connection.execute(
+            "SELECT * FROM conjugation_reviews WHERE canonical_language = ?",
+            (canonical_language,),
+        ).fetchall()
+    }
+    due: list[ConjugationItem] = []
+    unseen: list[ConjugationItem] = []
+    later: list[ConjugationItem] = []
+    for item in items:
+        row = review_rows.get(item.key)
+        if row is None:
+            unseen.append(item)
+        elif (next_review := parse_timestamp(row["next_review_at"])) is None or next_review <= now:
+            due.append(item)
+        elif include_not_due:
+            later.append(item)
+    due.sort(
+        key=lambda item: (
+            -review_rows[item.key]["lapses"],
+            review_rows[item.key]["next_review_at"] or "",
+            item.key,
+        )
+    )
+
+    # Avoid making a first workout twenty near-identical rows from one paradigm.
+    interleaved: list[ConjugationItem] = []
+    groups: dict[str, list[ConjugationItem]] = {}
+    for item in unseen:
+        groups.setdefault(item.topic_key, []).append(item)
+    while groups:
+        for topic_key in list(groups):
+            interleaved.append(groups[topic_key].pop(0))
+            if not groups[topic_key]:
+                del groups[topic_key]
+    later.sort(
+        key=lambda item: (
+            review_rows[item.key]["last_reviewed_at"] or "",
+            item.key,
+        )
+    )
+    selected = (due + interleaved + later)[:limit]
+    return selected, len(due)
 
 
 def grammar_cycle_timestamps(
@@ -4036,6 +4145,150 @@ def grammar_session_payload(
     return payload
 
 
+@app.get("/api/conjugation/topics")
+def list_conjugation_topics(language: str) -> list[dict[str, Any]]:
+    catalogue = {topic.key: topic for topic in grammar_catalogue(language)}
+    canonical_language = next(iter(catalogue.values())).language.value
+    with vocabulary_database() as connection:
+        introduced = introduced_conjugation_topic_keys(
+            connection, canonical_language
+        )
+    counts: dict[str, int] = {}
+    for item in conjugation_items_for_language(language):
+        counts[item.topic_key] = counts.get(item.topic_key, 0) + 1
+    return [
+        {
+            "key": key,
+            "title": catalogue[key].title,
+            "level": catalogue[key].level.value,
+            "forms": count,
+            "unlocked": key in introduced,
+        }
+        for key, count in counts.items()
+    ]
+
+
+@app.get("/api/conjugation/session")
+def start_conjugation_session(
+    language: str, limit: int = WORKOUT_LIMIT, topics: str | None = None
+) -> dict[str, Any]:
+    if not 1 <= limit <= 40:
+        raise HTTPException(status_code=422, detail="Workout limit must be between 1 and 40")
+    now = datetime.now(UTC)
+    catalogue = {topic.key: topic for topic in grammar_catalogue(language)}
+    available_items = conjugation_items_for_language(language)
+    known_conjugation_topics = {item.topic_key for item in available_items}
+    requested_topics = (
+        {topic for topic in topics.split(",") if topic} if topics is not None else None
+    )
+    unknown = (requested_topics or set()) - known_conjugation_topics
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown conjugation topic: {sorted(unknown)[0]}",
+        )
+    with vocabulary_database() as connection:
+        introduced = introduced_conjugation_topic_keys(
+            connection, next(iter(catalogue.values())).language.value
+        )
+        locked = (requested_topics or set()) - introduced
+        if locked:
+            raise HTTPException(
+                status_code=409,
+                detail="Complete the grammar topic before practising its verb forms",
+            )
+        items, due_count = conjugation_session_items(
+            connection,
+            language,
+            now=now,
+            limit=limit,
+            topic_keys=requested_topics,
+            include_not_due=requested_topics is not None,
+        )
+        unlocked_items = [
+            item for item in available_items if item.topic_key in introduced
+        ]
+    return {
+        "language": grammar_catalogue(language)[0].language.value,
+        "due_count": due_count,
+        "total_available": len(unlocked_items),
+        "total_catalogue": len(available_items),
+        "cards": [
+            {
+                "key": item.key,
+                "topic_key": item.topic_key,
+                "topic": catalogue[item.topic_key].title,
+                "level": catalogue[item.topic_key].level.value,
+                "lemma": item.lemma,
+                "form": item.form,
+                "person": item.person,
+                "note": item.note,
+            }
+            for item in items
+        ],
+    }
+
+
+@app.post("/api/conjugation/items/{item_key}/answer")
+def answer_conjugation_item(
+    item_key: str, request: ConjugationAnswerRequest
+) -> dict[str, Any]:
+    item = CONJUGATION_ITEMS_BY_KEY.get(item_key)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Conjugation item not found")
+    now = datetime.now(UTC)
+    correct = grade_conjugation(item, request.answer)
+    with vocabulary_database() as connection:
+        introduced = introduced_conjugation_topic_keys(
+            connection, item.language.value
+        )
+        if item.topic_key not in introduced:
+            raise HTTPException(
+                status_code=409,
+                detail="Complete the grammar topic before practising its verb forms",
+            )
+        row = connection.execute(
+            """
+            SELECT * FROM conjugation_reviews
+            WHERE canonical_language = ? AND item_key = ?
+            """,
+            (item.language.value, item.key),
+        ).fetchone()
+        updated = schedule_conjugation(
+            grammar_schedule_from_row(row), correct=correct, reviewed_at=now
+        )
+        connection.execute(
+            """
+            INSERT INTO conjugation_reviews (
+                canonical_language, item_key, last_reviewed_at, next_review_at,
+                repetitions, lapses, consecutive_correct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(canonical_language, item_key) DO UPDATE SET
+                last_reviewed_at=excluded.last_reviewed_at,
+                next_review_at=excluded.next_review_at,
+                repetitions=excluded.repetitions,
+                lapses=excluded.lapses,
+                consecutive_correct=excluded.consecutive_correct
+            """,
+            (
+                item.language.value,
+                item.key,
+                updated.last_reviewed_at.isoformat(),
+                updated.next_review_at.isoformat(),
+                updated.repetitions,
+                updated.lapses,
+                updated.consecutive_correct,
+            ),
+        )
+    return {
+        "correct": correct,
+        "reference_answer": item.reference_answer,
+        "accepted_answers": list(item.answers),
+        "next_review_at": updated.next_review_at.isoformat(),
+        "retry_now": not correct,
+    }
+
+
 @app.get("/api/grammar/topics")
 def list_grammar_topics(language: str) -> list[dict[str, Any]]:
     catalogue = grammar_catalogue(language)
@@ -4307,8 +4560,20 @@ def answer_grammar_exercise(
         ).fetchone()[0]
         complete = remaining == 0
         next_session_kind = None
+        conjugation_topic_keys: list[str] = []
         if complete:
             finish_grammar_session(connection, session_id, now)
+            session_topics = json.loads(
+                connection.execute(
+                    "SELECT topic_keys_json FROM grammar_sessions WHERE id = ?",
+                    (session_id,),
+                ).fetchone()["topic_keys_json"]
+            )
+            conjugation_topic_keys = [
+                topic_key
+                for topic_key in session_topics
+                if topic_key in CONJUGATION_TOPIC_KEYS
+            ]
             # A finished lesson leaves its review outstanding, so tell the
             # client it can carry straight on instead of ending the sitting.
             selection = select_grammar_topics(connection, language, now)
@@ -4320,6 +4585,7 @@ def answer_grammar_exercise(
             "explanation": grading_data["explanation"],
             "session_complete": complete,
             "next_session_kind": next_session_kind,
+            "conjugation_topic_keys": conjugation_topic_keys,
         }
 
 
