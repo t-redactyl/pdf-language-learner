@@ -311,7 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output", type=Path, help="Destination HTML report.")
     parser.add_argument(
-        "--list-topics", action="store_true", help="List topics without calling Anthropic."
+        "--list-topics", action="store_true", help="List topics without calling OpenAI."
     )
     return parser
 
@@ -333,9 +333,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Importing app loads the local .env and keeps the pure rendering module light.
     from pdf_language_learner.app import (
-        anthropic_grammar_model,
         generate_grammar_content,
         grammar_catalogue,
+        grammar_model,
     )
 
     catalogue = grammar_catalogue(args.language)
@@ -363,7 +363,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     created_at = datetime.now(UTC)
     output = args.output or default_output_path(args.language, created_at)
-    model = anthropic_grammar_model()
+    model = grammar_model()
     report_id = hashlib.sha256(
         f"{args.language}\0{model}\0{created_at.isoformat()}".encode()
     ).hexdigest()[:20]

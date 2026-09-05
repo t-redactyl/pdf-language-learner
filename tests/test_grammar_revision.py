@@ -528,7 +528,7 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         )
 
     monkeypatch.setattr(
-        "pdf_language_learner.app.anthropic_structured_model_response",
+        "pdf_language_learner.app.grammar_structured_model_response",
         fake_structured,
     )
     client.get("/api/grammar/topics", params={"language": "Spanish"})
@@ -683,7 +683,7 @@ def test_finished_lesson_hands_straight_over_to_its_review(
         )
 
     monkeypatch.setattr(
-        "pdf_language_learner.app.anthropic_structured_model_response",
+        "pdf_language_learner.app.grammar_structured_model_response",
         fake_structured,
     )
 

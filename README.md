@@ -16,7 +16,7 @@ A local-first language reader that lets you select text, detect its language, an
 
 ```bash
 cp .env .env
-# Set OPENAI_API_KEY, ANTHROPIC_API_KEY, and ANTHROPIC_GRAMMAR_MODEL in .env.
+# Set OPENAI_API_KEY in .env. Grammar model settings are optional.
 uv sync --dev
 uv run python main.py
 ```
@@ -30,8 +30,7 @@ Open <http://127.0.0.1:8000>, choose a text-based PDF or paste a public article 
 
 Create a private Docker Space and push this repository to it. CPU Basic hardware
 is sufficient because generation uses hosted model APIs. Add `OPENAI_API_KEY`
-and `ANTHROPIC_API_KEY` as Space **Secrets**, not variables. Set
-`ANTHROPIC_GRAMMAR_MODEL` to the chosen Claude model ID. The container serves
+as a Space **Secret**, not a variable. The container serves
 the app on the port that Hugging Face expects, and its changeable files use
 `/data` by default:
 
@@ -49,11 +48,12 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | Variable                       | Default                    | Purpose                                      |
 |--------------------------------|----------------------------|----------------------------------------------|
 | `OPENAI_MODEL`                 | `gpt-5.6-luna`             | OpenAI model used for translation            |
-| `OPENAI_TIMEOUT_SECONDS`       | `30`                       | OpenAI request timeout                        |
-| `ANTHROPIC_GRAMMAR_MODEL`      | required                   | Anthropic model used for grammar             |
-| `ANTHROPIC_TIMEOUT_SECONDS`    | `180`                      | Anthropic request timeout                    |
-| `ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS` | `12000`           | Grammar generation token ceiling            |
-| `ANTHROPIC_GRAMMAR_EFFORT`     | `medium`                   | Claude effort for lesson generation         |
+| `OPENAI_TIMEOUT_SECONDS`       | `30`                       | Translation request timeout                  |
+| `OPENAI_GRAMMAR_MODEL`         | `gpt-5.6-luna`             | OpenAI model used for grammar                 |
+| `OPENAI_GRAMMAR_TIMEOUT_SECONDS` | `180`                    | Grammar request timeout                      |
+| `OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS` | `20000`               | Grammar generation token ceiling             |
+| `OPENAI_GRAMMAR_GENERATION_EFFORT` | `xhigh`                | Reasoning effort for lesson generation       |
+| `OPENAI_GRAMMAR_GRADING_EFFORT` | `high`                    | Reasoning effort for open-ended grading      |
 | `MARGIN_DATABASE_PATH`         | `/data/margin.db`          | Vocabulary database location                 |
 | `MARGIN_OPEN_THESAURUS_PATH`   | `/data/openthesaurus.txt`  | German thesaurus location                    |
 | `STANZA_RESOURCES_DIR`         | `/data/stanza`             | Stanza model directory                       |

@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any, Iterator, Literal
 from urllib.parse import urlsplit
 
-from anthropic import Anthropic
 import httpx
 import simplemma
 import stanza
@@ -29,7 +28,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 
 from pdf_language_learner.revision import (
@@ -144,10 +143,9 @@ MIN_SYNONYM_ZIPF = 2.5
 MAX_SYNONYM_ZIPF_DROP = 2.0
 CONNECTOR_REVISION_LIMIT = 8
 CONNECTOR_BACKFILL_VERSION = "connector-sentences-v2"
-# Anthropic's max_tokens budget also covers adaptive reasoning. A 250-token
-# budget can therefore expire before even this small structured grade is
-# emitted, especially for open-ended production exercises.
+# The output budget includes reasoning tokens as well as the structured grade.
 GRAMMAR_GRADING_MAX_OUTPUT_TOKENS = 1000
+GRAMMAR_SUMMARY_MAX_OUTPUT_TOKENS = 2000
 GRAMMAR_SESSION_GENERATION_LOCKS = {
     language: threading.Lock() for language in ("german", "spanish")
 }
@@ -569,27 +567,32 @@ def translation_model() -> str:
     return os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 
 
-def anthropic_grammar_model() -> str:
-    model = os.getenv("ANTHROPIC_GRAMMAR_MODEL", "").strip()
-    if not model:
-        raise ValueError("ANTHROPIC_GRAMMAR_MODEL is not configured")
-    return model
+def grammar_model() -> str:
+    return os.getenv("OPENAI_GRAMMAR_MODEL", "gpt-5.6-luna").strip()
 
 
-def anthropic_grammar_generation_tokens() -> int:
-    value = int(os.getenv("ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS", "12000"))
+def grammar_generation_tokens() -> int:
+    value = int(os.getenv("OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS", "20000"))
     if value < 1000:
-        raise ValueError("ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS must be at least 1000")
+        raise ValueError("OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS must be at least 1000")
     return value
 
 
-def anthropic_grammar_effort() -> str:
-    effort = os.getenv("ANTHROPIC_GRAMMAR_EFFORT", "medium").strip().casefold()
+def grammar_reasoning_effort(variable: str, default: str) -> str:
+    effort = os.getenv(variable, default).strip().casefold()
     if effort not in {"low", "medium", "high", "xhigh", "max"}:
         raise ValueError(
-            "ANTHROPIC_GRAMMAR_EFFORT must be low, medium, high, xhigh, or max"
+            f"{variable} must be low, medium, high, xhigh, or max"
         )
     return effort
+
+
+def grammar_generation_effort() -> str:
+    return grammar_reasoning_effort("OPENAI_GRAMMAR_GENERATION_EFFORT", "xhigh")
+
+
+def grammar_grading_effort() -> str:
+    return grammar_reasoning_effort("OPENAI_GRAMMAR_GRADING_EFFORT", "high")
 
 
 @lru_cache(maxsize=1)
@@ -603,11 +606,11 @@ def openai_client() -> OpenAI:
 
 
 @lru_cache(maxsize=1)
-def anthropic_client() -> Anthropic:
-    """Return one process-wide Anthropic client for grammar requests."""
+def grammar_openai_client() -> OpenAI:
+    """Return a long-timeout OpenAI client for grammar requests."""
 
-    return Anthropic(
-        timeout=float(os.getenv("ANTHROPIC_TIMEOUT_SECONDS", "180")),
+    return OpenAI(
+        timeout=float(os.getenv("OPENAI_GRAMMAR_TIMEOUT_SECONDS", "180")),
         max_retries=1,
     )
 
@@ -669,9 +672,11 @@ def structured_model_response(
     schema: dict,
     schema_name: str,
     max_output_tokens: int,
+    reasoning_effort: str = "none",
+    client: OpenAI | None = None,
 ) -> str:
     response = timed_openai_response(
-        openai_client(),
+        client or openai_client(),
         operation,
         model=model,
         input=messages,
@@ -683,7 +688,7 @@ def structured_model_response(
                 "schema": strict_json_schema(schema),
             }
         },
-        reasoning={"effort": "none"},
+        reasoning={"effort": reasoning_effort},
         max_output_tokens=max_output_tokens,
         store=False,
     )
@@ -692,78 +697,26 @@ def structured_model_response(
     return response.output_text
 
 
-def anthropic_structured_model_response(
+def grammar_structured_model_response(
     operation: str,
     *,
     messages: list[dict[str, str]],
     response_model: type[BaseModel],
     max_output_tokens: int,
-    effort: str = "low",
+    effort: str,
 ) -> str:
-    """Return a Pydantic-validated structured response from Anthropic."""
+    """Return a strict structured response from the grammar OpenAI model."""
 
-    system = "\n\n".join(
-        message["content"] for message in messages if message["role"] == "system"
-    )
-    conversation = [
-        {"role": message["role"], "content": message["content"]}
-        for message in messages
-        if message["role"] in {"user", "assistant"}
-    ]
-    if not conversation:
-        raise ValueError(
-            "Anthropic requests require at least one conversation message"
-        )
-
-    started = time.perf_counter()
-    try:
-        response = anthropic_client().messages.parse(
-            model=anthropic_grammar_model(),
-            max_tokens=max_output_tokens,
-            system=system,
-            messages=conversation,
-            output_format=response_model,
-            output_config={"effort": effort},
-        )
-    except ValidationError as exc:
-        logger.warning(
-            "Anthropic %s returned invalid structured output after %.1fms",
-            operation,
-            (time.perf_counter() - started) * 1_000,
-        )
-        if any(
-            error["type"] == "json_invalid" and "EOF" in error["msg"]
-            for error in exc.errors()
-        ):
-            raise ValueError(
-                "Anthropic structured output was truncated before the JSON "
-                f"completed (max_tokens={max_output_tokens})"
-            ) from exc
-        raise
-    except Exception:
-        logger.warning(
-            "Anthropic %s failed after %.1fms",
-            operation,
-            (time.perf_counter() - started) * 1_000,
-        )
-        raise
-
-    elapsed_ms = (time.perf_counter() - started) * 1_000
-    usage = response.usage
-    logger.info(
-        "Anthropic %s completed: wall=%.1fms input=%d output=%d",
+    return structured_model_response(
         operation,
-        elapsed_ms,
-        usage.input_tokens,
-        usage.output_tokens,
+        model=grammar_model(),
+        messages=messages,
+        schema=response_model.model_json_schema(),
+        schema_name=response_model.__name__,
+        max_output_tokens=max_output_tokens,
+        reasoning_effort=effort,
+        client=grammar_openai_client(),
     )
-    parsed = response.parsed_output
-    if parsed is None:
-        raise ValueError(
-            "Anthropic returned no structured output "
-            f"(stop reason: {response.stop_reason}, max_tokens={max_output_tokens})"
-        )
-    return parsed.model_dump_json()
 
 
 VERB_CLITICS = {
@@ -3931,7 +3884,7 @@ def generate_grammar_content(
         }
         for topic in topics
     ]
-    content = anthropic_structured_model_response(
+    content = grammar_structured_model_response(
         "grammar session generation",
         messages=grammar_generation_messages(
             language=language,
@@ -3940,8 +3893,8 @@ def generate_grammar_content(
             saved_vocabulary=vocabulary,
         ),
         response_model=GrammarGenerationResponse,
-        max_output_tokens=anthropic_grammar_generation_tokens(),
-        effort=anthropic_grammar_effort(),
+        max_output_tokens=grammar_generation_tokens(),
+        effort=grammar_generation_effort(),
     )
     generated = GrammarGenerationResponse.model_validate_json(
         content
@@ -4234,7 +4187,7 @@ def generate_grammar_topic_summary(
         topic = catalogue[topic_key]
 
     try:
-        content = anthropic_structured_model_response(
+        content = grammar_structured_model_response(
             "grammar topic summary",
             messages=grammar_topic_summary_messages(
                 language=language,
@@ -4243,8 +4196,8 @@ def generate_grammar_topic_summary(
                 example=topic.example,
             ),
             response_model=GrammarTopicSummary,
-            max_output_tokens=400,
-            effort="low",
+            max_output_tokens=GRAMMAR_SUMMARY_MAX_OUTPUT_TOKENS,
+            effort=grammar_grading_effort(),
         )
         generated = GrammarTopicSummary.model_validate_json(content).summary
     except Exception as exc:
@@ -4321,7 +4274,7 @@ def answer_grammar_exercise(
         grading_data = dict(row)
     if correct is None:
         try:
-            content = anthropic_structured_model_response(
+            content = grammar_structured_model_response(
                 "grammar answer grading",
                 messages=grammar_grading_messages(
                     language=language, prompt=grading_data["prompt"],
@@ -4331,6 +4284,7 @@ def answer_grammar_exercise(
                 ),
                 response_model=GrammarGrade,
                 max_output_tokens=GRAMMAR_GRADING_MAX_OUTPUT_TOKENS,
+                effort=grammar_grading_effort(),
             )
             grade = GrammarGrade.model_validate_json(content)
             correct, feedback = grade.correct, grade.feedback

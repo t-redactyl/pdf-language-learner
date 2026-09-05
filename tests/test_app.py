@@ -20,11 +20,6 @@ from pdf_language_learner.app import (
     SynonymValue,
     WordAnalysis,
     analyze_word_in_context,
-    anthropic_client,
-    anthropic_grammar_effort,
-    anthropic_grammar_generation_tokens,
-    anthropic_grammar_model,
-    anthropic_structured_model_response,
     app,
     cached_model_translation,
     cached_ranked_synonyms,
@@ -33,6 +28,12 @@ from pdf_language_learner.app import (
     dictionary_synonym_candidates,
     enrich_connector_sentence,
     frequency_ranked_synonym_candidates,
+    grammar_generation_effort,
+    grammar_generation_tokens,
+    grammar_grading_effort,
+    grammar_model,
+    grammar_openai_client,
+    grammar_structured_model_response,
     load_local_environment,
     multi_word_term_in_context,
     openai_client,
@@ -58,7 +59,7 @@ def clear_runtime_caches(monkeypatch):
     # Tests replace model and NLP dependencies with purpose-built fakes. Ensure
     # cached results and clients cannot leak from one test into the next.
     for cached_function in (
-        anthropic_client,
+        grammar_openai_client,
         openai_client,
         analyze_word_in_context,
         cached_verb_lemma_decision,
@@ -319,7 +320,7 @@ def test_openai_client_is_reused_and_configured(monkeypatch) -> None:
     assert created[0].kwargs == {"timeout": 12.5, "max_retries": 1}
 
 
-def test_anthropic_client_is_reused_and_configured(monkeypatch) -> None:
+def test_grammar_openai_client_is_reused_and_configured(monkeypatch) -> None:
     created = []
 
     class FakeClient:
@@ -327,58 +328,53 @@ def test_anthropic_client_is_reused_and_configured(monkeypatch) -> None:
             self.kwargs = kwargs
             created.append(self)
 
-    monkeypatch.setenv("ANTHROPIC_TIMEOUT_SECONDS", "45")
-    monkeypatch.setattr("pdf_language_learner.app.Anthropic", FakeClient)
+    monkeypatch.setenv("OPENAI_GRAMMAR_TIMEOUT_SECONDS", "45")
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
 
-    assert anthropic_client() is anthropic_client()
+    assert grammar_openai_client() is grammar_openai_client()
     assert len(created) == 1
     assert created[0].kwargs == {"timeout": 45.0, "max_retries": 1}
 
 
-def test_anthropic_grammar_model_is_required(monkeypatch) -> None:
-    monkeypatch.delenv("ANTHROPIC_GRAMMAR_MODEL", raising=False)
-    with pytest.raises(ValueError, match="ANTHROPIC_GRAMMAR_MODEL"):
-        anthropic_grammar_model()
+def test_grammar_model_defaults_and_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_GRAMMAR_MODEL", raising=False)
+    assert grammar_model() == "gpt-5.6-luna"
 
-    monkeypatch.setenv("ANTHROPIC_GRAMMAR_MODEL", "example-claude-model")
-    assert anthropic_grammar_model() == "example-claude-model"
-
-
-def test_anthropic_grammar_generation_settings(monkeypatch) -> None:
-    monkeypatch.delenv("ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS", raising=False)
-    monkeypatch.delenv("ANTHROPIC_GRAMMAR_EFFORT", raising=False)
-    assert anthropic_grammar_generation_tokens() == 12000
-    assert anthropic_grammar_effort() == "medium"
-
-    monkeypatch.setenv("ANTHROPIC_GRAMMAR_MAX_OUTPUT_TOKENS", "16000")
-    monkeypatch.setenv("ANTHROPIC_GRAMMAR_EFFORT", "high")
-    assert anthropic_grammar_generation_tokens() == 16000
-    assert anthropic_grammar_effort() == "high"
+    monkeypatch.setenv("OPENAI_GRAMMAR_MODEL", "example-openai-model")
+    assert grammar_model() == "example-openai-model"
 
 
-def test_anthropic_structured_response_separates_system_message(
+def test_openai_grammar_settings(monkeypatch) -> None:
+    monkeypatch.delenv("OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("OPENAI_GRAMMAR_GENERATION_EFFORT", raising=False)
+    monkeypatch.delenv("OPENAI_GRAMMAR_GRADING_EFFORT", raising=False)
+    assert grammar_generation_tokens() == 20000
+    assert grammar_generation_effort() == "xhigh"
+    assert grammar_grading_effort() == "high"
+
+    monkeypatch.setenv("OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS", "16000")
+    monkeypatch.setenv("OPENAI_GRAMMAR_GENERATION_EFFORT", "high")
+    monkeypatch.setenv("OPENAI_GRAMMAR_GRADING_EFFORT", "medium")
+    assert grammar_generation_tokens() == 16000
+    assert grammar_generation_effort() == "high"
+    assert grammar_grading_effort() == "medium"
+
+
+def test_grammar_structured_response_uses_openai_model_and_effort(
     monkeypatch,
 ) -> None:
     calls = []
-    parsed = GrammarGrade(correct=True, feedback="Correct form.")
-    response = SimpleNamespace(
-        parsed_output=parsed,
-        stop_reason="end_turn",
-        usage=SimpleNamespace(input_tokens=20, output_tokens=8),
-    )
+    fake_client = object()
 
-    class FakeMessages:
-        def parse(self, **kwargs):
-            calls.append(kwargs)
-            return response
+    def fake_structured(operation, **kwargs):
+        calls.append((operation, kwargs))
+        return json.dumps({"correct": True, "feedback": "Correct form."})
 
-    fake_client = SimpleNamespace(messages=FakeMessages())
-    monkeypatch.setattr(
-        "pdf_language_learner.app.anthropic_client", lambda: fake_client
-    )
-    monkeypatch.setenv("ANTHROPIC_GRAMMAR_MODEL", "example-claude-model")
+    monkeypatch.setattr("pdf_language_learner.app.structured_model_response", fake_structured)
+    monkeypatch.setattr("pdf_language_learner.app.grammar_openai_client", lambda: fake_client)
+    monkeypatch.setenv("OPENAI_GRAMMAR_MODEL", "example-openai-model")
 
-    content = anthropic_structured_model_response(
+    content = grammar_structured_model_response(
         "grammar answer grading",
         messages=[
             {"role": "system", "content": "Grade precisely."},
@@ -386,24 +382,22 @@ def test_anthropic_structured_response_separates_system_message(
         ],
         response_model=GrammarGrade,
         max_output_tokens=250,
+        effort="high",
     )
 
     assert json.loads(content) == {
         "correct": True,
         "feedback": "Correct form.",
     }
-    assert calls == [
-        {
-            "model": "example-claude-model",
-            "max_tokens": 250,
-            "system": "Grade precisely.",
-            "messages": [
-                {"role": "user", "content": "Learner answer: hablo"}
-            ],
-            "output_format": GrammarGrade,
-            "output_config": {"effort": "low"},
-        }
-    ]
+    operation, call = calls[0]
+    assert operation == "grammar answer grading"
+    assert call["model"] == "example-openai-model"
+    assert call["messages"][0] == {"role": "system", "content": "Grade precisely."}
+    assert call["schema"] == GrammarGrade.model_json_schema()
+    assert call["schema_name"] == "GrammarGrade"
+    assert call["max_output_tokens"] == 250
+    assert call["reasoning_effort"] == "high"
+    assert call["client"] is fake_client
 
 
 def test_translation_model_defaults_and_can_be_overridden(monkeypatch) -> None:
