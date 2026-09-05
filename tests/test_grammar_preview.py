@@ -42,15 +42,9 @@ def topic(
 
 def generated_session() -> GrammarGeneratedSession:
     exercise_types = (
-        GrammarExerciseType.MULTIPLE_CHOICE,
-        GrammarExerciseType.MULTIPLE_CHOICE,
-        GrammarExerciseType.MULTIPLE_CHOICE,
-        GrammarExerciseType.FILL_BLANK,
-        GrammarExerciseType.FILL_BLANK,
-        GrammarExerciseType.FILL_BLANK,
-        GrammarExerciseType.TRANSLATION,
-        GrammarExerciseType.TRANSLATION,
-        GrammarExerciseType.TRANSLATION,
+        (GrammarExerciseType.MULTIPLE_CHOICE,) * 5
+        + (GrammarExerciseType.FILL_BLANK,) * 5
+        + (GrammarExerciseType.TRANSLATION,) * 5
     )
     exercises = [
         GrammarGeneratedExercise(

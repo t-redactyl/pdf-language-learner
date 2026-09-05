@@ -16,6 +16,7 @@ GRAMMAR_CORRECT_INTERVAL_DAYS = (3, 7, 14, 30, 60, 120)
 GRAMMAR_INCORRECT_INTERVAL = timedelta(days=2)
 GRAMMAR_CYCLE_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_TOPIC_LIMIT = 3
+GRAMMAR_EXERCISES_PER_TYPE = 5
 # Three fits the paradigm topics that need one table per pattern, such as
 # adjective declension after a definite article, an indefinite article, and no
 # article at all.  This must stay on both the provider response and the internal
@@ -95,6 +96,9 @@ class GrammarExerciseType(StrEnum):
     TRANSLATION = "translation"
 
 
+GRAMMAR_EXERCISE_TOTAL = GRAMMAR_EXERCISES_PER_TYPE * len(GrammarExerciseType)
+
+
 class GrammarGeneratedExercise(BaseModel):
     topic_key: str
     type: GrammarExerciseType
@@ -108,7 +112,7 @@ class GrammarGeneratedExercise(BaseModel):
 
 
 class GrammarGeneratedExerciseContent(BaseModel):
-    """Exercise fields shared by the nine structurally named response slots."""
+    """Exercise fields shared by the structurally named response slots."""
 
     topic_key: str
     instruction: str
@@ -138,14 +142,15 @@ class GrammarGeneratedSession(BaseModel):
         default_factory=list, max_length=GRAMMAR_RULE_TABLE_LIMIT
     )
     worked_examples: list[str] = Field(min_length=2, max_length=4)
-    exercises: list[GrammarGeneratedExercise] = Field(min_length=9, max_length=9)
+    exercises: list[GrammarGeneratedExercise] = Field(
+        min_length=GRAMMAR_EXERCISE_TOTAL, max_length=GRAMMAR_EXERCISE_TOTAL
+    )
 
     @model_validator(mode="after")
     def validate_exercise_mix(self) -> "GrammarGeneratedSession":
         expected = {
-            GrammarExerciseType.MULTIPLE_CHOICE: 3,
-            GrammarExerciseType.FILL_BLANK: 3,
-            GrammarExerciseType.TRANSLATION: 3,
+            exercise_type: GRAMMAR_EXERCISES_PER_TYPE
+            for exercise_type in GrammarExerciseType
         }
         actual = {
             exercise_type: sum(
@@ -160,8 +165,8 @@ class GrammarGeneratedSession(BaseModel):
         }
         if actual != expected:
             raise ValueError(
-                "grammar sessions require three multiple-choice questions, three fill "
-                "blanks, and three translations"
+                "grammar sessions require five multiple-choice questions, five fill "
+                "blanks, and five translations"
             )
         for exercise in self.exercises:
             if exercise.type is GrammarExerciseType.MULTIPLE_CHOICE:
@@ -175,7 +180,7 @@ class GrammarGeneratedSession(BaseModel):
 
 
 class GrammarGenerationResponse(BaseModel):
-    """Provider response with the required nine-exercise mix."""
+    """Provider response with the required fifteen-exercise mix."""
 
     rule_summary: str
     # The cap belongs here as well as on GrammarGeneratedSession: this is the
@@ -188,12 +193,18 @@ class GrammarGenerationResponse(BaseModel):
     multiple_choice_1: GrammarGeneratedExerciseContent
     multiple_choice_2: GrammarGeneratedExerciseContent
     multiple_choice_3: GrammarGeneratedExerciseContent
+    multiple_choice_4: GrammarGeneratedExerciseContent
+    multiple_choice_5: GrammarGeneratedExerciseContent
     fill_blank_1: GrammarGeneratedExerciseContent
     fill_blank_2: GrammarGeneratedExerciseContent
     fill_blank_3: GrammarGeneratedExerciseContent
+    fill_blank_4: GrammarGeneratedExerciseContent
+    fill_blank_5: GrammarGeneratedExerciseContent
     translation_1: GrammarGeneratedExerciseContent
     translation_2: GrammarGeneratedExerciseContent
     translation_3: GrammarGeneratedExerciseContent
+    translation_4: GrammarGeneratedExerciseContent
+    translation_5: GrammarGeneratedExerciseContent
 
     def to_generated_session(self) -> GrammarGeneratedSession:
         exercises = [
@@ -202,12 +213,18 @@ class GrammarGenerationResponse(BaseModel):
                 (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice_1),
                 (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice_2),
                 (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice_3),
+                (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice_4),
+                (GrammarExerciseType.MULTIPLE_CHOICE, self.multiple_choice_5),
                 (GrammarExerciseType.FILL_BLANK, self.fill_blank_1),
                 (GrammarExerciseType.FILL_BLANK, self.fill_blank_2),
                 (GrammarExerciseType.FILL_BLANK, self.fill_blank_3),
+                (GrammarExerciseType.FILL_BLANK, self.fill_blank_4),
+                (GrammarExerciseType.FILL_BLANK, self.fill_blank_5),
                 (GrammarExerciseType.TRANSLATION, self.translation_1),
                 (GrammarExerciseType.TRANSLATION, self.translation_2),
                 (GrammarExerciseType.TRANSLATION, self.translation_3),
+                (GrammarExerciseType.TRANSLATION, self.translation_4),
+                (GrammarExerciseType.TRANSLATION, self.translation_5),
             )
         ]
         return GrammarGeneratedSession(
@@ -334,14 +351,14 @@ def grammar_generation_messages(
     vocabulary = ", ".join(saved_vocabulary) or "none available"
     if kind is GrammarSessionKind.LESSON:
         distribution = (
-            "All nine exercises must target the one topic and progress from recognition "
+            "All fifteen exercises must target the one topic and progress from recognition "
             "through guided completion to translation."
         )
     elif kind is GrammarSessionKind.MIXED and len(topics) == 4:
         distribution = (
             "This is a mixed session: the final topic is new and the first three are "
-            "reviews. Give the new topic two exercises, and distribute the other seven "
-            "across the review topics so every topic is practised."
+            "reviews. Give the new topic three exercises, and distribute the other twelve "
+            "evenly across the review topics."
         )
     elif kind is GrammarSessionKind.REVIEW:
         distribution = (
@@ -356,8 +373,8 @@ def grammar_generation_messages(
             "role": "system",
             "content": (
                 f"You create precise {language} grammar revision for an adult learner. "
-                "Return exactly nine exercises in this order: three multiple_choice, three "
-                "fill_blank, and three translation. Put each exercise in its correspondingly "
+                "Return exactly fifteen exercises in this order: five multiple_choice, five "
+                "fill_blank, and five translation. Put each exercise in its correspondingly "
                 "named response field; do not return an exercises array. Use saved "
                 "vocabulary naturally when it fits, never at the expense of the target grammar. "
                 "Keep choices and tokens lists empty except that every multiple_choice task must "

@@ -63,8 +63,8 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "list those elements in a deliberately scrambled order" in system_instruction
     assert "Never present them in the target order" in system_instruction
     assert "Translation tasks must name the required construction" in system_instruction
-    assert "Return exactly nine exercises" in system_instruction
-    assert "three multiple_choice, three fill_blank, and three translation" in system_instruction
+    assert "Return exactly fifteen exercises" in system_instruction
+    assert "five multiple_choice, five fill_blank, and five translation" in system_instruction
 
 
 def test_rule_table_limit_is_sent_to_the_model_and_not_only_checked() -> None:
@@ -107,10 +107,13 @@ def test_rule_tables_fit_a_three_pattern_paradigm() -> None:
             slot: dict(exercise, choices=exercise["choices"] if mc else [])
             for slot, mc in (
                 ("multiple_choice_1", True), ("multiple_choice_2", True),
-                ("multiple_choice_3", True), ("fill_blank_1", False),
+                ("multiple_choice_3", True), ("multiple_choice_4", True),
+                ("multiple_choice_5", True), ("fill_blank_1", False),
                 ("fill_blank_2", False), ("fill_blank_3", False),
+                ("fill_blank_4", False), ("fill_blank_5", False),
                 ("translation_1", False), ("translation_2", False),
-                ("translation_3", False),
+                ("translation_3", False), ("translation_4", False),
+                ("translation_5", False),
             )
         },
     }
@@ -492,12 +495,18 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
             ("multiple_choice_1", GrammarExerciseType.MULTIPLE_CHOICE),
             ("multiple_choice_2", GrammarExerciseType.MULTIPLE_CHOICE),
             ("multiple_choice_3", GrammarExerciseType.MULTIPLE_CHOICE),
+            ("multiple_choice_4", GrammarExerciseType.MULTIPLE_CHOICE),
+            ("multiple_choice_5", GrammarExerciseType.MULTIPLE_CHOICE),
             ("fill_blank_1", GrammarExerciseType.FILL_BLANK),
             ("fill_blank_2", GrammarExerciseType.FILL_BLANK),
             ("fill_blank_3", GrammarExerciseType.FILL_BLANK),
+            ("fill_blank_4", GrammarExerciseType.FILL_BLANK),
+            ("fill_blank_5", GrammarExerciseType.FILL_BLANK),
             ("translation_1", GrammarExerciseType.TRANSLATION),
             ("translation_2", GrammarExerciseType.TRANSLATION),
             ("translation_3", GrammarExerciseType.TRANSLATION),
+            ("translation_4", GrammarExerciseType.TRANSLATION),
+            ("translation_5", GrammarExerciseType.TRANSLATION),
         )
         for slot, exercise_type in exercise_slots:
             exercises[slot] = {
@@ -601,7 +610,7 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         ).fetchone() is None
 
     exercise_types = []
-    for _ in range(9):
+    for _ in range(15):
         current = client.post(
             "/api/grammar/session", json={"language": "Spanish"}
         ).json()
@@ -617,15 +626,21 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         "multiple_choice",
         "multiple_choice",
         "multiple_choice",
+        "multiple_choice",
+        "multiple_choice",
         "fill_blank",
         "fill_blank",
         "fill_blank",
+        "fill_blank",
+        "fill_blank",
+        "translation",
+        "translation",
         "translation",
         "translation",
         "translation",
     ]
-    assert calls.count("grammar answer grading") == 3
-    assert grading_token_budgets == [1000, 1000, 1000]
+    assert calls.count("grammar answer grading") == 5
+    assert grading_token_budgets == [1000] * 5
     with sqlite3.connect(database) as connection:
         progress = connection.execute(
             "SELECT repetitions, lapses FROM grammar_reviews WHERE topic_key = ?",
@@ -655,8 +670,10 @@ def test_finished_lesson_hands_straight_over_to_its_review(
         ]
         slots = (
             "multiple_choice_1", "multiple_choice_2", "multiple_choice_3",
-            "fill_blank_1", "fill_blank_2", "fill_blank_3",
+            "multiple_choice_4", "multiple_choice_5", "fill_blank_1",
+            "fill_blank_2", "fill_blank_3", "fill_blank_4", "fill_blank_5",
             "translation_1", "translation_2", "translation_3",
+            "translation_4", "translation_5",
         )
         return json.dumps(
             {
@@ -665,7 +682,7 @@ def test_finished_lesson_hands_straight_over_to_its_review(
                 "worked_examples": ["Example one.", "Example two."],
                 **{
                     slot: {
-                        # Spread the nine exercises evenly over the topics given.
+                        # Spread the fifteen exercises evenly over the topics given.
                         "topic_key": topic_keys[index % len(topic_keys)],
                         "instruction": "Use the target grammar.",
                         "prompt": "Complete the task.",
