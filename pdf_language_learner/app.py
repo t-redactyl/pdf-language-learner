@@ -53,17 +53,18 @@ from pdf_language_learner.grammar_revision import (
     GrammarGeneratedSession,
     GrammarGenerationResponse,
     GrammarGrade,
-    GRAMMAR_REVIEW_SESSION_INTERVAL,
     GRAMMAR_REVIEW_TOPIC_LIMIT,
+    GrammarCycleStage,
     GrammarSessionKind,
     GrammarTopicSummary,
     deterministic_grammar_grade,
+    grammar_cycle_stage,
     grammar_generation_messages,
     grammar_grading_messages,
     grammar_topic_summary_messages,
     schedule_grammar_review,
 )
-from pdf_language_learner.grammar_topics import GrammarTopic
+from pdf_language_learner.grammar_topics import GrammarLanguage, GrammarTopic
 from pdf_language_learner.spanish_grammar_catalogue import SPANISH_GRAMMAR_TOPICS
 from pdf_language_learner.suggestions import canonical_url, suggestions_for
 from pdf_language_learner.web_import import WebImportError, fetch_web_document
@@ -3769,24 +3770,79 @@ def grammar_schedule_from_row(row: sqlite3.Row | None) -> ScheduleState:
     )
 
 
-def grammar_review_is_available(
+def grammar_cycle_timestamps(
     connection: sqlite3.Connection,
-    now: datetime,
     canonical_language: str,
-) -> bool:
-    """Limit each language's generated review sessions to roughly three per week."""
+) -> tuple[datetime | None, datetime | None, datetime | None]:
+    """Return when this language last finished a lesson, a review, and anything."""
 
-    latest = connection.execute(
+    completed_by_kind = {
+        row["kind"]: parse_timestamp(row["completed_at"])
+        for row in connection.execute(
+            """
+            SELECT kind, MAX(completed_at) AS completed_at FROM grammar_sessions
+            WHERE canonical_language = ? AND completed_at IS NOT NULL
+            GROUP BY kind
+            """,
+            (canonical_language,),
+        ).fetchall()
+    }
+    completed = [value for value in completed_by_kind.values() if value is not None]
+    return (
+        completed_by_kind.get(GrammarSessionKind.LESSON.value),
+        completed_by_kind.get(GrammarSessionKind.REVIEW.value),
+        max(completed, default=None),
+    )
+
+
+def last_completed_lesson_topic_keys(
+    connection: sqlite3.Connection,
+    canonical_language: str,
+) -> set[str]:
+    """The topics taught by the most recently finished lesson."""
+
+    row = connection.execute(
         """
-        SELECT completed_at FROM grammar_sessions
+        SELECT topic_keys_json FROM grammar_sessions
         WHERE canonical_language = ? AND kind = ? AND completed_at IS NOT NULL
         ORDER BY completed_at DESC LIMIT 1
         """,
-        (canonical_language, GrammarSessionKind.REVIEW.value),
+        (canonical_language, GrammarSessionKind.LESSON.value),
     ).fetchone()
-    if latest is None:
-        return True
-    return parse_timestamp(latest["completed_at"]) + GRAMMAR_REVIEW_SESSION_INTERVAL <= now
+    return set(json.loads(row["topic_keys_json"])) if row is not None else set()
+
+
+def grammar_review_candidates(
+    catalogue: tuple[GrammarTopic, ...],
+    review_rows: dict[str, sqlite3.Row],
+    *,
+    now: datetime,
+    exclude: set[str],
+) -> list[GrammarTopic]:
+    """Order every introduced topic by how badly it needs revising.
+
+    Overdue topics come first, then the ones closest to falling due.  Topics
+    that are not yet due are deliberately still eligible: a review session is
+    owed as soon as a lesson finishes, so an empty candidate list would leave
+    the cycle unable to close and the language stuck without any session at all.
+    """
+
+    def priority(topic: GrammarTopic) -> tuple[bool, bool, str, int]:
+        row = review_rows[topic.key]
+        return (
+            not is_due(grammar_schedule_from_row(row), at=now),
+            row["next_review_at"] is not None,
+            row["next_review_at"] or "",
+            topic.sequence,
+        )
+
+    introduced = [topic for topic in catalogue if topic.key in review_rows]
+    candidates = [topic for topic in introduced if topic.key not in exclude]
+    # Only skip the freshly taught topic while enough others remain to fill a
+    # session; revising what was just explained is not revision.
+    if len(candidates) < GRAMMAR_REVIEW_TOPIC_LIMIT:
+        candidates = introduced
+    return sorted(candidates, key=priority)
 
 
 def select_grammar_topics(
@@ -3794,8 +3850,21 @@ def select_grammar_topics(
     language: str,
     now: datetime,
 ) -> tuple[GrammarSessionKind, list[GrammarTopic]] | None:
+    """Choose the one session this language owes the learner, if any."""
+
     catalogue = grammar_catalogue(language)
     canonical_language = catalogue[0].language.value
+    lesson_at, review_at, session_at = grammar_cycle_timestamps(
+        connection, canonical_language
+    )
+    stage = grammar_cycle_stage(
+        last_completed_lesson_at=lesson_at,
+        last_completed_review_at=review_at,
+        last_completed_session_at=session_at,
+        now=now,
+    )
+    if stage is GrammarCycleStage.LOCKED:
+        return None
     review_rows = {
         row["topic_key"]: row
         for row in connection.execute(
@@ -3804,29 +3873,17 @@ def select_grammar_topics(
         ).fetchall()
     }
     unseen = [topic for topic in catalogue if topic.key not in review_rows]
-    due = [
-        topic for topic in catalogue
-        if topic.key in review_rows
-        and is_due(grammar_schedule_from_row(review_rows[topic.key]), at=now)
-    ]
-    due.sort(
-        key=lambda topic: (
-            review_rows[topic.key]["next_review_at"] is not None,
-            review_rows[topic.key]["next_review_at"] or "",
-            topic.sequence,
-        )
+    if stage is GrammarCycleStage.LESSON and unseen:
+        return GrammarSessionKind.LESSON, unseen[:1]
+    # A finished catalogue keeps cycling through review-only sessions.
+    candidates = grammar_review_candidates(
+        catalogue,
+        review_rows,
+        now=now,
+        exclude=last_completed_lesson_topic_keys(connection, canonical_language),
     )
-    completed = connection.execute(
-        "SELECT COUNT(*) FROM grammar_sessions WHERE canonical_language = ? AND completed_at IS NOT NULL",
-        (canonical_language,),
-    ).fetchone()[0]
-    if unseen and (not due or completed % 3 < 2):
-        return GrammarSessionKind.LESSON, unseen[:1]
-    if due and grammar_review_is_available(connection, now, canonical_language):
-        review_topics = due[:GRAMMAR_REVIEW_TOPIC_LIMIT]
-        return GrammarSessionKind.REVIEW, review_topics
-    if unseen:
-        return GrammarSessionKind.LESSON, unseen[:1]
+    if candidates:
+        return GrammarSessionKind.REVIEW, candidates[:GRAMMAR_REVIEW_TOPIC_LIMIT]
     return None
 
 
@@ -4049,6 +4106,54 @@ def list_grammar_topics(language: str) -> list[dict[str, Any]]:
     ]
 
 
+def open_grammar_session_row(
+    connection: sqlite3.Connection,
+    canonical_language: str,
+) -> sqlite3.Row | None:
+    """The unfinished session a learner may resume, ignoring stale content."""
+
+    return connection.execute(
+        """
+        SELECT id, kind, topic_keys_json FROM grammar_sessions
+        WHERE canonical_language = ? AND completed_at IS NULL
+            AND content_version = ?
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (canonical_language, GRAMMAR_CONTENT_VERSION),
+    ).fetchone()
+
+
+def resumable_grammar_session_row(
+    connection: sqlite3.Connection,
+    canonical_language: str,
+    now: datetime,
+) -> sqlite3.Row | None:
+    """The unfinished session to offer, honouring the cycle lock.
+
+    A session nobody has answered yet represents no investment, so a locked
+    language does not offer one.  That keeps the lock honest about sessions
+    generated before it existed, without needing to rewrite stored history.
+    A part-answered session is always resumable: the learner started it.
+    """
+
+    row = open_grammar_session_row(connection, canonical_language)
+    if row is None:
+        return None
+    answered = connection.execute(
+        """
+        SELECT COUNT(*) FROM grammar_exercises e
+        JOIN grammar_exercise_answers a ON a.exercise_id = e.id
+        WHERE e.session_id = ?
+        """,
+        (row["id"],),
+    ).fetchone()[0]
+    if answered:
+        return row
+    if select_grammar_topics(connection, canonical_language, now) is None:
+        return None
+    return row
+
+
 @app.post("/api/grammar/session")
 def start_grammar_session(request: GrammarSessionRequest) -> dict[str, Any]:
     now = datetime.now(UTC)
@@ -4058,20 +4163,17 @@ def start_grammar_session(request: GrammarSessionRequest) -> dict[str, Any]:
         # Another request may have completed generation while this request was
         # waiting, so the existing-session check belongs inside the lock.
         with vocabulary_database() as connection:
-            existing = connection.execute(
-                """
-                SELECT id FROM grammar_sessions
-                WHERE canonical_language = ? AND completed_at IS NULL
-                    AND content_version = ?
-                ORDER BY created_at DESC LIMIT 1
-                """,
-                (canonical_language, GRAMMAR_CONTENT_VERSION),
-            ).fetchone()
+            existing = resumable_grammar_session_row(
+                connection, canonical_language, now
+            )
             if existing is not None:
                 return grammar_session_payload(connection, existing["id"])
             selection = select_grammar_topics(connection, canonical_language, now)
             if selection is None:
-                raise HTTPException(status_code=404, detail="No grammar topics are due")
+                raise HTTPException(
+                    status_code=404,
+                    detail="Your next grammar session is not due yet",
+                )
             kind, topics = selection
             vocabulary = saved_grammar_vocabulary(connection, canonical_language)
         try:
@@ -4250,13 +4352,20 @@ def answer_grammar_exercise(
             (session_id,),
         ).fetchone()[0]
         complete = remaining == 0
+        next_session_kind = None
         if complete:
             finish_grammar_session(connection, session_id, now)
+            # A finished lesson leaves its review outstanding, so tell the
+            # client it can carry straight on instead of ending the sitting.
+            selection = select_grammar_topics(connection, language, now)
+            if selection is not None:
+                next_session_kind = selection[0].value
         return {
             "correct": bool(correct), "feedback": feedback,
             "reference_answer": grading_data["reference_answer"],
             "explanation": grading_data["explanation"],
             "session_complete": complete,
+            "next_session_kind": next_session_kind,
         }
 
 
@@ -4549,6 +4658,32 @@ def revision_session(
     )
 
 
+def next_grammar_session_topics(
+    connection: sqlite3.Connection,
+    now: datetime,
+) -> tuple[GrammarSessionKind, int] | None:
+    """Describe the session the learner would actually be served next.
+
+    The reminder deliberately asks the same question the session endpoint
+    answers, rather than counting topic rows that have fallen due.  Those two
+    used to disagree, which is why the home page advertised grammar revision on
+    days when starting a session was not possible.
+    """
+
+    for language in GrammarLanguage:
+        existing = resumable_grammar_session_row(connection, language.value, now)
+        if existing is not None:
+            return (
+                GrammarSessionKind(existing["kind"]),
+                len(json.loads(existing["topic_keys_json"])),
+            )
+        selection = select_grammar_topics(connection, language.value, now)
+        if selection is not None:
+            kind, topics = selection
+            return kind, len(topics)
+    return None
+
+
 @app.get("/api/revision/due", response_model=DueReviewSummary)
 def due_reviews() -> DueReviewSummary:
     """Return lightweight counts for the home-page review reminder."""
@@ -4563,37 +4698,24 @@ def due_reviews() -> DueReviewSummary:
                 f"lapses, consecutive_correct FROM {registered['table_name']}"
             ).fetchall()
         ]
-        all_grammar_rows = connection.execute(
-            """
-            SELECT canonical_language, last_reviewed_at, next_review_at,
-                repetitions, lapses, consecutive_correct
-            FROM grammar_reviews
-            """
-        ).fetchall()
-        available_grammar_languages = {
-            language
-            for language in {row["canonical_language"] for row in all_grammar_rows}
-            if grammar_review_is_available(connection, now, language)
-        }
-        grammar_rows = [
-            row
-            for row in all_grammar_rows
-            if row["canonical_language"] in available_grammar_languages
-        ]
-    due_grammar_count = min(
-        sum(is_due(grammar_schedule_from_row(row), at=now) for row in grammar_rows),
-        GRAMMAR_REVIEW_TOPIC_LIMIT,
-    )
+        next_session = next_grammar_session_topics(connection, now)
+
+    grammar_new_count = 0
+    grammar_review_count = 0
+    if next_session is not None:
+        kind, topic_count = next_session
+        if kind is GrammarSessionKind.LESSON:
+            grammar_new_count = topic_count
+        else:
+            grammar_review_count = topic_count
 
     return DueReviewSummary(
         vocabulary_count=sum(
             is_due(schedule_state(row), at=now) for row in vocabulary_rows
         ),
-        grammar_count=due_grammar_count,
-        grammar_review_count=due_grammar_count,
-        # Kept in the response shape for older clients. Grammar review sessions
-        # no longer mix in unseen topics.
-        grammar_new_count=0,
+        grammar_count=grammar_new_count + grammar_review_count,
+        grammar_review_count=grammar_review_count,
+        grammar_new_count=grammar_new_count,
     )
 
 

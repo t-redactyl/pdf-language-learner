@@ -14,7 +14,7 @@ from pdf_language_learner.revision import ScheduleState
 
 GRAMMAR_CORRECT_INTERVAL_DAYS = (3, 7, 14, 30, 60, 120)
 GRAMMAR_INCORRECT_INTERVAL = timedelta(days=2)
-GRAMMAR_REVIEW_SESSION_INTERVAL = timedelta(days=2)
+GRAMMAR_CYCLE_INTERVAL = timedelta(days=2)
 GRAMMAR_REVIEW_TOPIC_LIMIT = 3
 GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION = """
 Verbposition in Satzverbindungen (Verb Position in Connected Sentences)
@@ -73,6 +73,14 @@ class GrammarSessionKind(StrEnum):
     LESSON = "lesson"
     REVIEW = "review"
     MIXED = "mixed"
+
+
+class GrammarCycleStage(StrEnum):
+    """Where a language sits in the lesson-then-review revision cycle."""
+
+    LESSON = "lesson"
+    REVIEW = "review"
+    LOCKED = "locked"
 
 
 class GrammarExerciseType(StrEnum):
@@ -233,6 +241,41 @@ def deterministic_grammar_grade(
     return normalized in {normalize_grammar_answer(item) for item in expected}
 
 
+def grammar_cycle_stage(
+    *,
+    last_completed_lesson_at: datetime | None,
+    last_completed_review_at: datetime | None,
+    last_completed_session_at: datetime | None,
+    now: datetime,
+) -> GrammarCycleStage:
+    """Decide what a language owes the learner next.
+
+    One cycle is a new-topic lesson followed by a review of three topics the
+    learner has already met.  A lesson with no review completed after it leaves
+    that review outstanding, and an outstanding review is never time-gated: the
+    learner should be able to finish the cycle they started.  Once the cycle is
+    closed, the next lesson waits for ``GRAMMAR_CYCLE_INTERVAL`` to pass.
+
+    The interval is anchored on the newest completed session of any kind rather
+    than on the newest review, so a session kind this policy no longer produces
+    still delays the next lesson instead of being ignored.
+    """
+
+    if now.tzinfo is None:
+        raise ValueError("now must include a timezone")
+    if last_completed_lesson_at is not None and (
+        last_completed_review_at is None
+        or last_completed_review_at < last_completed_lesson_at
+    ):
+        return GrammarCycleStage.REVIEW
+    if (
+        last_completed_session_at is None
+        or last_completed_session_at + GRAMMAR_CYCLE_INTERVAL <= now
+    ):
+        return GrammarCycleStage.LESSON
+    return GrammarCycleStage.LOCKED
+
+
 def schedule_grammar_review(
     state: ScheduleState,
     *,
@@ -324,7 +367,7 @@ def grammar_generation_messages(
                 "English. In particular, write the rule_summary and every exercise explanation in English, even when the language "
                 "being studied is not English. Keep target-language forms, example sentences, prompts, "
                 "and answers in the language being studied where the exercise requires them. "
-                "For new exercises, please give a succinct explanation of the grammar rule, in the style of Grammatik Aktiv. "
+                "For new exercises, please give a succinct explanation of the grammar rule.  "
                 f"There is an example of how to format the German grammar instructions in {GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION}, "
                 f"and an example of how to format the Spanish grammar instructions in {GRAMMAR_SPANISH_NEW_EXAMPLE_EXPLANATION}. "
                 "Multiple-choice tasks must ask the learner to select the form or "

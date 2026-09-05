@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,10 +8,14 @@ from pydantic import ValidationError
 
 from pdf_language_learner.app import app, saved_grammar_vocabulary, select_grammar_topics
 from pdf_language_learner.grammar_revision import (
+    GRAMMAR_CYCLE_INTERVAL,
+    GRAMMAR_REVIEW_TOPIC_LIMIT,
+    GrammarCycleStage,
     GrammarExerciseType,
     GrammarGeneratedExercise,
     GrammarSessionKind,
     deterministic_grammar_grade,
+    grammar_cycle_stage,
     grammar_generation_messages,
     grammar_topic_summary_messages,
     schedule_grammar_review,
@@ -132,6 +136,201 @@ def test_grammar_scheduler_uses_topic_level_intervals() -> None:
     assert (second.next_review_at - now).days == 7
     assert (missed.next_review_at - now).days == 2
     assert missed.consecutive_correct == 0
+
+
+def test_grammar_cycle_stage_alternates_lesson_and_review() -> None:
+    now = datetime(2026, 9, 5, 12, tzinfo=UTC)
+
+    # Nothing studied yet, so the cycle opens with a new topic.
+    assert grammar_cycle_stage(
+        last_completed_lesson_at=None,
+        last_completed_review_at=None,
+        last_completed_session_at=None,
+        now=now,
+    ) is GrammarCycleStage.LESSON
+
+    # A lesson with no review after it owes that review, however long it waits.
+    lesson_at = now - timedelta(days=9)
+    assert grammar_cycle_stage(
+        last_completed_lesson_at=lesson_at,
+        last_completed_review_at=lesson_at - timedelta(days=3),
+        last_completed_session_at=lesson_at,
+        now=now,
+    ) is GrammarCycleStage.REVIEW
+
+    # A closed cycle locks grammar until the interval has passed.
+    closed_at = now - GRAMMAR_CYCLE_INTERVAL + timedelta(minutes=1)
+    assert grammar_cycle_stage(
+        last_completed_lesson_at=closed_at - timedelta(minutes=30),
+        last_completed_review_at=closed_at,
+        last_completed_session_at=closed_at,
+        now=now,
+    ) is GrammarCycleStage.LOCKED
+    assert grammar_cycle_stage(
+        last_completed_lesson_at=closed_at - timedelta(minutes=30),
+        last_completed_review_at=closed_at,
+        last_completed_session_at=closed_at - timedelta(minutes=1),
+        now=now,
+    ) is GrammarCycleStage.LESSON
+
+
+def test_grammar_cycle_interval_is_anchored_on_any_session_kind() -> None:
+    """A retired session kind must still delay the next lesson."""
+
+    now = datetime(2026, 9, 5, 12, tzinfo=UTC)
+    old = now - timedelta(days=30)
+
+    assert grammar_cycle_stage(
+        last_completed_lesson_at=old,
+        last_completed_review_at=old,
+        last_completed_session_at=now - timedelta(hours=1),
+        now=now,
+    ) is GrammarCycleStage.LOCKED
+
+
+def test_grammar_cycle_stage_requires_an_aware_now() -> None:
+    with pytest.raises(ValueError, match="timezone"):
+        grammar_cycle_stage(
+            last_completed_lesson_at=None,
+            last_completed_review_at=None,
+            last_completed_session_at=None,
+            now=datetime(2026, 9, 5, 12),
+        )
+
+
+def grammar_session_kinds_over_one_visit(
+    connection: sqlite3.Connection, language: str, now: datetime, visits: int
+) -> list[str | None]:
+    """Ask for `visits` sessions at one instant, completing each one served."""
+
+    kinds: list[str | None] = []
+    for index in range(visits):
+        selection = select_grammar_topics(connection, language, now)
+        if selection is None:
+            kinds.append(None)
+            continue
+        kind, topics = selection
+        kinds.append(kind.value)
+        connection.execute(
+            """
+            INSERT INTO grammar_sessions (
+                id, canonical_language, kind, topic_keys_json, rule_summary,
+                worked_examples_json, created_at, completed_at
+            ) VALUES (?, ?, ?, ?, '', '[]', ?, ?)
+            """,
+            (
+                f"session-{index}",
+                language,
+                kind.value,
+                json.dumps([topic.key for topic in topics]),
+                now.isoformat(),
+                now.isoformat(),
+            ),
+        )
+        # A completed lesson introduces the topic it taught.
+        if kind is GrammarSessionKind.LESSON:
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO grammar_reviews (
+                    canonical_language, topic_key, introduced_at
+                ) VALUES (?, ?, ?)
+                """,
+                ((language, topic.key, now.isoformat()) for topic in topics),
+            )
+    return kinds
+
+
+def test_grammar_cycle_serves_one_lesson_then_one_review_then_locks(
+    tmp_path, monkeypatch
+) -> None:
+    """Regression: lessons used to be ungated and reviews were never reached."""
+
+    database = tmp_path / "margin.db"
+    monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
+    client.get("/api/grammar/topics", params={"language": "Spanish"})
+    now = datetime(2026, 9, 5, 12, tzinfo=UTC)
+
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        assert grammar_session_kinds_over_one_visit(
+            connection, "spanish", now, 5
+        ) == ["lesson", "review", None, None, None]
+
+        # A day early is still locked; the interval reopens the cycle.
+        assert select_grammar_topics(
+            connection, "spanish", now + timedelta(days=1)
+        ) is None
+        reopened = select_grammar_topics(
+            connection, "spanish", now + GRAMMAR_CYCLE_INTERVAL
+        )
+        assert reopened is not None
+        assert reopened[0] is GrammarSessionKind.LESSON
+
+
+def test_grammar_review_excludes_the_freshly_taught_topic(
+    tmp_path, monkeypatch
+) -> None:
+    database = tmp_path / "margin.db"
+    monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
+    client.get("/api/grammar/topics", params={"language": "Spanish"})
+    now = datetime(2026, 9, 5, 12, tzinfo=UTC)
+    taught = SPANISH_GRAMMAR_TOPICS[61]
+
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        assert grammar_session_kinds_over_one_visit(
+            connection, "spanish", now, 1
+        ) == ["lesson"]
+        selection = select_grammar_topics(connection, "spanish", now)
+
+    assert selection is not None
+    kind, topics = selection
+    assert kind is GrammarSessionKind.REVIEW
+    assert len(topics) == GRAMMAR_REVIEW_TOPIC_LIMIT
+    assert taught.key not in {topic.key for topic in topics}
+
+
+def test_grammar_review_is_formed_even_when_no_topic_is_due(
+    tmp_path, monkeypatch
+) -> None:
+    """An owed review must never come back empty.
+
+    Restricting the review to `is_due` topics would deadlock the cycle: the
+    review could not be built, so it could not complete, so the language would
+    never advance past the review stage again.
+    """
+
+    database = tmp_path / "margin.db"
+    monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
+    client.get("/api/grammar/topics", params={"language": "Spanish"})
+    now = datetime(2026, 9, 5, 12, tzinfo=UTC)
+
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute(
+            """
+            INSERT INTO grammar_sessions (
+                id, canonical_language, kind, topic_keys_json, rule_summary,
+                worked_examples_json, created_at, completed_at
+            ) VALUES ('owed', 'spanish', 'lesson', '[]', '', '[]', ?, ?)
+            """,
+            (now.isoformat(), now.isoformat()),
+        )
+        connection.execute(
+            """
+            UPDATE grammar_reviews
+            SET last_reviewed_at = ?, next_review_at = '2999-01-01T00:00:00+00:00',
+                repetitions = 1
+            WHERE canonical_language = 'spanish'
+            """,
+            (now.isoformat(),),
+        )
+        selection = select_grammar_topics(connection, "spanish", now)
+
+    assert selection is not None
+    kind, topics = selection
+    assert kind is GrammarSessionKind.REVIEW
+    assert len(topics) == GRAMMAR_REVIEW_TOPIC_LIMIT
 
 
 def test_scheduled_grammar_review_includes_only_three_seen_topics(
@@ -370,6 +569,95 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
             (next_topic.key,),
         ).fetchone()
     assert progress == (1, 0)
+
+
+def test_finished_lesson_hands_straight_over_to_its_review(
+    tmp_path, monkeypatch
+) -> None:
+    """The client is told a review is queued, then served it."""
+
+    database = tmp_path / "margin.db"
+    monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
+    generated_kinds = []
+
+    def fake_structured(operation, **kwargs):
+        if operation == "grammar answer grading":
+            return json.dumps({"correct": True, "feedback": "Correct."})
+        # The prompt opens "Create a <kind> session."
+        generated_kinds.append(kwargs["messages"][1]["content"].split()[2])
+        topic_keys = [
+            line.split(":")[0].removeprefix("- ").strip()
+            for line in kwargs["messages"][1]["content"].splitlines()
+            if line.startswith("- ")
+        ]
+        slots = (
+            "multiple_choice_1", "multiple_choice_2", "multiple_choice_3",
+            "fill_blank_1", "fill_blank_2", "fill_blank_3",
+            "translation_1", "translation_2", "translation_3",
+        )
+        return json.dumps(
+            {
+                "rule_summary": "A concise explanation.",
+                "rule_tables": [],
+                "worked_examples": ["Example one.", "Example two."],
+                **{
+                    slot: {
+                        # Spread the nine exercises evenly over the topics given.
+                        "topic_key": topic_keys[index % len(topic_keys)],
+                        "instruction": "Use the target grammar.",
+                        "prompt": "Complete the task.",
+                        "choices": ["correct", "other", "another", "last"]
+                        if slot.startswith("multiple_choice")
+                        else [],
+                        "accepted_answers": ["correct"],
+                        "reference_answer": "correct",
+                        "grading_rubric": "The target structure must be correct.",
+                        "explanation": "This uses the target structure.",
+                    }
+                    for index, slot in enumerate(slots)
+                },
+            }
+        )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.anthropic_structured_model_response",
+        fake_structured,
+    )
+
+    def play_through_session() -> dict:
+        session = client.post(
+            "/api/grammar/session", json={"language": "Spanish"}
+        ).json()
+        result = {}
+        for _ in range(session["total"]):
+            current = client.post(
+                "/api/grammar/session", json={"language": "Spanish"}
+            ).json()
+            result = client.post(
+                f"/api/grammar/session/{current['id']}"
+                f"/exercises/{current['exercise']['id']}/answer",
+                json={"answer": "correct"},
+            ).json()
+        return {"kind": session["kind"], "topics": session["topics"], **result}
+
+    lesson = play_through_session()
+    assert lesson["kind"] == "lesson"
+    assert len(lesson["topics"]) == 1
+    assert lesson["session_complete"] is True
+    # The client uses this to offer "Continue to review" instead of "Finish".
+    assert lesson["next_session_kind"] == GrammarSessionKind.REVIEW.value
+
+    review = play_through_session()
+    assert review["kind"] == "review"
+    assert len(review["topics"]) == GRAMMAR_REVIEW_TOPIC_LIMIT
+    # Every reviewed rule offers its own explanation in the session payload.
+    assert all("summary" in topic for topic in review["topics"])
+    # The cycle is closed, so the sitting ends here.
+    assert review["next_session_kind"] is None
+    assert client.post(
+        "/api/grammar/session", json={"language": "Spanish"}
+    ).status_code == 404
+    assert generated_kinds == ["lesson", "review"]
 
 
 def test_grammar_topics_distinguish_seen_and_new(tmp_path, monkeypatch) -> None:

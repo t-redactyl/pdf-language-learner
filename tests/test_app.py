@@ -11,6 +11,7 @@ import wn
 from fastapi.testclient import TestClient
 
 from pdf_language_learner.app import (
+    GRAMMAR_CONTENT_VERSION,
     LOCAL_NOUN_GRAMMAR_CACHE,
     MULTI_WORD_TERMS,
     SourceNounGrammar,
@@ -43,7 +44,11 @@ from pdf_language_learner.app import (
     translation_model,
     wordnet_synonym_candidates,
 )
-from pdf_language_learner.grammar_revision import GrammarGrade
+from pdf_language_learner.grammar_revision import (
+    GRAMMAR_CYCLE_INTERVAL,
+    GRAMMAR_REVIEW_TOPIC_LIMIT,
+    GrammarGrade,
+)
 
 client = TestClient(app)
 
@@ -137,8 +142,8 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
     assert '/static/styles.css?v=48' in response.text
-    assert '/static/revision.js?v=41' in response.text
-    assert '/static/app.js?v=50' in response.text
+    assert '/static/revision.js?v=42' in response.text
+    assert '/static/app.js?v=51' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -161,10 +166,10 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=24' in app_script
-    assert './i18n.js?v=24' in revision_script
-    assert './i18n.js?v=24' in grammar_script
-    assert './grammar.js?v=15' in revision_script
+    assert './i18n.js?v=25' in app_script
+    assert './i18n.js?v=25' in revision_script
+    assert './i18n.js?v=25' in grammar_script
+    assert './grammar.js?v=16' in revision_script
     assert 'revisionMode === "grammar" ? "grammar.generating"' in revision_script
     assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
     assert '"grammar.checking": "Checking your answer…"' in i18n_script
@@ -2248,79 +2253,80 @@ def test_vocabulary_is_persisted(vocabulary_database) -> None:
     }
 
 
-def test_due_review_summary_counts_due_vocabulary_and_grammar(
-    vocabulary_database,
-) -> None:
-    initial = client.get("/api/revision/due")
-    assert initial.status_code == 200
+def test_due_review_summary_tracks_the_grammar_cycle(vocabulary_database) -> None:
+    """The reminder must describe the session the endpoint would actually serve.
+
+    These two used to be computed differently, which is why the home page
+    advertised grammar revision on days when no session could be started.
+    """
+
+    database = vocabulary_database / "margin.db"
     item = client.post("/api/vocabulary", json=vocabulary_payload()).json()["item"]
-    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
-        connection.execute(
-            "UPDATE grammar_reviews SET next_review_at = ?",
-            ("2999-08-01T12:00:00+00:00",),
-        )
-        connection.executemany(
-            """
-            INSERT INTO grammar_reviews (
-                canonical_language, topic_key, introduced_at, next_review_at
-            ) VALUES (?, ?, ?, ?)
-            """,
-            (
+
+    def complete_session(
+        session_id: str, language: str, kind: str, completed_at: datetime
+    ) -> None:
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                """
+                INSERT INTO grammar_sessions (
+                    id, canonical_language, kind, content_version, topic_keys_json,
+                    rule_summary, rule_tables_json, worked_examples_json,
+                    created_at, completed_at
+                ) VALUES (?, ?, ?, ?, '[]', '', '[]', '[]', ?, ?)
+                """,
                 (
-                    "german",
-                    f"reminder-test-due-{index}",
-                    "2026-08-01T12:00:00+00:00",
-                    "2000-08-01T12:00:00+00:00",
-                )
-                for index in range(4)
-            ),
-        )
+                    session_id,
+                    language,
+                    kind,
+                    GRAMMAR_CONTENT_VERSION,
+                    completed_at.isoformat(),
+                    completed_at.isoformat(),
+                ),
+            )
 
-    summary = client.get("/api/revision/due").json()
+    def close_cycle(language: str, completed_at: datetime) -> None:
+        complete_session(f"{language}-lesson", language, "lesson", completed_at)
+        complete_session(f"{language}-review", language, "review", completed_at)
 
-    assert summary == {
+    # Nothing studied yet: the cycle opens with a single new topic.
+    assert client.get("/api/revision/due").json() == {
         "vocabulary_count": 1,
-        "grammar_count": 3,
-        "grammar_review_count": 3,
-        "grammar_new_count": 0,
+        "grammar_count": 1,
+        "grammar_review_count": 0,
+        "grammar_new_count": 1,
     }
 
-    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
-        now = datetime.now(UTC).isoformat()
-        connection.execute(
-            """
-            INSERT INTO grammar_sessions (
-                id, canonical_language, kind, topic_keys_json, rule_summary,
-                rule_tables_json, worked_examples_json, created_at, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "recent-review",
-                "german",
-                "review",
-                "[]",
-                "Summary",
-                "[]",
-                "[]",
-                now,
-                now,
-            ),
-        )
-    assert client.get("/api/revision/due").json()["grammar_count"] == 0
+    # A finished German lesson leaves its three-topic review outstanding, and an
+    # outstanding review takes precedence over any language's next new topic.
+    now = datetime.now(UTC)
+    complete_session("german-lesson", "german", "lesson", now)
+    summary = client.get("/api/revision/due").json()
+    assert summary["grammar_new_count"] == 0
+    assert summary["grammar_review_count"] == GRAMMAR_REVIEW_TOPIC_LIMIT
+    assert summary["grammar_count"] == GRAMMAR_REVIEW_TOPIC_LIMIT
 
-    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
-        connection.execute(
-            """
-            UPDATE grammar_reviews SET next_review_at = NULL
-            WHERE canonical_language = 'spanish' AND topic_key = (
-                SELECT topic_key FROM grammar_reviews
-                WHERE canonical_language = 'spanish' LIMIT 1
-            )
-            """
-        )
-    spanish_due = client.get("/api/revision/due").json()
-    assert spanish_due["grammar_count"] == 1
-    assert spanish_due["grammar_review_count"] == 1
+    # Grammar only goes quiet once every language's cycle is closed.
+    complete_session("german-review", "german", "review", now)
+    assert client.get("/api/revision/due").json()["grammar_count"] == 1
+    close_cycle("spanish", now)
+    locked = client.get("/api/revision/due").json()
+    assert locked["grammar_count"] == 0
+    assert locked["grammar_review_count"] == 0
+    assert locked["grammar_new_count"] == 0
+    # The reminder and the session endpoint must agree about that.
+    for language in ("German", "Spanish"):
+        refused = client.post("/api/grammar/session", json={"language": language})
+        assert refused.status_code == 404
+        assert refused.json()["detail"] == "Your next grammar session is not due yet"
+
+    # Once the interval has passed, the next cycle opens with a new topic again.
+    elapsed = (now - GRAMMAR_CYCLE_INTERVAL).isoformat()
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE grammar_sessions SET completed_at = ?", (elapsed,))
+    unlocked = client.get("/api/revision/due").json()
+    assert unlocked["grammar_count"] == 1
+    assert unlocked["grammar_new_count"] == 1
 
     client.post(
         f"/api/revision/{item['id']}/answer",
@@ -2330,6 +2336,137 @@ def test_due_review_summary_counts_due_vocabulary_and_grammar(
         },
     )
     assert client.get("/api/revision/due").json()["vocabulary_count"] == 0
+
+
+def test_locked_grammar_does_not_offer_an_untouched_session(
+    vocabulary_database,
+) -> None:
+    """The lock also covers sessions generated before it existed.
+
+    The old selector minted a lesson the moment a review finished, so real
+    databases carry sessions the cycle would never have produced.  One nobody
+    has answered yet must not keep a locked language advertised.
+    """
+
+    now = datetime.now(UTC)
+    topic_key = client.get(
+        "/api/grammar/topics", params={"language": "German"}
+    ).json()[0]["key"]
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.executemany(
+            """
+            INSERT INTO grammar_sessions (
+                id, canonical_language, kind, content_version, topic_keys_json,
+                rule_summary, rule_tables_json, worked_examples_json,
+                created_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, '', '[]', '[]', ?, ?)
+            """,
+            (
+                (
+                    f"{language}-{kind}",
+                    language,
+                    kind,
+                    GRAMMAR_CONTENT_VERSION,
+                    "[]",
+                    now.isoformat(),
+                    now.isoformat(),
+                )
+                for language in ("german", "spanish")
+                for kind in ("lesson", "review")
+            ),
+        )
+        # The spurious leftover: a lesson nobody has started, on a locked day.
+        connection.execute(
+            """
+            INSERT INTO grammar_sessions (
+                id, canonical_language, kind, content_version, topic_keys_json,
+                rule_summary, rule_tables_json, worked_examples_json,
+                created_at, completed_at
+            ) VALUES ('leftover', 'german', 'lesson', ?, ?, '', '[]', '[]', ?, NULL)
+            """,
+            (GRAMMAR_CONTENT_VERSION, json.dumps([topic_key]), now.isoformat()),
+        )
+        connection.execute(
+            """
+            INSERT INTO grammar_exercises (
+                id, session_id, position, topic_key, exercise_type, instruction,
+                prompt, choices_json, tokens_json, accepted_answers_json,
+                reference_answer, grading_rubric, explanation
+            ) VALUES ('leftover-1', 'leftover', 1, ?, 'translation', '', '',
+                '[]', '[]', '[]', 'x', '', '')
+            """,
+            (topic_key,),
+        )
+
+    assert client.get("/api/revision/due").json()["grammar_count"] == 0
+    assert client.post(
+        "/api/grammar/session", json={"language": "German"}
+    ).status_code == 404
+
+    # Once the learner has answered something, the session is theirs to finish.
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            "INSERT INTO grammar_exercise_answers VALUES ('leftover-1', 'x', 1, '', ?)",
+            (now.isoformat(),),
+        )
+
+    assert client.get("/api/revision/due").json()["grammar_new_count"] == 1
+    resumed = client.post("/api/grammar/session", json={"language": "German"})
+    assert resumed.status_code == 200
+    assert resumed.json()["id"] == "leftover"
+
+
+def test_due_review_summary_reports_a_resumable_grammar_session(
+    vocabulary_database,
+) -> None:
+    """An abandoned session stays advertised, because it is still resumable."""
+
+    client.get("/api/grammar/topics", params={"language": "German"})
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.executemany(
+            """
+            INSERT INTO grammar_sessions (
+                id, canonical_language, kind, content_version, topic_keys_json,
+                rule_summary, rule_tables_json, worked_examples_json,
+                created_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, '', '[]', '[]', ?, ?)
+            """,
+            (
+                # German owes nothing, so the reminder must skip past it.
+                (
+                    "german-lesson",
+                    "german",
+                    "lesson",
+                    GRAMMAR_CONTENT_VERSION,
+                    "[]",
+                    datetime.now(UTC).isoformat(),
+                    datetime.now(UTC).isoformat(),
+                ),
+                (
+                    "german-review",
+                    "german",
+                    "review",
+                    GRAMMAR_CONTENT_VERSION,
+                    "[]",
+                    datetime.now(UTC).isoformat(),
+                    datetime.now(UTC).isoformat(),
+                ),
+                (
+                    "abandoned-spanish-review",
+                    "spanish",
+                    "review",
+                    GRAMMAR_CONTENT_VERSION,
+                    json.dumps(["one", "two", "three"]),
+                    datetime.now(UTC).isoformat(),
+                    None,
+                ),
+            ),
+        )
+
+    summary = client.get("/api/revision/due").json()
+
+    assert summary["grammar_review_count"] == 3
+    assert summary["grammar_new_count"] == 0
 
 
 def test_vocabulary_persists_ranked_synonyms(vocabulary_database) -> None:

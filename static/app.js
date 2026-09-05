@@ -1,6 +1,6 @@
 import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
 import { sentenceContext } from "./text.js?v=5";
-import { initI18n, languageName, t } from "./i18n.js?v=24";
+import { initI18n, languageName, t } from "./i18n.js?v=25";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
 const $ = (selector) => document.querySelector(selector);
@@ -182,11 +182,13 @@ function renderDueReviewReminder() {
   const vocabularyCount = dueReviewSummary.vocabulary_count || 0;
   const grammarCount = dueReviewSummary.grammar_count || 0;
   const grammarReviewCount = dueReviewSummary.grammar_review_count || 0;
+  const grammarNewCount = dueReviewSummary.grammar_new_count || 0;
   const vocabularyReminder = $("#vocabulary-review-reminder");
   const grammarReminder = $("#grammar-review-reminder");
-  reminders.hidden = vocabularyCount + grammarCount === 0;
-  vocabularyReminder.hidden = reminders.hidden;
-  grammarReminder.hidden = reminders.hidden;
+  // Each card is hidden on its own, so a locked grammar day advertises nothing.
+  vocabularyReminder.hidden = vocabularyCount === 0;
+  grammarReminder.hidden = grammarCount === 0;
+  reminders.hidden = vocabularyReminder.hidden && grammarReminder.hidden;
   const vocabularyButton = document.querySelector('[data-review-mode="vocabulary"]');
   const grammarButton = document.querySelector('[data-review-mode="grammar"]');
   vocabularyButton.disabled = vocabularyCount === 0;
@@ -196,11 +198,14 @@ function renderDueReviewReminder() {
       count: vocabularyCount,
     });
     $("#vocabulary-review-reminder-summary").textContent = t("reviewReminder.summary", { items });
-  } else {
-    $("#vocabulary-review-reminder-summary").textContent = t("reviewReminder.caughtUp");
   }
   if (grammarCount) {
     const items = [];
+    if (grammarNewCount) {
+      items.push(t(`reviewReminder.newTopic.${grammarNewCount === 1 ? "one" : "other"}`, {
+        count: grammarNewCount,
+      }));
+    }
     if (grammarReviewCount) {
       items.push(t(`reviewReminder.reviewTopic.${grammarReviewCount === 1 ? "one" : "other"}`, {
         count: grammarReviewCount,
@@ -209,8 +214,6 @@ function renderDueReviewReminder() {
     $("#grammar-review-reminder-summary").textContent = t("reviewReminder.nextSession", {
       items: items.join(" · "),
     });
-  } else {
-    $("#grammar-review-reminder-summary").textContent = t("reviewReminder.caughtUp");
   }
 }
 

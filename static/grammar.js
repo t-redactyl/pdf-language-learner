@@ -1,4 +1,4 @@
-import { t } from "./i18n.js?v=24";
+import { t } from "./i18n.js?v=25";
 
 const $ = selector => document.querySelector(selector);
 let activeSession = null;
@@ -97,6 +97,12 @@ export async function loadGrammarRevision(language) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ language }),
     }, controller);
+    if (response.status === 404) {
+      // A locked day is not a failure; the caller shows the caught-up state.
+      const notDue = new Error(data.detail || t("revision.nothingDue"));
+      notDue.name = "GrammarNotDueError";
+      throw notDue;
+    }
     if (!response.ok) throw new Error(data.detail || t("grammar.loadError"));
     if (controller.signal.aborted) return;
     activeSession = data;
@@ -341,15 +347,18 @@ async function submitGrammarAnswer(answer) {
     $("#grammar-reference-row").hidden = false;
     $("#grammar-explanation").textContent = result.explanation;
     $("#grammar-explanation").hidden = false;
-    if (result.session_complete) {
+    const nextSession = result.session_complete ? result.next_session_kind : null;
+    if (result.session_complete && !nextSession) {
       completedSessionSummary = {
         answered: activeSession.answered + 1,
         correct: activeSession.correct + Number(result.correct),
       };
     }
-    $("#grammar-continue").textContent = result.session_complete
-      ? t("grammar.finish")
-      : t("revision.continue");
+    $("#grammar-continue").textContent = nextSession
+      ? t(`grammar.continueTo.${nextSession}`)
+      : result.session_complete
+        ? t("grammar.finish")
+        : t("revision.continue");
     $("#grammar-continue").hidden = false;
     $("#grammar-feedback").hidden = false;
   } catch (error) {

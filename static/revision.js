@@ -3,12 +3,12 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=24";
+import { languageName, t } from "./i18n.js?v=25";
 import {
   cancelGrammarRequests,
   initializeGrammarRevision,
   loadGrammarRevision,
-} from "./grammar.js?v=15";
+} from "./grammar.js?v=16";
 
 const $ = selector => document.querySelector(selector);
 
@@ -220,7 +220,9 @@ async function loadRevisionSession() {
       await loadGrammarRevision(language);
       loading.hidden = true;
     } catch (error) {
-      if (error.name !== "AbortError") showRevisionError(error);
+      loading.hidden = true;
+      if (error.name === "GrammarNotDueError") showEmptySession();
+      else if (error.name !== "AbortError") showRevisionError(error);
     }
     return;
   }
