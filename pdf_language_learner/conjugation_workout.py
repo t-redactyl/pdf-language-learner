@@ -28,7 +28,7 @@ class ConjugationItem:
     topic_key: str
     lemma: str
     form: str
-    person: str
+    person: str | None
     answers: tuple[str, ...]
     note: str = ""
 
@@ -71,6 +71,34 @@ def _items(
     return result
 
 
+def _non_person_items(
+    language: GrammarLanguage,
+    topic_key: str,
+    form: str,
+    forms: dict[str, str | tuple[str, ...]],
+    *,
+    note: str = "",
+) -> list[ConjugationItem]:
+    """Build non-finite verb cards without pretending the lemma is a person."""
+    result = []
+    for lemma, answer in forms.items():
+        accepted = (answer,) if isinstance(answer, str) else answer
+        key = ":".join((_slug(topic_key), _slug(form), _slug(lemma), "non-person"))
+        result.append(
+            ConjugationItem(
+                key=key,
+                language=language,
+                topic_key=topic_key,
+                lemma=lemma,
+                form=form,
+                person=None,
+                answers=accepted,
+                note=note,
+            )
+        )
+    return result
+
+
 ES_PERSONS = ("yo", "tú", "él / ella / usted", "nosotros/as", "vosotros/as", "ellos / ellas / ustedes")
 DE_PERSONS = ("ich", "du", "er / sie / es", "wir", "ihr", "sie / Sie")
 
@@ -100,12 +128,50 @@ def _spanish_items() -> list[ConjugationItem]:
         "seguir": ("sigo", "sigues", "sigue", "seguimos", "seguís", "siguen"),
     }.items():
         paradigm("es_a1_u6_verbs_ir_estar_seguir", lemma, "presente", forms)
-    items.extend(_items(es, "es_a1_u7_irregular_first_person_verbs", "hacer / poner / salir / traer / decir / venir", "presente irregular (yo)", ("hacer", "poner", "salir", "traer", "decir", "venir"), ("hago", "pongo", "salgo", "traigo", "digo", "vengo")))
+    for lemma, answer in {
+        "hacer": "hago",
+        "poner": "pongo",
+        "salir": "salgo",
+        "traer": "traigo",
+        "decir": "digo",
+        "venir": "vengo",
+    }.items():
+        items.extend(
+            _items(
+                es,
+                "es_a1_u7_irregular_first_person_verbs",
+                lemma,
+                "presente irregular",
+                ("yo",),
+                (answer,),
+            )
+        )
     paradigm("es_a1_u7_perfect_tense", "comer", "pretérito perfecto", ("he comido", "has comido", "ha comido", "hemos comido", "habéis comido", "han comido"), "Include the auxiliary haber and the participle.")
-    items.extend(_items(es, "es_a1_u7_irregular_participles", "hacer / decir / poner / ver", "participio irregular", ("hacer", "decir", "poner", "ver"), ("hecho", "dicho", "puesto", "visto")))
+    items.extend(
+        _non_person_items(
+            es,
+            "es_a1_u7_irregular_participles",
+            "participio irregular",
+            {"hacer": "hecho", "decir": "dicho", "poner": "puesto", "ver": "visto"},
+        )
+    )
     paradigm("es_a1_u9_reflexive_verbs", "levantarse", "presente reflexivo", ("me levanto", "te levantas", "se levanta", "nos levantamos", "os levantáis", "se levantan"), "Include the reflexive pronoun.")
-    items.extend(_items(es, "es_a1_u9_gerund", "hablar / comer / escribir", "gerundio", ("hablar", "comer", "escribir"), ("hablando", "comiendo", "escribiendo")))
-    items.extend(_items(es, "es_a1_u9_irregular_gerunds", "decir / venir / dormir", "gerundio irregular", ("decir", "venir", "dormir"), ("diciendo", "viniendo", "durmiendo")))
+    items.extend(
+        _non_person_items(
+            es,
+            "es_a1_u9_gerund",
+            "gerundio",
+            {"hablar": "hablando", "comer": "comiendo", "escribir": "escribiendo"},
+        )
+    )
+    items.extend(
+        _non_person_items(
+            es,
+            "es_a1_u9_irregular_gerunds",
+            "gerundio irregular",
+            {"decir": "diciendo", "venir": "viniendo", "dormir": "durmiendo"},
+        )
+    )
     for lemma, forms in {
         "saber": ("sé", "sabes", "sabe", "sabemos", "sabéis", "saben"),
         "poder": ("puedo", "puedes", "puede", "podemos", "podéis", "pueden"),
@@ -232,6 +298,8 @@ def validate_conjugation_inventory(catalogues: Iterable[GrammarTopic]) -> None:
     for item in CONJUGATION_ITEMS:
         if topics[item.topic_key].language is not item.language:
             raise ValueError(f"Wrong language for conjugation item {item.key}")
+        if item.person in item.lemma.split(" / "):
+            raise ValueError(f"Lemma stored as person for conjugation item {item.key}")
 
 
 def normalize_conjugation_answer(value: str) -> str:

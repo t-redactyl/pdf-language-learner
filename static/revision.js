@@ -13,7 +13,7 @@ import {
   cancelConjugationRequests,
   initializeConjugationWorkout,
   loadConjugationWorkout,
-} from "./conjugation.js?v=1";
+} from "./conjugation.js?v=3";
 
 const $ = selector => document.querySelector(selector);
 

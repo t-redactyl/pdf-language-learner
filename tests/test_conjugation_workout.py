@@ -52,6 +52,51 @@ def test_grading_preserves_spanish_accents() -> None:
     assert grade_conjugation(item, "estudiais") is False
 
 
+def test_irregular_first_person_cards_have_one_lemma_and_yo_as_person() -> None:
+    items = [
+        item
+        for item in CONJUGATION_ITEMS
+        if item.topic_key == "es_a1_u7_irregular_first_person_verbs"
+    ]
+
+    assert [
+        (item.lemma, item.form, item.person, item.reference_answer) for item in items
+    ] == [
+        ("hacer", "presente irregular", "yo", "hago"),
+        ("poner", "presente irregular", "yo", "pongo"),
+        ("salir", "presente irregular", "yo", "salgo"),
+        ("traer", "presente irregular", "yo", "traigo"),
+        ("decir", "presente irregular", "yo", "digo"),
+        ("venir", "presente irregular", "yo", "vengo"),
+    ]
+
+
+def test_non_finite_cards_have_one_lemma_and_no_person() -> None:
+    expected = {
+        "es_a1_u7_irregular_participles": {
+            "hacer": "hecho",
+            "decir": "dicho",
+            "poner": "puesto",
+            "ver": "visto",
+        },
+        "es_a1_u9_gerund": {
+            "hablar": "hablando",
+            "comer": "comiendo",
+            "escribir": "escribiendo",
+        },
+        "es_a1_u9_irregular_gerunds": {
+            "decir": "diciendo",
+            "venir": "viniendo",
+            "dormir": "durmiendo",
+        },
+    }
+
+    for topic_key, forms in expected.items():
+        items = [item for item in CONJUGATION_ITEMS if item.topic_key == topic_key]
+        assert {item.lemma: item.reference_answer for item in items} == forms
+        assert all(item.person is None for item in items)
+
+
 def test_wrong_form_retries_now_and_correct_form_starts_short_interval() -> None:
     reviewed_at = datetime(2026, 9, 5, 12, tzinfo=UTC)
     wrong = schedule_conjugation(

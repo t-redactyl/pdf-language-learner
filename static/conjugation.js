@@ -74,7 +74,9 @@ function renderNext() {
   $("#conjugation-topic").textContent = `${current.level} · ${current.topic}`;
   $("#conjugation-lemma").textContent = current.lemma;
   $("#conjugation-form").textContent = current.form;
-  $("#conjugation-person").textContent = current.person;
+  const personCue = $("#conjugation-person-cue");
+  personCue.hidden = false;
+  $("#conjugation-person").textContent = current.person || "—";
   updateProgress();
   $("#conjugation-answer").focus();
 }

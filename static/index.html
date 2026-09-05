@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=49">
+  <link rel="stylesheet" href="/static/styles.css?v=50">
 </head>
 <body>
   <header class="topbar">
@@ -189,7 +189,7 @@
             <div class="conjugation-cues">
               <div><span data-i18n="conjugation.lemma">Dictionary form</span><strong id="conjugation-lemma"></strong></div>
               <div><span data-i18n="conjugation.form">Target form</span><strong id="conjugation-form"></strong></div>
-              <div><span data-i18n="conjugation.person">Person</span><strong id="conjugation-person"></strong></div>
+              <div id="conjugation-person-cue"><span data-i18n="conjugation.person">Person</span><strong id="conjugation-person"></strong></div>
             </div>
             <form id="conjugation-answer-form" class="revision-recall">
               <label for="conjugation-answer" data-i18n="conjugation.instruction">Type the complete verb form</label>
@@ -355,7 +355,7 @@
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
-  <script type="module" src="/static/revision.js?v=44"></script>
+  <script type="module" src="/static/revision.js?v=46"></script>
   <script type="module" src="/static/app.js?v=51"></script>
 </body>
 </html>
