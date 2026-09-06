@@ -11,6 +11,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Iterable
 
 from pdf_language_learner.grammar_topics import GrammarLanguage, GrammarTopic
@@ -19,6 +20,11 @@ from pdf_language_learner.revision import ScheduleState
 
 WORKOUT_LIMIT = 20
 CONJUGATION_INTERVAL_DAYS = (1, 3, 7, 14, 30, 60, 120)
+
+
+class ConjugationItemKind(StrEnum):
+    CONJUGATION = "conjugation"
+    VERB_PREPOSITION = "verb_preposition"
 
 
 @dataclass(frozen=True)
@@ -31,6 +37,8 @@ class ConjugationItem:
     person: str | None
     answers: tuple[str, ...]
     note: str = ""
+    kind: ConjugationItemKind = ConjugationItemKind.CONJUGATION
+    prompt: str = ""
 
     @property
     def reference_answer(self) -> str:
@@ -94,6 +102,42 @@ def _non_person_items(
                 person=None,
                 answers=accepted,
                 note=note,
+            )
+        )
+    return result
+
+
+def _verb_preposition_items(
+    topic_key: str,
+    entries: Iterable[tuple[str, str, str, str, str]],
+) -> list[ConjugationItem]:
+    """Build German cards that recall a verb's fixed preposition in context."""
+
+    result = []
+    for lemma, preposition, case, prompt, gloss in entries:
+        if prompt.count("___") != 1:
+            raise ValueError(f"Verb-preposition prompt needs one gap: {lemma}")
+        key = ":".join(
+            (
+                _slug(topic_key),
+                ConjugationItemKind.VERB_PREPOSITION.value,
+                _slug(lemma),
+                _slug(preposition),
+                _slug(case),
+            )
+        )
+        result.append(
+            ConjugationItem(
+                key=key,
+                language=GrammarLanguage.GERMAN,
+                topic_key=topic_key,
+                lemma=lemma,
+                form=case,
+                person=None,
+                answers=(preposition,),
+                note=f"{lemma} {preposition} + {case} · {gloss}",
+                kind=ConjugationItemKind.VERB_PREPOSITION,
+                prompt=prompt,
             )
         )
     return result
@@ -279,6 +323,84 @@ def _german_items() -> list[ConjugationItem]:
     for form, forms in overview.items():
         paradigm("b2c1_ueberblick_zeiten", "machen", form, forms, "Supply the complete verb phrase.")
     items.extend(_items(de, "b2c1_modalverben_vermutungen_vergangenheit", "zu Fuß gehen", "Vermutung über die Vergangenheit", ("sie (Singular)",), ("muss zu Fuß gegangen sein",), note="Supply the modal construction."))
+
+    # High-utility selection sourced and case-checked against Mein Deutschbuch's
+    # "Liste der Verben mit festen Präpositionen" (accessed 2026-09-06):
+    # https://mein-deutschbuch.de/verben-mit-praepositionalergaenzungen.html
+    # Prompts and English glosses below are original to this project.
+    items.extend(
+        _verb_preposition_items(
+            "b2c1_verben_nomen_adjektive_mit_praepositionen",
+            (
+                ("warten", "auf", "Akkusativ", "Wir warten ___ den nächsten Bus.", "to wait for"),
+                ("denken", "an", "Akkusativ", "Denkst du oft ___ deine Kindheit?", "to think about"),
+                ("sich freuen", "auf", "Akkusativ", "Die Kinder freuen sich ___ die Ferien.", "to look forward to"),
+                ("sich interessieren", "für", "Akkusativ", "Er interessiert sich ___ moderne Architektur.", "to be interested in"),
+                ("sprechen", "mit", "Dativ", "Ich spreche morgen ___ meiner Chefin.", "to speak with"),
+                ("sprechen", "über", "Akkusativ", "Wir sprechen ___ das neue Projekt.", "to talk about"),
+                ("träumen", "von", "Dativ", "Sie träumt ___ einer langen Reise.", "to dream of"),
+                ("teilnehmen", "an", "Dativ", "Möchtest du ___ dem Workshop teilnehmen?", "to take part in"),
+                ("abhängen", "von", "Dativ", "Der Termin hängt ___ dem Wetter ab.", "to depend on"),
+                ("sich erinnern", "an", "Akkusativ", "Ich erinnere mich ___ unseren ersten Schultag.", "to remember"),
+                ("bitten", "um", "Akkusativ", "Sie bittet ___ eine kurze Pause.", "to ask for"),
+                ("anfangen", "mit", "Dativ", "Wir fangen ___ der einfachsten Aufgabe an.", "to start with"),
+            ),
+        )
+    )
+    items.extend(
+        _verb_preposition_items(
+            "b2c1_feste_praepositionen_akkusativ",
+            (
+                ("achten", "auf", "Akkusativ", "Bitte achten Sie ___ den Verkehr.", "to pay attention to"),
+                ("ankommen", "auf", "Akkusativ", "Es kommt ___ die Einzelheiten an.", "to depend on"),
+                ("antworten", "auf", "Akkusativ", "Er antwortet nicht ___ meine Frage.", "to answer"),
+                ("sich ärgern", "über", "Akkusativ", "Ich ärgere mich ___ den Lärm.", "to be annoyed about"),
+                ("aufpassen", "auf", "Akkusativ", "Kannst du ___ meinen Hund aufpassen?", "to look after"),
+                ("sich aufregen", "über", "Akkusativ", "Sie regt sich ___ die Verspätung auf.", "to get upset about"),
+                ("sich bemühen", "um", "Akkusativ", "Wir bemühen uns ___ eine schnelle Lösung.", "to strive for"),
+                ("berichten", "über", "Akkusativ", "Die Zeitung berichtet ___ den Vorfall.", "to report on"),
+                ("sich bewerben", "um", "Akkusativ", "Er bewirbt sich ___ die Stelle.", "to apply for"),
+                ("sich entscheiden", "für", "Akkusativ", "Sie entscheidet sich ___ das günstigere Angebot.", "to decide on"),
+                ("sich freuen", "über", "Akkusativ", "Ich freue mich ___ deinen Besuch.", "to be pleased about"),
+                ("glauben", "an", "Akkusativ", "Glaubst du ___ ein Leben auf anderen Planeten?", "to believe in"),
+                ("hoffen", "auf", "Akkusativ", "Wir hoffen ___ besseres Wetter.", "to hope for"),
+                ("sich informieren", "über", "Akkusativ", "Er informiert sich ___ die Behandlung.", "to find out about"),
+                ("sich kümmern", "um", "Akkusativ", "Wer kümmert sich ___ die Gäste?", "to take care of"),
+                ("lachen", "über", "Akkusativ", "Alle lachen ___ seinen Witz.", "to laugh about"),
+                ("nachdenken", "über", "Akkusativ", "Ich denke noch ___ deinen Vorschlag nach.", "to think over"),
+                ("sich vorbereiten", "auf", "Akkusativ", "Wir bereiten uns ___ die Prüfung vor.", "to prepare for"),
+                ("sich verlassen", "auf", "Akkusativ", "Du kannst dich ___ mich verlassen.", "to rely on"),
+                ("verfügen", "über", "Akkusativ", "Das Hotel verfügt ___ einen großen Garten.", "to have at one's disposal"),
+            ),
+        )
+    )
+    items.extend(
+        _verb_preposition_items(
+            "b2c1_feste_praepositionen_dativ",
+            (
+                ("arbeiten", "an", "Dativ", "Sie arbeitet ___ einem neuen Roman.", "to work on"),
+                ("aufhören", "mit", "Dativ", "Bitte hör ___ dem Rauchen auf.", "to stop"),
+                ("sich bedanken", "bei", "Dativ", "Ich bedanke mich ___ meiner Nachbarin.", "to thank someone"),
+                ("beginnen", "mit", "Dativ", "Der Kurs beginnt ___ einer Wiederholung.", "to begin with"),
+                ("sich erholen", "von", "Dativ", "Er erholt sich ___ der Operation.", "to recover from"),
+                ("sich erkundigen", "nach", "Dativ", "Ich erkundige mich ___ dem nächsten Zug.", "to ask about"),
+                ("fliehen", "vor", "Dativ", "Viele Tiere fliehen ___ dem Feuer.", "to flee from"),
+                ("gehören", "zu", "Dativ", "Dieses Kabel gehört ___ dem Drucker.", "to belong to"),
+                ("gratulieren", "zu", "Dativ", "Wir gratulieren dir ___ deinem Erfolg.", "to congratulate on"),
+                ("helfen", "bei", "Dativ", "Kannst du mir ___ den Vorbereitungen helfen?", "to help with"),
+                ("leben", "von", "Dativ", "Die Familie lebt ___ einem kleinen Einkommen.", "to live on"),
+                ("leiden", "an", "Dativ", "Sie leidet ___ einer seltenen Krankheit.", "to suffer from"),
+                ("leiden", "unter", "Dativ", "Viele Menschen leiden ___ dem starken Verkehrslärm.", "to suffer under"),
+                ("passen", "zu", "Dativ", "Die Schuhe passen gut ___ deinem Kleid.", "to go with"),
+                ("rechnen", "mit", "Dativ", "Wir rechnen ___ einer längeren Wartezeit.", "to expect"),
+                ("riechen", "nach", "Dativ", "Die Küche riecht ___ frischem Brot.", "to smell of"),
+                ("sich sehnen", "nach", "Dativ", "Er sehnt sich ___ seiner Familie.", "to long for"),
+                ("suchen", "nach", "Dativ", "Die Polizei sucht ___ einem Zeugen.", "to search for"),
+                ("warnen", "vor", "Dativ", "Sie warnen uns ___ der glatten Straße.", "to warn about"),
+                ("zweifeln", "an", "Dativ", "Niemand zweifelt ___ seiner Ehrlichkeit.", "to doubt"),
+            ),
+        )
+    )
     return items
 
 
@@ -300,6 +422,11 @@ def validate_conjugation_inventory(catalogues: Iterable[GrammarTopic]) -> None:
             raise ValueError(f"Wrong language for conjugation item {item.key}")
         if item.person in item.lemma.split(" / "):
             raise ValueError(f"Lemma stored as person for conjugation item {item.key}")
+        if item.kind is ConjugationItemKind.VERB_PREPOSITION:
+            if item.language is not GrammarLanguage.GERMAN:
+                raise ValueError(f"Non-German verb-preposition item {item.key}")
+            if item.person is not None or not item.prompt:
+                raise ValueError(f"Malformed verb-preposition item {item.key}")
 
 
 def normalize_conjugation_answer(value: str) -> str:

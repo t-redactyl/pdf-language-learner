@@ -3,17 +3,17 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=26";
+import { languageName, t } from "./i18n.js?v=27";
 import {
   cancelGrammarRequests,
   initializeGrammarRevision,
   loadGrammarRevision,
-} from "./grammar.js?v=16";
+} from "./grammar.js?v=17";
 import {
   cancelConjugationRequests,
   initializeConjugationWorkout,
   loadConjugationWorkout,
-} from "./conjugation.js?v=3";
+} from "./conjugation.js?v=4";
 
 const $ = selector => document.querySelector(selector);
 

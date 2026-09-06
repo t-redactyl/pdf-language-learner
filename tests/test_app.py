@@ -144,9 +144,9 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=50' in response.text
-    assert '/static/revision.js?v=46' in response.text
-    assert '/static/app.js?v=51' in response.text
+    assert '/static/styles.css?v=51' in response.text
+    assert '/static/revision.js?v=47' in response.text
+    assert '/static/app.js?v=52' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -170,16 +170,17 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=26' in app_script
-    assert './i18n.js?v=26' in revision_script
-    assert './i18n.js?v=26' in grammar_script
-    assert './grammar.js?v=16' in revision_script
+    assert './i18n.js?v=27' in app_script
+    assert './i18n.js?v=27' in revision_script
+    assert './i18n.js?v=27' in grammar_script
+    assert './grammar.js?v=17' in revision_script
     assert '"conjugation.preparing"' in revision_script
-    assert './conjugation.js?v=3' in revision_script
-    assert './i18n.js?v=26' in conjugation_script
+    assert './conjugation.js?v=4' in revision_script
+    assert './i18n.js?v=27' in conjugation_script
     assert '/api/conjugation/session' in conjugation_script
-    assert 'personCue.hidden = false' in conjugation_script
-    assert 'current.person || "—"' in conjugation_script
+    assert 'personCue.hidden = !current.person' in conjugation_script
+    assert 'current.kind === "verb_preposition"' in conjugation_script
+    assert '"conjugation.prepositionInstruction"' in conjugation_script
     assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
     assert '"grammar.checking": "Checking your answer…"' in i18n_script
     assert "const GRAMMAR_REQUEST_TIMEOUT_MS = 190_000" in grammar_script

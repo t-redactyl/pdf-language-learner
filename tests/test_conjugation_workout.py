@@ -8,6 +8,7 @@ from pdf_language_learner.conjugation_workout import (
     CONJUGATION_ITEMS,
     CONJUGATION_ITEMS_BY_KEY,
     CONJUGATION_TOPIC_KEYS,
+    ConjugationItemKind,
     grade_conjugation,
     schedule_conjugation,
     validate_conjugation_inventory,
@@ -24,7 +25,7 @@ def test_inventory_is_stable_unique_and_backed_by_the_two_catalogues() -> None:
     validate_conjugation_inventory((*GRAMMAR_TOPICS, *SPANISH_GRAMMAR_TOPICS))
 
     assert len(CONJUGATION_ITEMS) == len(CONJUGATION_ITEMS_BY_KEY)
-    assert len(CONJUGATION_ITEMS) == 441
+    assert len(CONJUGATION_ITEMS) == 493
     assert all(item.answers for item in CONJUGATION_ITEMS)
     assert {
         "a1b1_praeteritum_perfekt",
@@ -39,6 +40,33 @@ def test_inventory_is_stable_unique_and_backed_by_the_two_catalogues() -> None:
         "es_a2_u9_future_tense",
         "es_a2_u10_conditional",
     } <= CONJUGATION_TOPIC_KEYS
+
+
+def test_german_verb_preposition_inventory_is_audited_and_contextual() -> None:
+    items = [
+        item
+        for item in CONJUGATION_ITEMS
+        if item.kind is ConjugationItemKind.VERB_PREPOSITION
+    ]
+
+    assert len(items) == 52
+    assert {item.language.value for item in items} == {"german"}
+    assert sum(item.form == "Akkusativ" for item in items) == 27
+    assert sum(item.form == "Dativ" for item in items) == 25
+    assert all(item.person is None for item in items)
+    assert all(item.prompt.count("___") == 1 for item in items)
+    assert {
+        (item.lemma, item.reference_answer, item.form) for item in items
+    } >= {
+        ("warten", "auf", "Akkusativ"),
+        ("teilnehmen", "an", "Dativ"),
+        ("sich interessieren", "für", "Akkusativ"),
+        ("träumen", "von", "Dativ"),
+    }
+
+    warten = next(item for item in items if item.lemma == "warten")
+    assert grade_conjugation(warten, " AUF. ") is True
+    assert grade_conjugation(warten, "an") is False
 
 
 def test_grading_preserves_spanish_accents() -> None:
@@ -129,6 +157,8 @@ def test_conjugation_api_interleaves_topics_and_schedules_each_form(
         card["topic_key"] for card in session["cards"]
     }
     assert all("reference_answer" not in card for card in session["cards"])
+    assert all(card["kind"] == "conjugation" for card in session["cards"])
+    assert all(card["prompt"] == "" for card in session["cards"])
 
     card = session["cards"][0]
     expected = CONJUGATION_ITEMS_BY_KEY[card["key"]].reference_answer
@@ -200,9 +230,52 @@ def test_conjugation_topics_endpoint_reports_the_audited_inventory(
     topics = client.get(
         "/api/conjugation/topics", params={"language": "German"}
     ).json()
-    assert sum(topic["forms"] for topic in topics) == 244
+    assert sum(topic["forms"] for topic in topics) == 296
     assert {topic["key"] for topic in topics} == {
         item.topic_key for item in CONJUGATION_ITEMS if item.language.value == "german"
     }
     assert any(topic["unlocked"] for topic in topics)
     assert any(not topic["unlocked"] for topic in topics)
+
+
+def test_german_preposition_cards_unlock_and_use_existing_review_api(
+    tmp_path, monkeypatch
+) -> None:
+    database = tmp_path / "margin.db"
+    monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
+    topic_key = "b2c1_verben_nomen_adjektive_mit_praepositionen"
+
+    # Initialise the database, then introduce the matching grammar topic.
+    assert client.get(
+        "/api/conjugation/topics", params={"language": "German"}
+    ).status_code == 200
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO grammar_reviews (
+                canonical_language, topic_key, introduced_at
+            ) VALUES ('german', ?, ?)
+            """,
+            (topic_key, datetime.now(UTC).isoformat()),
+        )
+
+    response = client.get(
+        "/api/conjugation/session",
+        params={"language": "German", "topics": topic_key, "limit": 12},
+    )
+    assert response.status_code == 200
+    cards = response.json()["cards"]
+    assert len(cards) == 12
+    assert {card["kind"] for card in cards} == {"verb_preposition"}
+    assert all(card["prompt"].count("___") == 1 for card in cards)
+    assert all(card["person"] is None for card in cards)
+    assert all(card["form"] in {"Akkusativ", "Dativ"} for card in cards)
+    assert all("reference_answer" not in card for card in cards)
+
+    card = next(card for card in cards if card["lemma"] == "warten")
+    answer = client.post(
+        f"/api/conjugation/items/{card['key']}/answer", json={"answer": "auf"}
+    )
+    assert answer.status_code == 200
+    assert answer.json()["correct"] is True
+    assert answer.json()["reference_answer"] == "auf"

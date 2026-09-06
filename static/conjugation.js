@@ -1,4 +1,4 @@
-import { t } from "./i18n.js?v=26";
+import { t } from "./i18n.js?v=27";
 
 const $ = selector => document.querySelector(selector);
 let queue = [];
@@ -74,9 +74,19 @@ function renderNext() {
   $("#conjugation-topic").textContent = `${current.level} · ${current.topic}`;
   $("#conjugation-lemma").textContent = current.lemma;
   $("#conjugation-form").textContent = current.form;
+  const prepositionCard = current.kind === "verb_preposition";
+  $("#conjugation-form-label").textContent = t(
+    prepositionCard ? "conjugation.requiredCase" : "conjugation.form"
+  );
+  $("#conjugation-instruction").textContent = t(
+    prepositionCard ? "conjugation.prepositionInstruction" : "conjugation.instruction"
+  );
   const personCue = $("#conjugation-person-cue");
-  personCue.hidden = false;
-  $("#conjugation-person").textContent = current.person || "—";
+  personCue.hidden = !current.person;
+  $("#conjugation-person").textContent = current.person || "";
+  const prompt = $("#conjugation-prompt");
+  prompt.hidden = !current.prompt;
+  prompt.textContent = current.prompt || "";
   updateProgress();
   $("#conjugation-answer").focus();
 }

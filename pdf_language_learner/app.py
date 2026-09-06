@@ -4223,6 +4223,8 @@ def start_conjugation_session(
                 "form": item.form,
                 "person": item.person,
                 "note": item.note,
+                "kind": item.kind.value,
+                "prompt": item.prompt,
             }
             for item in items
         ],
