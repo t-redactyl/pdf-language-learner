@@ -144,20 +144,21 @@ def test_grammar_topic_summary_is_brief_english_prose() -> None:
     assert "Nebensätze mit weil, wenn, dass" in messages[1]["content"]
 
 
-def test_grammar_vocabulary_prefers_most_recently_reviewed_items(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("language", ["German", "Spanish"])
+def test_grammar_vocabulary_requires_five_total_correct_answers(
+    tmp_path, monkeypatch, language
 ) -> None:
     database = tmp_path / "margin.db"
     monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
     item_ids = {}
-    for word in ("older review", "newer review", "never reviewed"):
+    for word in ("older review", "newer review", "four correct", "never reviewed"):
         response = client.post(
             "/api/vocabulary",
             json={
                 "original_source": word,
                 "normalized_source": word,
                 "translation": word,
-                "source_language": "German",
+                "source_language": language,
                 "target_language": "English",
             },
         )
@@ -166,30 +167,30 @@ def test_grammar_vocabulary_prefers_most_recently_reviewed_items(
 
     with sqlite3.connect(database) as connection:
         connection.row_factory = sqlite3.Row
+        table = f"vocabulary_{language.lower()}"
         connection.executemany(
-            """
-            UPDATE vocabulary_german
-            SET saved_at = ?, last_reviewed_at = ?
+            f"""
+            UPDATE {table}
+            SET saved_at = ?, last_reviewed_at = ?, repetitions = ?,
+                consecutive_correct = ?, lapses = ?
             WHERE id = ?
             """,
             (
-                ("2026-08-03T12:00:00+00:00", "2026-08-30T12:00:00+00:00", item_ids["older review"]),
-                ("2026-08-01T12:00:00+00:00", "2026-09-01T12:00:00+00:00", item_ids["newer review"]),
-                ("2026-09-02T12:00:00+00:00", None, item_ids["never reviewed"]),
+                ("2026-08-03T12:00:00+00:00", "2026-08-30T12:00:00+00:00", 6, 6, 0, item_ids["older review"]),
+                # A later mistake does not erase the five lifetime successes.
+                ("2026-08-01T12:00:00+00:00", "2026-09-01T12:00:00+00:00", 5, 0, 1, item_ids["newer review"]),
+                ("2026-09-02T12:00:00+00:00", "2026-09-02T12:00:00+00:00", 4, 4, 0, item_ids["four correct"]),
+                ("2026-09-03T12:00:00+00:00", None, 0, 0, 0, item_ids["never reviewed"]),
             ),
         )
 
-        assert saved_grammar_vocabulary(connection, "German") == [
+        assert saved_grammar_vocabulary(connection, language) == [
             "newer review",
             "older review",
         ]
 
-        connection.execute("UPDATE vocabulary_german SET last_reviewed_at = NULL")
-        assert saved_grammar_vocabulary(connection, "German") == [
-            "never reviewed",
-            "older review",
-            "newer review",
-        ]
+        connection.execute(f"UPDATE {table} SET repetitions = 0")
+        assert saved_grammar_vocabulary(connection, language) == []
 
 
 def test_grammar_scheduler_uses_topic_level_intervals() -> None:
