@@ -24,6 +24,7 @@ from pdf_language_learner.app import (
     cached_model_translation,
     cached_ranked_synonyms,
     cached_source_noun_grammar,
+    capture_model_usage,
     cached_verb_lemma_decision,
     dictionary_synonym_candidates,
     enrich_connector_sentence,
@@ -42,6 +43,7 @@ from pdf_language_learner.app import (
     part_of_speech_filtered_synonym_candidates,
     stanza_pipeline,
     strict_json_schema,
+    timed_openai_response,
     translation_model,
     wordnet_synonym_candidates,
 )
@@ -434,6 +436,33 @@ def test_strict_json_schema_requires_all_object_properties() -> None:
     assert strict["additionalProperties"] is False
     assert strict["properties"]["detail"]["required"] == ["gender"]
     assert strict["properties"]["detail"]["additionalProperties"] is False
+
+
+def test_model_usage_capture_includes_hidden_reasoning(monkeypatch) -> None:
+    usage = SimpleNamespace(
+        input_tokens=1200,
+        output_tokens=5000,
+        total_tokens=6200,
+        output_tokens_details=SimpleNamespace(reasoning_tokens=4300),
+    )
+    response = SimpleNamespace(output_text="{}", usage=usage)
+    client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **kwargs: response)
+    )
+
+    with capture_model_usage() as captured:
+        assert timed_openai_response(
+            client, "grammar session quality review", model="judge-model"
+        ) is response
+
+    assert captured == {
+        "grammar session quality review [judge-model]": {
+            "calls": 1,
+            "input_tokens": 1200,
+            "output_tokens": 5000,
+            "reasoning_tokens": 4300,
+        }
+    }
 
 
 def test_identical_translation_requests_reuse_cached_model_result(monkeypatch) -> None:

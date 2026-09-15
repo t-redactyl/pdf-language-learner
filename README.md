@@ -54,6 +54,11 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | `OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS` | `20000`               | Grammar generation token ceiling             |
 | `OPENAI_GRAMMAR_GENERATION_EFFORT` | `xhigh`                | Reasoning effort for lesson generation       |
 | `OPENAI_GRAMMAR_GRADING_EFFORT` | `high`                    | Reasoning effort for open-ended grading      |
+| `OPENAI_GRAMMAR_JUDGE_MODEL`   | `gpt-5.4`                  | Independent exercise-quality judge           |
+| `OPENAI_GRAMMAR_JUDGE_EFFORT`  | `low`                      | Reasoning effort for the quality judge        |
+| `OPENAI_GRAMMAR_JUDGE_MAX_OUTPUT_TOKENS` | `6000`             | Judge reasoning and response token budget     |
+| `OPENAI_GRAMMAR_REPAIR_EFFORT` | `low`                      | Reasoning effort for targeted repairs         |
+| `OPENAI_GRAMMAR_REPAIR_MAX_OUTPUT_TOKENS` | `8000`            | Targeted-repair token ceiling                 |
 | `MARGIN_DATABASE_PATH`         | `/data/margin.db`          | Vocabulary database location                 |
 | `MARGIN_OPEN_THESAURUS_PATH`   | `/data/openthesaurus.txt`  | German thesaurus location                    |
 | `STANZA_RESOURCES_DIR`         | `/data/stanza`             | Stanza model directory                       |
@@ -117,8 +122,9 @@ saved in that browser's local storage. Reports are checkpointed after every
 model response and ignored by Git. Use `--all` explicitly to generate the full
 catalogue; this guard helps prevent accidental API spend.
 
-There is no startup model request, so starting or restarting the Space incurs no
-OpenAI charge. OpenAI request and Stanza initialization/inference timings are
+Starting or restarting the Space resumes any missing grammar preparation for
+languages with practice history or an active lesson. An untouched language makes
+no automatic model requests. OpenAI request and Stanza initialization/inference timings are
 written to the server log. Repeated
 word analyses, grammatical classifications, and exact translation requests are
 held in bounded in-memory caches for the lifetime of the server process. Source
@@ -126,6 +132,72 @@ noun grammar and target translation keep their separate prompts but are issued
 concurrently.
 When a document's source language becomes known, the browser also asks the server
 to prepare just that language's Stanza pipeline in the background.
+
+## Grammar preparation
+
+After grammar practice finishes, Margin prepares the next new-rule lesson and
+its three-topic review during the two-day pause. It uses the catalogue's next
+unseen rule, the usual review priorities, and a snapshot of familiar saved
+vocabulary (at least five correct vocabulary answers). Both German and Spanish
+are supported. Once a catalogue is complete, it prepares the next review only.
+Starting a first lesson also queues its review while the learner works.
+
+Prepared exercises live in SQLite and survive restarts with the same database.
+They do not introduce rules, update scores, or unlock practice early. When a
+session is due, Margin checks its topics, progress, and content version before
+using the prepared exercises. A changed selection or missing result falls back
+to normal generation. New vocabulary alone does not discard a prepared session.
+
+Preparation runs in the server process without needing an open browser, using
+the existing grammar model and ordinary API requests. It keeps at most one
+lesson and one review per language, retries missing or failed work every five
+minutes, and resumes after a restart. The server must be running to prepare
+exercises; a sleeping Space catches up when it wakes. Use one Uvicorn worker
+(the deployment default) so background and on-demand generation share locks.
+
+Every newly generated lesson and review now passes through an independent LLM
+judge before being saved. The judge checks all fifteen exercises, the rule
+explanation, tables, and examples for natural vocabulary and collocations,
+plausible meanings, correct grammar, clear instructions, valid answer keys, and
+fit to the selected topic and level. Saved vocabulary is optional: both models
+are instructed to omit words that would make an exercise unnatural.
+
+The generator receives concrete feedback and can revise the session once.
+Repairs use a restricted schema containing only exercises with blocking findings
+and an optional replacement lesson section. Other exercises are preserved by the
+application. Each revision is judged with the previous findings and the actual
+change list, so the judge checks fixes and regressions using the same standards.
+Findings distinguish blocking errors from optional suggestions; suggestions are
+retained in the report but do not prevent approval. The judge uses the actual
+grading policy, including case-insensitive closed-answer matching and translation
+grading against the whole prompt, reference, and rubric together.
+Only approved content is saved; if
+review fails or the judge is unavailable, background preparation retries later
+and on-demand generation reports a failure. This also applies to the preview
+script. Judge feedback, the model name, and final approval are retained in the
+prepared content and the session's `quality_review_json` for inspection. Older
+prepared exercises are regenerated; sessions with answers already recorded remain
+resumable. This is an automated quality filter, not a guarantee of correctness.
+
+The judge uses `OPENAI_GRAMMAR_JUDGE_MODEL`, independently of the generator's
+`OPENAI_GRAMMAR_MODEL`. These additional model calls add cost and generation time,
+usually during the background preparation window. The default judge uses the
+existing OpenAI credentials and grammar request timeout.
+
+Empty, truncated, or malformed responses retry once at the failed step. Judges
+and targeted repairs preserve the current draft
+and feedback. When the API reports output-token exhaustion (reasoning uses this
+budget too), the retry keeps the configured ceiling and lowers reasoning effort
+to leave room for the structured response. Token ceilings are never increased
+implicitly. Refusals and content-filter failures are not retried. Final
+errors identify the operation and retain provider status and token diagnostics.
+
+The preview report displays judge feedback and approval status directly. If a
+sample still fails, its last valid draft and available feedback remain visible
+for human inspection, clearly marked as unapproved. Such drafts are never saved
+as practice sessions. The command still exits with a failure status if any sample
+failed. Translation accepted-answer lists are illustrative: the judge checks the
+rubric's flexibility rather than requiring every equivalent wording in the list.
 
 ## Design choices
 

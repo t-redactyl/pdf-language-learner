@@ -7,17 +7,19 @@ import hashlib
 import html
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
 
 from pdf_language_learner.grammar_revision import (
     GrammarGeneratedSession,
+    GrammarGenerationFailure,
     GrammarSessionKind,
     grammar_generation_messages,
 )
 from pdf_language_learner.grammar_topics import GrammarTopic
+from pdf_language_learner.grammar_quality import GrammarQualityVerdict
 
 
 REVIEW_CRITERIA = (
@@ -39,6 +41,8 @@ class GrammarPreviewResult:
     prompt_sha256: str
     generated: GrammarGeneratedSession | None = None
     error: str | None = None
+    verdicts: tuple[GrammarQualityVerdict, ...] = ()
+    usage: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def select_preview_topics(
@@ -158,6 +162,35 @@ def _render_review_form() -> str:
     )
 
 
+def _render_judge_feedback(result: GrammarPreviewResult) -> str:
+    review = result.generated.quality_review if result.generated else None
+    verdicts = review.verdicts if review else result.verdicts
+    if not verdicts:
+        return ""
+    status = (
+        f"Approved after {len(verdicts) - 1} revision(s). Judge: {_escape(review.model)}."
+        if review else "Not approved for practice. Judge feedback is shown for human review."
+    )
+    rounds = []
+    for index, verdict in enumerate(verdicts):
+        issues = [("Lesson", issue) for issue in verdict.lesson_issues]
+        issues.extend(
+            (f"Exercise {exercise.position}", issue)
+            for exercise in verdict.exercises for issue in exercise.issues
+        )
+        findings = "".join(
+            f"<li><strong>{location} · {_escape(issue.category)} · {_escape(issue.severity)}</strong>: "
+            f"{_escape(issue.problem)}<br>Suggested fix: {_escape(issue.suggested_fix)}</li>"
+            for location, issue in issues
+        )
+        rounds.append(
+            f"<details><summary>Revision {index}: {'approved' if verdict.approved else 'needs revision'}</summary>"
+            + (f"<ul>{findings}</ul>" if findings else "<p>No issues identified.</p>")
+            + "</details>"
+        )
+    return f'<section class="review"><h3>LLM quality review</h3><p>{status}</p>{"".join(rounds)}</section>'
+
+
 def _render_result(result: GrammarPreviewResult) -> str:
     preview_id = f"{result.topic.key}:{result.sample}"
     heading = (
@@ -170,13 +203,29 @@ def _render_result(result: GrammarPreviewResult) -> str:
         f"{_escape(result.generated_at.astimezone(UTC).isoformat())} · "
         f"prompt {_escape(result.prompt_sha256[:12])}"
     )
-    if result.error is not None:
-        return (
-            f'<section class="preview error" data-preview-id="{_escape(preview_id)}">'
-            f"<h2>{heading}</h2><p class=\"meta\">{metadata}</p>"
-            f"<pre>{_escape(result.error)}</pre></section>"
+    if result.usage:
+        total_calls = sum(item["calls"] for item in result.usage.values())
+        total_input = sum(item["input_tokens"] for item in result.usage.values())
+        total_output = sum(item["output_tokens"] for item in result.usage.values())
+        total_reasoning = sum(item["reasoning_tokens"] for item in result.usage.values())
+        metadata += (
+            f" · {total_calls} model calls · {total_input:,} input tokens · "
+            f"{total_output:,} output tokens ({total_reasoning:,} reasoning)"
         )
+    warning = (
+        '<p><strong>Not approved for practice.</strong> '
+        'Any draft below is retained only for human inspection.</p>'
+        f"<pre>{_escape(result.error)}</pre>"
+        if result.error is not None else ""
+    )
+    opening = (
+        f'<section class="preview{" error" if result.error else ""}" data-preview-id="{_escape(preview_id)}">'
+        f"<h2>{heading}</h2><p class=\"meta\">{metadata}</p>{warning}"
+        + _render_judge_feedback(result)
+    )
     if result.generated is None:
+        if result.error is not None:
+            return opening + "</section>"
         raise ValueError("a successful preview result requires generated content")
 
     generated = result.generated
@@ -188,8 +237,7 @@ def _render_result(result: GrammarPreviewResult) -> str:
     )
     raw_json = generated.model_dump_json(indent=2)
     return (
-        f'<section class="preview" data-preview-id="{_escape(preview_id)}">'
-        f"<h2>{heading}</h2><p class=\"meta\">{metadata}</p>"
+        opening +
         '<section class="lesson"><h3>Rule explanation</h3>'
         f"<p>{_escape(generated.rule_summary)}</p>{tables}"
         f"<h3>Worked examples</h3><ul>{examples}</ul></section>"
@@ -333,6 +381,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Importing app loads the local .env and keeps the pure rendering module light.
     from pdf_language_learner.app import (
+        capture_model_usage,
         generate_grammar_content,
         grammar_catalogue,
         grammar_model,
@@ -379,29 +428,49 @@ def main(argv: Sequence[str] | None = None) -> int:
                 flush=True,
             )
             generated_at = datetime.now(UTC)
-            try:
-                generated = generate_grammar_content(
-                    topic.language.value,
-                    GrammarSessionKind.LESSON,
-                    [topic],
-                    list(args.vocabulary),
+            with capture_model_usage() as usage:
+                try:
+                    generated = generate_grammar_content(
+                        topic.language.value,
+                        GrammarSessionKind.LESSON,
+                        [topic],
+                        list(args.vocabulary),
+                    )
+                    result = GrammarPreviewResult(
+                        topic=topic,
+                        sample=sample,
+                        generated_at=generated_at,
+                        prompt_sha256=fingerprint,
+                        generated=generated,
+                        usage=usage,
+                    )
+                    if generated.quality_review:
+                        print(
+                            f"  Approved after {len(generated.quality_review.verdicts) - 1} revision(s).",
+                            flush=True,
+                        )
+                except Exception as exc:
+                    result = GrammarPreviewResult(
+                        topic=topic,
+                        sample=sample,
+                        generated_at=generated_at,
+                        prompt_sha256=fingerprint,
+                        error=f"{type(exc).__name__}: {exc}",
+                        generated=exc.candidate if isinstance(exc, GrammarGenerationFailure) else None,
+                        verdicts=tuple(exc.verdicts) if isinstance(exc, GrammarGenerationFailure) else (),
+                        usage=usage,
+                    )
+                    print(f"  Failed: {result.error}", file=sys.stderr, flush=True)
+            if usage:
+                calls = sum(item["calls"] for item in usage.values())
+                inputs = sum(item["input_tokens"] for item in usage.values())
+                outputs = sum(item["output_tokens"] for item in usage.values())
+                reasoning = sum(item["reasoning_tokens"] for item in usage.values())
+                print(
+                    f"  Tokens: {inputs:,} input, {outputs:,} output "
+                    f"({reasoning:,} reasoning) across {calls} call(s).",
+                    flush=True,
                 )
-                result = GrammarPreviewResult(
-                    topic=topic,
-                    sample=sample,
-                    generated_at=generated_at,
-                    prompt_sha256=fingerprint,
-                    generated=generated,
-                )
-            except Exception as exc:
-                result = GrammarPreviewResult(
-                    topic=topic,
-                    sample=sample,
-                    generated_at=generated_at,
-                    prompt_sha256=fingerprint,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-                print(f"  Failed: {result.error}", file=sys.stderr, flush=True)
             results.append(result)
             write_preview_report(
                 output,

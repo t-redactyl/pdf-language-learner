@@ -7,9 +7,10 @@ import unicodedata
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from pdf_language_learner.revision import ScheduleState
+from pdf_language_learner.grammar_quality import GrammarQualityReview, GrammarQualityVerdict
 
 
 GRAMMAR_CORRECT_INTERVAL_DAYS = (3, 7, 14, 30, 60, 120)
@@ -137,6 +138,7 @@ class GrammarRuleTable(BaseModel):
 
 
 class GrammarGeneratedSession(BaseModel):
+    quality_review: GrammarQualityReview | None = None
     rule_summary: str
     rule_tables: list[GrammarRuleTable] = Field(
         default_factory=list, max_length=GRAMMAR_RULE_TABLE_LIMIT
@@ -177,6 +179,54 @@ class GrammarGeneratedSession(BaseModel):
                         "a multiple-choice reference answer must appear in its choices"
                     )
         return self
+
+
+class GrammarLessonRepair(BaseModel):
+    rule_summary: str
+    rule_tables: list[GrammarRuleTable] = Field(max_length=GRAMMAR_RULE_TABLE_LIMIT)
+    worked_examples: list[str] = Field(min_length=2, max_length=4)
+
+
+def grammar_repair_response_model(verdict: GrammarQualityVerdict) -> type[BaseModel]:
+    """Only expose fields the editor is permitted to replace."""
+
+    return create_model(
+        "GrammarRepairResponse",
+        __config__=ConfigDict(extra="forbid"),
+        lesson=(GrammarLessonRepair | None, None),
+        **{f"exercise_{position}": (GrammarGeneratedExerciseContent, ...) for position in verdict.repair_positions},
+    )
+
+
+def apply_grammar_repair(
+    original: GrammarGeneratedSession, repair: BaseModel,
+) -> GrammarGeneratedSession:
+    """Merge targeted replacements; preserve other exercises byte for byte."""
+
+    data = original.model_dump(exclude={"quality_review"})
+    replacements = repair.model_dump()
+    lesson = replacements.pop("lesson")
+    if lesson is not None:
+        data.update(lesson)
+    for field, content in replacements.items():
+        position = int(field.removeprefix("exercise_")) - 1
+        exercise = original.exercises[position]
+        if content["topic_key"] != exercise.topic_key:
+            raise ValueError(f"{field} must preserve topic_key {exercise.topic_key}")
+        data["exercises"][position] = {**content, "type": exercise.type}
+    return GrammarGeneratedSession.model_validate(data)
+
+
+class GrammarGenerationFailure(ValueError):
+    """Retain unfinished work for a human preview, never for a learner session."""
+
+    def __init__(
+        self, message: str, *, candidate: GrammarGeneratedSession | None,
+        verdicts: list[GrammarQualityVerdict],
+    ):
+        super().__init__(message)
+        self.candidate = candidate
+        self.verdicts = list(verdicts)
 
 
 class GrammarGenerationResponse(BaseModel):
@@ -377,6 +427,9 @@ def grammar_generation_messages(
                 "fill_blank, and five translation. Put each exercise in its correspondingly "
                 "named response field; do not return an exercises array. Use saved "
                 "vocabulary naturally when it fits, never at the expense of the target grammar. "
+                "Saved vocabulary is optional, not a coverage target. Prefer idiomatic collocations "
+                "and plausible everyday situations; omit a saved word if using it would make a "
+                "sentence unnatural, semantically odd, or unnecessarily complicated. "
                 "Keep choices and tokens lists empty except that every multiple_choice task must "
                 "have exactly four choices and exactly one unambiguously correct choice. Its "
                 "distractors should be plausible for the target rule, not random vocabulary, and "

@@ -486,6 +486,11 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
 
     def fake_structured(operation, **kwargs):
         calls.append(operation)
+        if operation == "grammar session quality review":
+            return json.dumps({
+                "lesson_issues": [],
+                "exercises": [{"position": position, "issues": []} for position in range(1, 16)],
+            })
         if operation == "grammar answer grading":
             grading_token_budgets.append(kwargs["max_output_tokens"])
             return json.dumps({"correct": True, "feedback": "The target form is correct."})
@@ -660,6 +665,11 @@ def test_finished_lesson_hands_straight_over_to_its_review(
     generated_kinds = []
 
     def fake_structured(operation, **kwargs):
+        if operation == "grammar session quality review":
+            return json.dumps({
+                "lesson_issues": [],
+                "exercises": [{"position": position, "issues": []} for position in range(1, 16)],
+            })
         if operation == "grammar answer grading":
             return json.dumps({"correct": True, "feedback": "Correct."})
         # The prompt opens "Create a <kind> session."

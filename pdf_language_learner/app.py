@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import logging
@@ -11,12 +12,13 @@ import unicodedata
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -28,7 +30,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from dotenv import load_dotenv
 
 from pdf_language_learner.revision import (
@@ -50,8 +52,10 @@ from pdf_language_learner.german_grammar_catalogue import GRAMMAR_TOPICS
 from pdf_language_learner.grammar_revision import (
     GrammarExerciseType,
     GrammarGeneratedSession,
+    GrammarGenerationFailure,
     GrammarGenerationResponse,
     GrammarGrade,
+    GRAMMAR_CYCLE_INTERVAL,
     GRAMMAR_REVIEW_TOPIC_LIMIT,
     GrammarCycleStage,
     GrammarSessionKind,
@@ -59,11 +63,20 @@ from pdf_language_learner.grammar_revision import (
     deterministic_grammar_grade,
     grammar_cycle_stage,
     grammar_generation_messages,
+    grammar_repair_response_model,
+    apply_grammar_repair,
     grammar_grading_messages,
     grammar_topic_summary_messages,
     schedule_grammar_review,
 )
 from pdf_language_learner.grammar_topics import GrammarLanguage, GrammarTopic
+from pdf_language_learner.grammar_quality import (
+    GRAMMAR_QUALITY_MAX_REVISIONS,
+    GrammarQualityReview,
+    GrammarQualityVerdict,
+    grammar_quality_messages,
+    grammar_repair_message,
+)
 from pdf_language_learner.spanish_grammar_catalogue import SPANISH_GRAMMAR_TOPICS
 from pdf_language_learner.conjugation_workout import (
     CONJUGATION_ITEMS,
@@ -82,8 +95,12 @@ from pdf_language_learner.web_import import WebImportError, fetch_web_document
 # timings are visible both through the development entry point and `uvicorn` CLI.
 logger = logging.getLogger("uvicorn.error").getChild("margin")
 
+MODEL_USAGE_CAPTURE: ContextVar[dict[str, dict[str, Any]] | None] = ContextVar(
+    "model_usage_capture", default=None
+)
+
 ROOT = Path(__file__).resolve().parent.parent
-GRAMMAR_CONTENT_VERSION = 4
+GRAMMAR_CONTENT_VERSION = 6
 
 validate_conjugation_inventory((*GRAMMAR_TOPICS, *SPANISH_GRAMMAR_TOPICS))
 
@@ -161,6 +178,13 @@ GRAMMAR_SUMMARY_MAX_OUTPUT_TOKENS = 2000
 GRAMMAR_SESSION_GENERATION_LOCKS = {
     language: threading.Lock() for language in ("german", "spanish")
 }
+GRAMMAR_CONTENT_LOCKS = {
+    (language.value, kind): threading.Lock()
+    for language in GrammarLanguage
+    for kind in GrammarSessionKind
+}
+GRAMMAR_PREPARATION_WAKE = threading.Event()
+GRAMMAR_PREPARATION_INTERVAL_SECONDS = 300
 GERMAN_CONNECTORS = {
     "obwohl": {
         "categories": ("subordinating conjunction",),
@@ -583,6 +607,35 @@ def grammar_model() -> str:
     return os.getenv("OPENAI_GRAMMAR_MODEL", "gpt-5.6-luna").strip()
 
 
+def grammar_judge_model() -> str:
+    model = os.getenv("OPENAI_GRAMMAR_JUDGE_MODEL", "gpt-5.4").strip()
+    if not model:
+        raise ValueError("OPENAI_GRAMMAR_JUDGE_MODEL must not be empty")
+    return model
+
+
+def grammar_judge_effort() -> str:
+    return grammar_reasoning_effort("OPENAI_GRAMMAR_JUDGE_EFFORT", "low")
+
+
+def grammar_judge_tokens() -> int:
+    value = int(os.getenv("OPENAI_GRAMMAR_JUDGE_MAX_OUTPUT_TOKENS", "6000"))
+    if value < 1000:
+        raise ValueError("OPENAI_GRAMMAR_JUDGE_MAX_OUTPUT_TOKENS must be at least 1000")
+    return value
+
+
+def grammar_repair_effort() -> str:
+    return grammar_reasoning_effort("OPENAI_GRAMMAR_REPAIR_EFFORT", "low")
+
+
+def grammar_repair_tokens() -> int:
+    value = int(os.getenv("OPENAI_GRAMMAR_REPAIR_MAX_OUTPUT_TOKENS", "8000"))
+    if value < 1000:
+        raise ValueError("OPENAI_GRAMMAR_REPAIR_MAX_OUTPUT_TOKENS must be at least 1000")
+    return value
+
+
 def grammar_generation_tokens() -> int:
     value = int(os.getenv("OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS", "20000"))
     if value < 1000:
@@ -635,7 +688,45 @@ def _log_openai_timing(operation: str, response: Any, elapsed_ms: float) -> None
             value = getattr(usage, field, None)
             if isinstance(value, int):
                 metrics.append(f"{field.removesuffix('_tokens')}={value}")
+        reasoning_tokens = getattr(
+            getattr(usage, "output_tokens_details", None), "reasoning_tokens", None
+        )
+        if isinstance(reasoning_tokens, int):
+            metrics.append(f"reasoning={reasoning_tokens}")
     logger.info("OpenAI %s completed: %s", operation, " ".join(metrics))
+
+
+def _capture_openai_usage(operation: str, model: str, response: Any) -> None:
+    capture = MODEL_USAGE_CAPTURE.get()
+    usage = getattr(response, "usage", None)
+    if capture is None or usage is None:
+        return
+    key = f"{operation} [{model}]"
+    totals = capture.setdefault(
+        key, {"calls": 0, "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+    )
+    totals["calls"] += 1
+    for field in ("input_tokens", "output_tokens"):
+        value = getattr(usage, field, None)
+        if isinstance(value, int):
+            totals[field] += value
+    reasoning = getattr(
+        getattr(usage, "output_tokens_details", None), "reasoning_tokens", None
+    )
+    if isinstance(reasoning, int):
+        totals["reasoning_tokens"] += reasoning
+
+
+@contextmanager
+def capture_model_usage() -> Iterator[dict[str, dict[str, int]]]:
+    """Collect Responses API token usage for one foreground operation."""
+
+    capture: dict[str, dict[str, int]] = {}
+    token = MODEL_USAGE_CAPTURE.set(capture)
+    try:
+        yield capture
+    finally:
+        MODEL_USAGE_CAPTURE.reset(token)
 
 
 def timed_openai_response(client: OpenAI, operation: str, **kwargs):
@@ -652,6 +743,7 @@ def timed_openai_response(client: OpenAI, operation: str, **kwargs):
     _log_openai_timing(
         operation, response, (time.perf_counter() - started) * 1_000
     )
+    _capture_openai_usage(operation, kwargs.get("model", "unknown"), response)
     return response
 
 
@@ -674,6 +766,33 @@ def strict_json_schema(schema: dict) -> dict:
 
     make_strict(strict_schema)
     return strict_schema
+
+
+class StructuredModelOutputError(ValueError):
+    """Provider diagnostics for a response that cannot be parsed safely."""
+
+    def __init__(self, operation: str, model: str, response: Any):
+        self.reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+        status = getattr(response, "status", "unknown")
+        refusal = any(
+            getattr(content, "type", None) == "refusal"
+            for item in (getattr(response, "output", None) or [])
+            for content in (getattr(item, "content", None) or [])
+        )
+        if refusal:
+            self.reason = "refusal"
+        self.retryable = not refusal and (
+            self.reason == "max_output_tokens"
+            or (status in {"completed", "unknown"} and self.reason is None)
+        )
+        usage = getattr(response, "usage", None)
+        super().__init__(
+            f"{operation} ({model}) returned incomplete or empty structured output: "
+            f"status={status}, reason={self.reason or 'empty_output'}, "
+            f"response_id={getattr(response, 'id', None)}, "
+            f"output_tokens={getattr(usage, 'output_tokens', None)}, "
+            f"reasoning_tokens={getattr(getattr(usage, 'output_tokens_details', None), 'reasoning_tokens', None)}"
+        )
 
 
 def structured_model_response(
@@ -704,8 +823,8 @@ def structured_model_response(
         max_output_tokens=max_output_tokens,
         store=False,
     )
-    if not response.output_text:
-        raise ValueError("the model returned no structured output")
+    if getattr(response, "status", "completed") != "completed" or not (response.output_text or "").strip():
+        raise StructuredModelOutputError(operation, model, response)
     return response.output_text
 
 
@@ -716,12 +835,13 @@ def grammar_structured_model_response(
     response_model: type[BaseModel],
     max_output_tokens: int,
     effort: str,
+    model: str | None = None,
 ) -> str:
     """Return a strict structured response from the grammar OpenAI model."""
 
     return structured_model_response(
         operation,
-        model=grammar_model(),
+        model=model or grammar_model(),
         messages=messages,
         schema=response_model.model_json_schema(),
         schema_name=response_model.__name__,
@@ -729,6 +849,62 @@ def grammar_structured_model_response(
         reasoning_effort=effort,
         client=grammar_openai_client(),
     )
+
+
+def validated_grammar_response[T: BaseModel](
+    operation: str, *, response_model: type[T], messages: list[dict[str, str]],
+    max_output_tokens: int, effort: str, model: str | None = None,
+    validate: Callable[[T], Any] | None = None,
+    max_attempts: int = 2,
+) -> T:
+    """Retry a failed generation/repair/judge call without losing the current draft."""
+
+    budget = max_output_tokens
+    attempt_messages = list(messages)
+    for attempt in range(max_attempts):
+        try:
+            content = grammar_structured_model_response(
+                operation, response_model=response_model, messages=attempt_messages,
+                max_output_tokens=budget, effort=effort, model=model,
+            )
+            parsed = response_model.model_validate_json(content)
+            if validate is not None:
+                validate(parsed)
+            return parsed
+        except StructuredModelOutputError as exc:
+            if not exc.retryable or attempt == max_attempts - 1:
+                raise
+            if exc.reason == "max_output_tokens":
+                # Reasoning shares the output budget. Preserve the configured
+                # ceiling and free space for visible JSON by reducing effort.
+                effort = {
+                    "max": "high", "xhigh": "high", "high": "medium",
+                    "medium": "low", "low": "none",
+                }.get(effort, effort)
+            logger.warning(
+                "%s; retrying (%s/%s), tokens=%s, effort=%s",
+                exc, attempt + 1, max_attempts - 1, budget, effort,
+            )
+        except ValueError as exc:
+            if attempt == max_attempts - 1:
+                raise ValueError(
+                    f"{operation}: invalid structured response after {max_attempts} attempts: {exc}"
+                ) from exc
+            logger.warning(
+                "%s returned invalid structured data; retrying (%s/%s)",
+                operation, attempt + 1, max_attempts - 1,
+            )
+            # Keep validation feedback separate from the quality-repair history.
+            attempt_messages = [*messages, {
+                "role": "user",
+                "content": (
+                    "The previous response did not match the required schema. Return a complete "
+                    "response matching every required field and constraint. Validation errors:\n"
+                    + (json.dumps(exc.errors(include_input=False, include_context=False), ensure_ascii=False)
+                       if isinstance(exc, ValidationError) else str(exc))
+                ),
+            }]
+    raise AssertionError("unreachable")
 
 
 VERB_CLITICS = {
@@ -2822,6 +2998,18 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
 
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS grammar_prepared_content (
+            canonical_language TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            content_json TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            PRIMARY KEY (canonical_language, kind)
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS schema_migrations (
             name TEXT PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -2863,6 +3051,10 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE grammar_sessions "
             "ADD COLUMN content_version INTEGER NOT NULL DEFAULT 1"
+        )
+    if "quality_review_json" not in session_columns:
+        connection.execute(
+            "ALTER TABLE grammar_sessions ADD COLUMN quality_review_json TEXT"
         )
     connection.execute(
         """
@@ -3654,7 +3846,23 @@ def connector_revision_cards(
     return cards, len(due_by_connector)
 
 
-app = FastAPI(title="PDF Language Learner")
+@asynccontextmanager
+async def application_lifespan(application: FastAPI):
+    stop = threading.Event()
+    worker = threading.Thread(
+        target=grammar_preparation_worker, args=(stop,),
+        name="grammar-preparation", daemon=True,
+    )
+    worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        GRAMMAR_PREPARATION_WAKE.set()
+        await asyncio.to_thread(worker.join)
+
+
+app = FastAPI(title="PDF Language Learner", lifespan=application_lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -3976,30 +4184,119 @@ def generate_grammar_content(
     topics: list[GrammarTopic],
     vocabulary: list[str],
 ) -> GrammarGeneratedSession:
-    topic_data = [
-        {
-            "key": topic.key,
-            "title": topic.title,
-            "level": topic.level.value,
-            "example": topic.example,
-        }
+    topic_data = grammar_topic_generation_data(topics)
+    generated = None
+    try:
+        content = validated_grammar_response(
+            "grammar session generation",
+            messages=grammar_generation_messages(
+                language=language, kind=kind, topics=topic_data, saved_vocabulary=vocabulary
+            ),
+            response_model=GrammarGenerationResponse,
+            max_output_tokens=grammar_generation_tokens(),
+            effort=grammar_generation_effort(),
+        )
+        generated = content.to_generated_session()
+        validate_generated_grammar_topics(generated, topics)
+    except Exception as exc:
+        raise GrammarGenerationFailure(
+            f"grammar session generation failed: {exc}", candidate=generated, verdicts=[],
+        ) from exc
+    return review_grammar_content(language, kind, topics, vocabulary, generated)
+
+
+def grammar_topic_generation_data(topics: list[GrammarTopic]) -> list[dict]:
+    return [
+        {"key": topic.key, "title": topic.title, "level": topic.level.value, "example": topic.example}
         for topic in topics
     ]
-    content = grammar_structured_model_response(
-        "grammar session generation",
-        messages=grammar_generation_messages(
-            language=language,
-            kind=kind,
-            topics=topic_data,
-            saved_vocabulary=vocabulary,
-        ),
-        response_model=GrammarGenerationResponse,
-        max_output_tokens=grammar_generation_tokens(),
-        effort=grammar_generation_effort(),
+
+
+def review_grammar_content(
+    language: str, kind: GrammarSessionKind, topics: list[GrammarTopic],
+    vocabulary: list[str], generated: GrammarGeneratedSession,
+) -> GrammarGeneratedSession:
+    """Judge a draft and repair only the items with blocking findings."""
+
+    validate_generated_grammar_topics(generated, topics)
+    # An existing draft must earn a new approval under the current policy.
+    generated = generated.model_copy(update={"quality_review": None})
+    topic_data = grammar_topic_generation_data(topics)
+    judge_model = grammar_judge_model()
+    verdicts = []
+    changed_exercises = None
+    lesson_changed = False
+    for revision in range(GRAMMAR_QUALITY_MAX_REVISIONS + 1):
+        operation = "grammar session quality review"
+        try:
+            verdict = validated_grammar_response(
+                operation,
+                model=judge_model,
+                messages=grammar_quality_messages(
+                    language=language, kind=kind.value, topics=topic_data,
+                    vocabulary=vocabulary,
+                    candidate=generated.model_dump(mode="json", exclude={"quality_review"}),
+                    previous_review=verdicts[-1].model_dump(mode="json") if verdicts else None,
+                    changed_exercises=changed_exercises,
+                    lesson_changed=lesson_changed,
+                ),
+                response_model=GrammarQualityVerdict,
+                max_output_tokens=grammar_judge_tokens(),
+                effort=grammar_judge_effort(),
+                max_attempts=2,
+            )
+            verdicts.append(verdict)
+            if verdict.approved:
+                generated.quality_review = GrammarQualityReview(model=judge_model, verdicts=verdicts)
+                logger.info("Grammar quality approved for %s %s after %s revisions", language, kind, revision)
+                return generated
+            logger.warning(
+                "Grammar quality rejected for %s %s (revision %s): %s blocking issues; %s",
+                language, kind, revision, verdict.blocking_count,
+                "repairing" if revision < GRAMMAR_QUALITY_MAX_REVISIONS else "revision limit reached",
+            )
+            logger.info("Grammar quality feedback: %s", verdict.model_dump_json())
+            if revision == GRAMMAR_QUALITY_MAX_REVISIONS:
+                break
+            operation = "grammar session repair"
+            repair = validated_grammar_response(
+                operation, response_model=grammar_repair_response_model(verdict),
+                messages=[
+                    {"role": "system", "content": f"You edit {language} grammar teaching material using targeted replacements."},
+                    {"role": "user", "content": json.dumps({
+                        "topics": topic_data, "kind": kind.value,
+                        "candidate": generated.model_dump(mode="json", exclude={"quality_review"}),
+                    }, ensure_ascii=False)},
+                    grammar_repair_message(verdict),
+                ],
+                max_output_tokens=grammar_repair_tokens(), effort=grammar_repair_effort(),
+                validate=lambda patch: apply_grammar_repair(generated, patch),
+                max_attempts=2,
+            )
+            repaired = apply_grammar_repair(generated, repair)
+            changed_exercises = [
+                position for position, (before, after) in enumerate(zip(generated.exercises, repaired.exercises), 1)
+                if before != after
+            ]
+            lesson_changed = any(
+                getattr(generated, field) != getattr(repaired, field)
+                for field in ("rule_summary", "rule_tables", "worked_examples")
+            )
+            generated = repaired
+        except Exception as exc:
+            raise GrammarGenerationFailure(
+                f"{operation} failed at revision {revision + (operation == 'grammar session repair')}: {exc}",
+                candidate=generated, verdicts=verdicts,
+            ) from exc
+    raise GrammarGenerationFailure(
+        f"grammar quality review did not approve the session after {GRAMMAR_QUALITY_MAX_REVISIONS} revisions",
+        candidate=generated, verdicts=verdicts,
     )
-    generated = GrammarGenerationResponse.model_validate_json(
-        content
-    ).to_generated_session()
+
+
+def validate_generated_grammar_topics(
+    generated: GrammarGeneratedSession, topics: list[GrammarTopic]
+) -> None:
     allowed = {topic.key for topic in topics}
     if any(exercise.topic_key not in allowed for exercise in generated.exercises):
         raise ValueError("generated exercise referred to an unselected grammar topic")
@@ -4013,7 +4310,151 @@ def generate_grammar_content(
         count == 0 for count in counts.values()
     ):
         raise ValueError("generated exercises were not balanced across selected topics")
-    return generated
+
+
+def planned_grammar_preparation(
+    connection: sqlite3.Connection, language: str, now: datetime
+) -> list[tuple[GrammarSessionKind, list[GrammarTopic]]]:
+    """Prepare at most the next lesson and its review, without advancing progress."""
+
+    active = open_grammar_session_row(connection, language)
+    _, _, completed_at = grammar_cycle_timestamps(connection, language)
+    # An untouched language should not incur model calls just by starting the app.
+    if active is None and completed_at is None:
+        return []
+    catalogue = grammar_catalogue(language)
+    plans = []
+    if active is not None:
+        if active["kind"] != GrammarSessionKind.LESSON:
+            return []
+        lesson_keys = set(json.loads(active["topic_keys_json"]))
+        due_at = now
+    else:
+        due_at = max(now, completed_at + GRAMMAR_CYCLE_INTERVAL)
+        selection = select_grammar_topics(connection, language, due_at)
+        if selection is None:
+            return []
+        plans.append(selection)
+        if selection[0] is not GrammarSessionKind.LESSON:
+            return plans
+        lesson_keys = {topic.key for topic in selection[1]}
+    review_rows = {
+        row["topic_key"]: row
+        for row in connection.execute(
+            "SELECT * FROM grammar_reviews WHERE canonical_language = ?", (language,)
+        ).fetchall()
+    }
+    candidates = grammar_review_candidates(
+        catalogue, review_rows, now=due_at, exclude=lesson_keys
+    )
+    # With too few previous topics, the review will need the new lesson too.
+    # Its schedule is only known on completion; prepare that review then.
+    if len(candidates) >= GRAMMAR_REVIEW_TOPIC_LIMIT:
+        plans.append((GrammarSessionKind.REVIEW, candidates[:GRAMMAR_REVIEW_TOPIC_LIMIT]))
+    return plans
+
+
+def grammar_preparation_signature(
+    connection: sqlite3.Connection, language: str,
+    kind: GrammarSessionKind, topics: list[GrammarTopic],
+) -> str:
+    progress = {
+        row["topic_key"]: dict(row)
+        for row in connection.execute(
+            "SELECT * FROM grammar_reviews WHERE canonical_language = ?", (language,)
+        ).fetchall()
+    }
+    # Vocabulary is deliberately a snapshot: learning more words during the gap
+    # must not invalidate otherwise useful exercises when the learner opens them.
+    return json.dumps({
+        "version": GRAMMAR_CONTENT_VERSION,
+        "judge_model": grammar_judge_model(),
+        "judge_effort": grammar_judge_effort(),
+        "kind": kind.value,
+        "topics": [asdict(topic) for topic in topics],
+        "progress": [progress.get(topic.key) for topic in topics],
+    }, sort_keys=True)
+
+
+def prepared_grammar_content(
+    connection: sqlite3.Connection, language: str,
+    kind: GrammarSessionKind, signature: str,
+) -> GrammarGeneratedSession | None:
+    row = connection.execute(
+        """
+        SELECT content_json FROM grammar_prepared_content
+        WHERE canonical_language = ? AND kind = ? AND signature = ?
+        """,
+        (language, kind.value, signature),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        return GrammarGeneratedSession.model_validate_json(row["content_json"])
+    except ValueError:
+        logger.warning("Ignoring invalid prepared grammar content for %s %s", language, kind)
+        return None
+
+
+def store_prepared_grammar_content(
+    connection: sqlite3.Connection, language: str, kind: GrammarSessionKind,
+    signature: str, generated: GrammarGeneratedSession,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO grammar_prepared_content VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(canonical_language, kind) DO UPDATE SET
+            signature=excluded.signature, content_json=excluded.content_json,
+            generated_at=excluded.generated_at
+        """,
+        (language, kind.value, signature, generated.model_dump_json(),
+         datetime.now(UTC).isoformat()),
+    )
+
+
+def prepare_upcoming_grammar(stop: threading.Event | None = None) -> None:
+    """Run one bounded batch; completed results survive retries and restarts."""
+
+    for language in GrammarLanguage:
+        with vocabulary_database() as connection:
+            plans = planned_grammar_preparation(connection, language.value, datetime.now(UTC))
+        for kind, topics in plans:
+            if stop is not None and stop.is_set():
+                return
+            # Separate content locks let a ready lesson open while its review is
+            # still generating. Foreground requests share these locks on a miss.
+            with GRAMMAR_CONTENT_LOCKS[language.value, kind]:
+                try:
+                    with vocabulary_database() as connection:
+                        current = planned_grammar_preparation(
+                            connection, language.value, datetime.now(UTC)
+                        )
+                        if (kind, topics) not in current:
+                            continue
+                        signature = grammar_preparation_signature(
+                            connection, language.value, kind, topics
+                        )
+                        if prepared_grammar_content(connection, language.value, kind, signature):
+                            continue
+                        vocabulary = saved_grammar_vocabulary(connection, language.value)
+                    generated = generate_grammar_content(language.value, kind, topics, vocabulary)
+                    with vocabulary_database() as connection:
+                        store_prepared_grammar_content(
+                            connection, language.value, kind, signature, generated
+                        )
+                except Exception:
+                    logger.exception("Grammar preparation failed for %s %s; will retry", language, kind)
+
+
+def grammar_preparation_worker(stop: threading.Event) -> None:
+    while not stop.is_set():
+        GRAMMAR_PREPARATION_WAKE.clear()
+        try:
+            prepare_upcoming_grammar(stop)
+        except Exception:
+            logger.exception("Grammar preparation batch failed; will retry")
+        if not stop.is_set():
+            GRAMMAR_PREPARATION_WAKE.wait(GRAMMAR_PREPARATION_INTERVAL_SECONDS)
 
 
 def persist_grammar_session(
@@ -4030,8 +4471,9 @@ def persist_grammar_session(
         """
         INSERT INTO grammar_sessions (
             id, canonical_language, kind, content_version, topic_keys_json,
-            rule_summary, rule_tables_json, worked_examples_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            rule_summary, rule_tables_json, worked_examples_json, created_at,
+            quality_review_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             session_id,
@@ -4046,6 +4488,7 @@ def persist_grammar_session(
             ),
             json.dumps(generated.worked_examples, ensure_ascii=False),
             now.isoformat(),
+            generated.quality_review.model_dump_json() if generated.quality_review else None,
         ),
     )
     connection.executemany(
@@ -4316,7 +4759,11 @@ def open_grammar_session_row(
         """
         SELECT id, kind, topic_keys_json FROM grammar_sessions
         WHERE canonical_language = ? AND completed_at IS NULL
-            AND content_version = ?
+            AND (content_version = ? OR EXISTS (
+                SELECT 1 FROM grammar_exercises e
+                JOIN grammar_exercise_answers a ON a.exercise_id = e.id
+                WHERE e.session_id = grammar_sessions.id
+            ))
         ORDER BY created_at DESC LIMIT 1
         """,
         (canonical_language, GRAMMAR_CONTENT_VERSION),
@@ -4355,7 +4802,9 @@ def resumable_grammar_session_row(
 
 
 @app.post("/api/grammar/session")
-def start_grammar_session(request: GrammarSessionRequest) -> dict[str, Any]:
+def start_grammar_session(
+    request: GrammarSessionRequest, background_tasks: BackgroundTasks
+) -> dict[str, Any]:
     now = datetime.now(UTC)
     catalogue = grammar_catalogue(request.language)
     canonical_language = catalogue[0].language.value
@@ -4375,21 +4824,35 @@ def start_grammar_session(request: GrammarSessionRequest) -> dict[str, Any]:
                     detail="Your next grammar session is not due yet",
                 )
             kind, topics = selection
-            vocabulary = saved_grammar_vocabulary(connection, canonical_language)
-        try:
-            generated = generate_grammar_content(
-                canonical_language, kind, topics, vocabulary
-            )
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502, detail=f"Grammar session generation failed: {exc}"
-            ) from exc
-        with vocabulary_database() as connection:
-            session_id = persist_grammar_session(
-                connection, language=canonical_language, kind=kind,
-                topics=topics, generated=generated, now=now,
-            )
-            return grammar_session_payload(connection, session_id)
+        with GRAMMAR_CONTENT_LOCKS[canonical_language, kind]:
+            with vocabulary_database() as connection:
+                signature = grammar_preparation_signature(
+                    connection, canonical_language, kind, topics
+                )
+                generated = prepared_grammar_content(
+                    connection, canonical_language, kind, signature
+                )
+                vocabulary = saved_grammar_vocabulary(connection, canonical_language)
+            if generated is None:
+                try:
+                    generated = generate_grammar_content(
+                        canonical_language, kind, topics, vocabulary
+                    )
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=502, detail=f"Grammar session generation failed: {exc}"
+                    ) from exc
+            with vocabulary_database() as connection:
+                session_id = persist_grammar_session(
+                    connection, language=canonical_language, kind=kind,
+                    topics=topics, generated=generated, now=now,
+                )
+                connection.execute(
+                    "DELETE FROM grammar_prepared_content WHERE canonical_language = ? AND kind = ?",
+                    (canonical_language, kind.value),
+                )
+                background_tasks.add_task(GRAMMAR_PREPARATION_WAKE.set)
+                return grammar_session_payload(connection, session_id)
 
 
 @app.post("/api/grammar/session/{session_id}/topics/{topic_key}/summary")
@@ -4486,7 +4949,8 @@ def generate_grammar_topic_summary(
 
 @app.post("/api/grammar/session/{session_id}/exercises/{exercise_id}/answer")
 def answer_grammar_exercise(
-    session_id: str, exercise_id: str, request: GrammarAnswerRequest
+    session_id: str, exercise_id: str, request: GrammarAnswerRequest,
+    background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
     now = datetime.now(UTC)
     with vocabulary_database() as connection:
@@ -4557,6 +5021,7 @@ def answer_grammar_exercise(
         conjugation_topic_keys: list[str] = []
         if complete:
             finish_grammar_session(connection, session_id, now)
+            background_tasks.add_task(GRAMMAR_PREPARATION_WAKE.set)
             session_topics = json.loads(
                 connection.execute(
                     "SELECT topic_keys_json FROM grammar_sessions WHERE id = ?",
