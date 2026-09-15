@@ -5719,11 +5719,16 @@ def answer_grammar_exercise(
                 "reference_answer": row["reference_answer"],
                 "explanation": row["explanation"], "session_complete": False,
             }
-        exercise_type = GrammarExerciseType(row["exercise_type"])
-        correct = deterministic_grammar_grade(
-            exercise_type, request.answer,
-            json.loads(row["accepted_answers_json"]), row["reference_answer"],
-        )
+        try:
+            correct = deterministic_grammar_grade(
+                row["exercise_type"], request.answer,
+                json.loads(row["accepted_answers_json"]), row["reference_answer"],
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="This unfinished grammar exercise is no longer supported",
+            ) from exc
         language = row["canonical_language"]
         grading_data = dict(row)
     if correct is None:

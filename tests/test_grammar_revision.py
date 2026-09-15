@@ -473,6 +473,18 @@ def test_closed_grammar_grading_normalizes_punctuation() -> None:
         [],
         "Hablo",
     ) is None
+    assert deterministic_grammar_grade(
+        "ordering",
+        "  Hablo. ",
+        ["hablo"],
+        "Hablo",
+    ) is True
+    assert deterministic_grammar_grade(
+        "production",
+        "Hablo",
+        [],
+        "Hablo",
+    ) is None
 
 
 def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(

@@ -97,6 +97,10 @@ class GrammarExerciseType(StrEnum):
     TRANSLATION = "translation"
 
 
+LEGACY_OPEN_GRAMMAR_EXERCISE_TYPES = frozenset({"production", "transformation"})
+LEGACY_CLOSED_GRAMMAR_EXERCISE_TYPES = frozenset({"ordering"})
+
+
 GRAMMAR_EXERCISE_TOTAL = GRAMMAR_EXERCISES_PER_TYPE * len(GrammarExerciseType)
 
 
@@ -303,16 +307,25 @@ def normalize_grammar_answer(value: str) -> str:
 
 
 def deterministic_grammar_grade(
-    exercise_type: GrammarExerciseType,
+    exercise_type: GrammarExerciseType | str,
     answer: str,
     accepted_answers: list[str],
     reference_answer: str,
 ) -> bool | None:
     """Grade closed exercises locally and defer open-ended ones to the model."""
 
+    if isinstance(exercise_type, str):
+        try:
+            exercise_type = GrammarExerciseType(exercise_type)
+        except ValueError:
+            if exercise_type in LEGACY_OPEN_GRAMMAR_EXERCISE_TYPES:
+                return None
+            if exercise_type not in LEGACY_CLOSED_GRAMMAR_EXERCISE_TYPES:
+                raise
     if exercise_type not in {
         GrammarExerciseType.MULTIPLE_CHOICE,
         GrammarExerciseType.FILL_BLANK,
+        *LEGACY_CLOSED_GRAMMAR_EXERCISE_TYPES,
     }:
         return None
     expected = accepted_answers or [reference_answer]

@@ -8,7 +8,7 @@ import {
   cancelGrammarRequests,
   initializeGrammarRevision,
   loadGrammarRevision,
-} from "./grammar.js?v=22";
+} from "./grammar.js?v=23";
 import {
   cancelConjugationRequests,
   initializeConjugationWorkout,

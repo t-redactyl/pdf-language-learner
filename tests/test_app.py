@@ -159,7 +159,7 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
     assert '/static/styles.css?v=53' in response.text
-    assert '/static/revision.js?v=52' in response.text
+    assert '/static/revision.js?v=53' in response.text
     assert '/static/app.js?v=55' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
@@ -187,7 +187,7 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert './i18n.js?v=30' in app_script
     assert './i18n.js?v=30' in revision_script
     assert './i18n.js?v=30' in grammar_script
-    assert './grammar.js?v=22' in revision_script
+    assert './grammar.js?v=23' in revision_script
     assert '"conjugation.preparing"' in revision_script
     assert './conjugation.js?v=7' in revision_script
     assert './i18n.js?v=30' in conjugation_script
@@ -198,6 +198,7 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert '"grammar.generating": "Generating the next grammar exercise…"' in i18n_script
     assert '"grammar.checking": "Checking your answer…"' in i18n_script
     assert "const GRAMMAR_REQUEST_TIMEOUT_MS = 190_000" in grammar_script
+    assert "const body = await response.text()" in grammar_script
     assert "if (continuationPending) return" in grammar_script
     assert "const button = event.currentTarget" in grammar_script
     assert "button.disabled = false" in grammar_script
@@ -2924,6 +2925,56 @@ def test_locked_grammar_does_not_offer_an_untouched_session(
     resumed = client.post("/api/grammar/session", json={"language": "German"})
     assert resumed.status_code == 200
     assert resumed.json()["id"] == "leftover"
+
+
+def test_unfinished_legacy_production_exercise_can_be_answered(
+    vocabulary_database, monkeypatch,
+) -> None:
+    topic_key = client.get(
+        "/api/grammar/topics", params={"language": "German"}
+    ).json()[0]["key"]
+    now = datetime.now(UTC).isoformat()
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            """
+            INSERT INTO grammar_sessions (
+                id, canonical_language, kind, content_version, topic_keys_json,
+                rule_summary, rule_tables_json, worked_examples_json, created_at
+            ) VALUES ('legacy-production', 'german', 'lesson', ?, ?, '', '[]', '[]', ?)
+            """,
+            (GRAMMAR_CONTENT_VERSION, json.dumps([topic_key]), now),
+        )
+        connection.execute(
+            """
+            INSERT INTO grammar_exercises (
+                id, session_id, position, topic_key, exercise_type, instruction,
+                prompt, choices_json, tokens_json, accepted_answers_json,
+                reference_answer, grading_rubric, explanation
+            ) VALUES (
+                'legacy-production-1', 'legacy-production', 1, ?, 'production',
+                'Write one sentence.', 'Use sobald.', '[]', '[]', '[]',
+                'Sobald alles bereit ist, beginnen wir.',
+                'The sentence must use sobald with correct word order.', ''
+            )
+            """,
+            (topic_key,),
+        )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.grammar_structured_model_response",
+        lambda operation, **kwargs: json.dumps({
+            "correct": True,
+            "feedback": "Correct use of sobald and verb position.",
+        }),
+    )
+    response = client.post(
+        "/api/grammar/session/legacy-production/exercises/legacy-production-1/answer",
+        json={"answer": "Sobald alles bereit ist, beginnen wir."},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["correct"] is True
+    assert response.json()["feedback"] == "Correct use of sobald and verb position."
 
 
 def test_due_review_summary_reports_a_resumable_grammar_session(

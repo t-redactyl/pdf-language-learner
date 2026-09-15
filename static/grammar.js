@@ -25,7 +25,15 @@ async function grammarFetch(url, options = {}, controller) {
   );
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
-    const data = await response.json();
+    const body = await response.text();
+    let data;
+    try {
+      data = body ? JSON.parse(body) : {};
+    } catch {
+      throw new Error(response.ok
+        ? t("revision.answerSaveError")
+        : body || response.statusText || t("revision.answerSaveError"));
+    }
     return { response, data };
   } catch (error) {
     if (timedOut) {
