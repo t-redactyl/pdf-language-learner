@@ -257,6 +257,17 @@ h1 { margin:15px 0 24px; font:500 clamp(44px,7vw,76px)/1.02 Georgia,serif; lette
 .revision-context mark { padding:0 .1em; background:var(--gold); color:var(--ink); font-weight:700; }
 .revision-feedback-dictionary { margin:0 0 18px; color:#686d65; font-size:13px; }
 .revision-feedback-dictionary strong { color:var(--ink); font:500 17px/1.4 Georgia,serif; }
+.revision-mnemonic { margin:0 0 18px; padding:12px 14px; border:1px solid #d8d5ca; border-radius:4px; background:#f8f7f2; }
+.revision-mnemonic summary { cursor:pointer; color:#566c59; font-size:13px; font-weight:800; }
+.revision-mnemonic-strategy { margin:12px 0 5px; color:#777c74; font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+.revision-mnemonic-components { display:grid; gap:6px; margin:8px 0 12px; }
+.revision-mnemonic-components > div { display:grid; grid-template-columns:minmax(90px,.6fr) minmax(0,1fr); gap:12px; padding:6px 8px; background:white; }
+.revision-mnemonic-components dt,.revision-mnemonic-components dd { margin:0; }
+.revision-mnemonic-components dt { font:600 15px/1.4 Georgia,serif; }
+.revision-mnemonic-components dt span { display:block; color:#777c74; font:700 9px/1.2 sans-serif; letter-spacing:.08em; text-transform:uppercase; }
+.revision-mnemonic-components dd { color:#686d65; font-size:13px; line-height:1.4; }
+.revision-mnemonic strong { display:block; color:var(--ink); font:600 17px/1.4 Georgia,serif; }
+.revision-mnemonic > p:last-child { margin:7px 0 0; color:#686d65; font-size:14px; line-height:1.5; }
 .revision-feedback .primary-button { width:100%; }
 .revision-mode-tabs { display:inline-flex; gap:4px; margin:12px 0 18px; padding:3px; border:1px solid var(--line); border-radius:5px; background:#f4f2eb; }
 .revision-mode-tab { padding:8px 14px; border:0; border-radius:3px; background:transparent; color:#686d65; cursor:pointer; font:700 12px/1 sans-serif; }

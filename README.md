@@ -49,6 +49,15 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 |--------------------------------|----------------------------|----------------------------------------------|
 | `OPENAI_MODEL`                 | `gpt-5.6-luna`             | OpenAI model used for translation            |
 | `OPENAI_TIMEOUT_SECONDS`       | `30`                       | Translation request timeout                  |
+| `OPENAI_MNEMONIC_MODEL`        | `gpt-5.6-luna`             | Mnemonic analysis and candidate generation   |
+| `OPENAI_MNEMONIC_GENERATION_EFFORT` | `medium`              | Mnemonic analysis and writing effort         |
+| `OPENAI_MNEMONIC_JUDGE_MODEL`  | `gpt-5.4`                  | Independent mnemonic-quality judge           |
+| `OPENAI_MNEMONIC_JUDGE_EFFORT` | `low`                      | Mnemonic judge reasoning effort              |
+| `GEMINI_API_KEY`               | —                          | Gemini key; its presence enables Gemini mnemonics |
+| `MNEMONIC_PROVIDER`            | automatic                  | Optional `gemini` or `openai` override        |
+| `GEMINI_MNEMONIC_MODEL`        | `gemini-3.8-flash`         | Gemini mnemonic analysis and generation model |
+| `GEMINI_MNEMONIC_JUDGE_MODEL`  | `gemini-3.8-flash`         | Gemini mnemonic quality judge model           |
+| `GEMINI_TIMEOUT_SECONDS`       | `60`                       | Gemini mnemonic request timeout               |
 | `OPENAI_GRAMMAR_MODEL`         | `gpt-5.6-luna`             | OpenAI model used for grammar                 |
 | `OPENAI_GRAMMAR_TIMEOUT_SECONDS` | `180`                    | Grammar request timeout                      |
 | `OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS` | `20000`               | Grammar generation token ceiling             |
@@ -62,6 +71,14 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | `MARGIN_DATABASE_PATH`         | `/data/margin.db`          | Vocabulary database location                 |
 | `MARGIN_OPEN_THESAURUS_PATH`   | `/data/openthesaurus.txt`  | German thesaurus location                    |
 | `STANZA_RESOURCES_DIR`         | `/data/stanza`             | Stanza model directory                       |
+
+When `GEMINI_API_KEY` is set, mnemonic analysis, candidate generation, and
+quality judging use Gemini automatically. Translation and grammar requests
+continue to use OpenAI. Set `MNEMONIC_PROVIDER=openai` to keep mnemonic requests
+on OpenAI even when the Gemini key is present, or set it to `gemini` to require
+Gemini. The model names are configurable because Gemini 1.5 Flash is no longer
+listed as a current model in Google's API documentation; the default follows
+Google's current Flash example.
 
 URL imports are downloaded by the local FastAPI server and reduced to plain transcript paragraphs plus playable media when the publisher exposes it. Dynamic sites are supported through embedded transcript data (including DW lesson manuscripts, HLS video on Video-Thema pages, Langsam gesprochene Nachrichten articles, and Spanish Babbel podcasts hosted by TimelineNotation), and linked transcript PDFs such as Deutsch-to-go's “Text (PDF)” attachments are detected and extracted automatically. Some publishers keep media behind their own JavaScript player; in that case Margin links to the original player while still making the extracted article text selectable.
 
@@ -121,6 +138,57 @@ exercises, raw structured output, and a review rubric. Decisions and notes are
 saved in that browser's local storage. Reports are checkpointed after every
 model response and ignored by Git. Use `--all` explicitly to generate the full
 catalogue; this guard helps prevent accidental API spend.
+
+## Preview generated vocabulary mnemonics
+
+Inspect the saved dictionary forms without calling OpenAI:
+
+```bash
+uv run python scripts/preview_mnemonics.py --language German --list-words
+```
+
+Then generate one or more independent samples for selected words:
+
+```bash
+uv run python scripts/preview_mnemonics.py \
+  --language German \
+  --word aufmachen \
+  --word Handschuh \
+  --samples 3 \
+  --output eval/results/german-mnemonics.html
+```
+
+To test a word that is not saved, provide its meaning. Context is optional but
+helps the pipeline choose the intended sense:
+
+```bash
+uv run python scripts/preview_mnemonics.py \
+  --language German \
+  --word aufmachen \
+  --translation "to open" \
+  --context "Mach bitte das Fenster auf." \
+  --samples 3 \
+  --output eval/results/aufmachen-mnemonics.html
+```
+
+Direct-input mode bypasses SQLite. Use `--target-language` when the supplied
+translation is not English.
+
+The report shows the linguistic analysis, explicit prefix/stem or compound
+parts, both strategy-specific candidates, the independent judge's decision and
+findings, token usage, raw pipeline output, and a human-review form saved in the
+browser's local storage. Previewing reads saved vocabulary without replacing
+the mnemonic used by revision. Use `--all` explicitly to test every saved word;
+`--limit` can cap a larger selection.
+
+When a word has opaque or archaic morphology, the mnemonic pipeline may use a
+sound bridge: an invented target-language phrase that follows distinctive
+sounds from the source word and becomes a vivid scene for its meaning. Any defensible
+modern prefix or compound part remains labelled separately; invented sound
+chunks are never presented as roots or etymology. If the initial linguistic
+analysis finds no strategy for an opaque prefixed verb or compound noun, a
+creative second pass tries looser near-homophones, names, numbers, and surreal
+phrases before accepting that no useful aid is available.
 
 Starting or restarting the Space resumes any missing grammar preparation for
 languages with practice history or an active lesson. An untouched language makes

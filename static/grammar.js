@@ -1,4 +1,4 @@
-import { t } from "./i18n.js?v=27";
+import { t } from "./i18n.js?v=30";
 
 const $ = selector => document.querySelector(selector);
 let activeSession = null;

@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from pdf_language_learner.app import (
     GRAMMAR_CONTENT_VERSION,
     LOCAL_NOUN_GRAMMAR_CACHE,
+    MNEMONIC_CONTENT_VERSION,
     MULTI_WORD_TERMS,
     SourceNounGrammar,
     STANZA_PIPELINES,
@@ -28,7 +29,10 @@ from pdf_language_learner.app import (
     cached_verb_lemma_decision,
     dictionary_synonym_candidates,
     enrich_connector_sentence,
+    enrich_vocabulary_mnemonic,
     frequency_ranked_synonym_candidates,
+    gemini_client,
+    gemini_structured_model_response,
     grammar_generation_effort,
     grammar_generation_tokens,
     grammar_grading_effort,
@@ -37,6 +41,9 @@ from pdf_language_learner.app import (
     grammar_structured_model_response,
     load_local_environment,
     multi_word_term_in_context,
+    mnemonic_judge_model,
+    mnemonic_model,
+    mnemonic_provider,
     openai_client,
     open_thesaurus_synonym_candidates,
     parse_open_thesaurus,
@@ -62,6 +69,7 @@ def clear_runtime_caches(monkeypatch):
     # cached results and clients cannot leak from one test into the next.
     for cached_function in (
         grammar_openai_client,
+        gemini_client,
         openai_client,
         analyze_word_in_context,
         cached_verb_lemma_decision,
@@ -79,6 +87,7 @@ def clear_runtime_caches(monkeypatch):
     yield
     for cached_function in (
         openai_client,
+        gemini_client,
         analyze_word_in_context,
         cached_verb_lemma_decision,
         cached_source_noun_grammar,
@@ -131,6 +140,8 @@ def test_home_serves_reader() -> None:
     assert 'id="synonyms-result"' in response.text
     assert 'id="revision-matching"' in response.text
     assert 'id="revision-connector-hint"' in response.text
+    assert 'id="revision-mnemonic"' in response.text
+    assert 'id="revision-mnemonic-components"' in response.text
     assert 'id="revision-exercise-selector"' in response.text
     assert 'id="revision-mode-grammar"' in response.text
     assert 'id="revision-mode-conjugation"' in response.text
@@ -146,9 +157,9 @@ def test_home_serves_reader() -> None:
     assert 'id="pdf-zoom-in"' in response.text
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
-    assert '/static/styles.css?v=51' in response.text
-    assert '/static/revision.js?v=49' in response.text
-    assert '/static/app.js?v=52' in response.text
+    assert '/static/styles.css?v=53' in response.text
+    assert '/static/revision.js?v=52' in response.text
+    assert '/static/app.js?v=55' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
 
@@ -172,13 +183,13 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
 
     assert './text.js?v=5' in app_script
     assert './text.js?v=5' in revision_script
-    assert './i18n.js?v=27' in app_script
-    assert './i18n.js?v=27' in revision_script
-    assert './i18n.js?v=27' in grammar_script
-    assert './grammar.js?v=19' in revision_script
+    assert './i18n.js?v=30' in app_script
+    assert './i18n.js?v=30' in revision_script
+    assert './i18n.js?v=30' in grammar_script
+    assert './grammar.js?v=22' in revision_script
     assert '"conjugation.preparing"' in revision_script
-    assert './conjugation.js?v=4' in revision_script
-    assert './i18n.js?v=27' in conjugation_script
+    assert './conjugation.js?v=7' in revision_script
+    assert './i18n.js?v=30' in conjugation_script
     assert '/api/conjugation/session' in conjugation_script
     assert 'personCue.hidden = !current.person' in conjugation_script
     assert 'current.kind === "verb_preposition"' in conjugation_script
@@ -193,9 +204,12 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert "finishCurrent(summary)" in grammar_script
     assert 't("grammar.finish")' in grammar_script
     assert "startFocusedConjugationWorkout" in revision_script
+    assert "renderVocabularyMnemonic(currentCard, !data.correct || hintUsed)" in revision_script
+    assert "mnemonic.components || []" in revision_script
     assert 'id="grammar-conjugation"' in client.get("/").text
     assert 'options.topicKeys.join(",")' in conjugation_script
     assert '"grammar.finish": "Finish"' in i18n_script
+    assert '"revision.mnemonic.sound_bridge": "Sound bridge"' in i18n_script
     assert 'new CustomEvent("margin:revision-opened")' in revision_script
     assert 'new CustomEvent("margin:revision-closed")' in revision_script
     assert 'document.addEventListener("margin:revision-opened"' in app_script
@@ -347,6 +361,122 @@ def test_grammar_openai_client_is_reused_and_configured(monkeypatch) -> None:
     assert grammar_openai_client() is grammar_openai_client()
     assert len(created) == 1
     assert created[0].kwargs == {"timeout": 45.0, "max_retries": 1}
+
+
+def test_mnemonic_provider_auto_selects_gemini_when_key_is_present(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("MNEMONIC_PROVIDER", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert mnemonic_provider() == "openai"
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    assert mnemonic_provider() == "gemini"
+
+    monkeypatch.setenv("MNEMONIC_PROVIDER", "openai")
+    assert mnemonic_provider() == "openai"
+
+    monkeypatch.setenv("MNEMONIC_PROVIDER", "gemini")
+    monkeypatch.delenv("GEMINI_API_KEY")
+    assert mnemonic_provider() == "gemini"
+
+
+def test_gemini_mnemonic_models_default_and_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.delenv("MNEMONIC_PROVIDER", raising=False)
+    monkeypatch.delenv("GEMINI_MNEMONIC_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MNEMONIC_JUDGE_MODEL", raising=False)
+    assert mnemonic_model() == "gemini-3.8-flash"
+    assert mnemonic_judge_model() == "gemini-3.8-flash"
+
+    monkeypatch.setenv("GEMINI_MNEMONIC_MODEL", "gemini-writer")
+    monkeypatch.setenv("GEMINI_MNEMONIC_JUDGE_MODEL", "gemini-judge")
+    assert mnemonic_model() == "gemini-writer"
+    assert mnemonic_judge_model() == "gemini-judge"
+
+
+def test_gemini_client_is_reused_and_configured(monkeypatch) -> None:
+    created = []
+
+    class FakeClient:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+            created.append(self)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_TIMEOUT_SECONDS", "24.5")
+    monkeypatch.setattr("pdf_language_learner.app.OpenAI", FakeClient)
+
+    assert gemini_client() is gemini_client()
+    assert len(created) == 1
+    assert created[0].kwargs == {
+        "api_key": "test-key",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "timeout": 24.5,
+        "max_retries": 1,
+    }
+
+
+def test_gemini_structured_response_injects_schema_and_records_usage(
+    monkeypatch,
+) -> None:
+    calls = []
+    fake_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content='```json\n{"approved": true}\n```')
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=31,
+            completion_tokens=7,
+            total_tokens=38,
+        ),
+    )
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kwargs: calls.append(kwargs) or fake_response
+            )
+        )
+    )
+    monkeypatch.setattr("pdf_language_learner.app.gemini_client", lambda: fake_client)
+
+    with capture_model_usage() as captured_usage:
+        content = gemini_structured_model_response(
+            "mnemonic review",
+            model="gemini-test",
+            messages=[
+                {"role": "system", "content": "Judge carefully."},
+                {"role": "user", "content": "Review this mnemonic."},
+            ],
+            schema={
+                "type": "object",
+                "properties": {"approved": {"type": "boolean"}},
+            },
+            schema_name="mnemonic_review",
+            max_output_tokens=300,
+        )
+
+    assert json.loads(content) == {"approved": True}
+    assert calls[0]["model"] == "gemini-test"
+    assert calls[0]["max_tokens"] == 300
+    assert calls[0]["messages"][1] == {
+        "role": "user",
+        "content": "Review this mnemonic.",
+    }
+    system_prompt = calls[0]["messages"][0]["content"]
+    assert "Judge carefully." in system_prompt
+    assert "mnemonic_review JSON Schema" in system_prompt
+    assert '"approved"' in system_prompt
+    assert captured_usage == {
+        "mnemonic review [gemini-test]": {
+            "calls": 1,
+            "input_tokens": 31,
+            "output_tokens": 7,
+            "reasoning_tokens": 0,
+        }
+    }
 
 
 def test_grammar_model_defaults_and_can_be_overridden(monkeypatch) -> None:
@@ -2251,6 +2381,10 @@ def vocabulary_database(tmp_path, monkeypatch):
         "pdf_language_learner.app.enrich_connector_sentence",
         lambda sentence_id: None,
     )
+    monkeypatch.setattr(
+        "pdf_language_learner.app.enrich_vocabulary_mnemonic",
+        lambda item_id: None,
+    )
     return tmp_path
 
 
@@ -2279,12 +2413,301 @@ def test_vocabulary_is_persisted(vocabulary_database) -> None:
     assert items[0]["normalized_source"] == "Wort"
     assert items[0]["noun_gender"] == "neutral"
     assert items[0]["synonyms"] == []
+    assert items[0]["mnemonic"] is None
     assert items[0]["review"] == {
         "last_reviewed_at": None,
         "next_review_at": None,
         "repetitions": 0,
         "lapses": 0,
     }
+
+
+@pytest.mark.parametrize(
+    ("word", "translation", "context", "analysis", "marker", "candidates"),
+    [
+        (
+            "Handschuh",
+            "glove",
+            "Im Winter trage ich warme Handschuhe.",
+            {
+                "strategy": "conceptual_bridge",
+                "word_structure": "compound_noun",
+                "components": [
+                    {"form": "Hand", "meaning": "hand", "role": "compound_part"},
+                    {"form": "Schuh", "meaning": "shoe", "role": "compound_part"},
+                ],
+                "sound_cue": None,
+                "analysis_note": "A transparent modern compound.",
+            },
+            "supplied compound parts",
+            [
+                {
+                    "strategy": "conceptual_bridge",
+                    "hook": "Hand + Schuh: a shoe for your hand.",
+                    "explanation": "Picture a tiny shoe worn on a hand: a glove.",
+                },
+                {
+                    "strategy": "conceptual_bridge",
+                    "hook": "Put a Schuh on each Hand.",
+                    "explanation": "A hand-shoe is exactly the shape and job of a glove.",
+                },
+            ],
+        ),
+        (
+            "aufmachen",
+            "to open",
+            "Mach bitte das Fenster auf.",
+            {
+                "strategy": "literal_root_breakdown",
+                "word_structure": "prefixed_verb",
+                "components": [
+                    {"form": "auf", "meaning": "up or open", "role": "prefix"},
+                    {"form": "machen", "meaning": "to make", "role": "stem"},
+                ],
+                "sound_cue": None,
+                "analysis_note": "A separable verb; auf moves to the clause end.",
+            },
+            "supplied prefix and stem",
+            [
+                {
+                    "strategy": "literal_root_breakdown",
+                    "hook": "auf (open/up) + machen (make): make it open.",
+                    "explanation": "Picture pulling a closed lid up until the container opens.",
+                },
+                {
+                    "strategy": "literal_root_breakdown",
+                    "hook": "Make (machen) the window up/open (auf).",
+                    "explanation": "The separable auf supplies the opening direction: aufmachen.",
+                },
+            ],
+        ),
+        (
+            "veranstalten",
+            "to organize",
+            "Die Gemeinde möchte ein Musikfestival veranstalten.",
+            {
+                "strategy": "sound_bridge",
+                "word_structure": "prefixed_verb",
+                "components": [
+                    {
+                        "form": "ver",
+                        "meaning": (
+                            "inseparable prefix; its contribution here is opaque"
+                        ),
+                        "role": "prefix",
+                    }
+                ],
+                "sound_cue": "fair — Ann — stall — ten",
+                "analysis_note": (
+                    "The cue is invented sound imagery. Modern anstalten is not an "
+                    "independent stem, so no compositional derivation is claimed."
+                ),
+            },
+            "Build each candidate around the supplied target-language sound cue",
+            [
+                {
+                    "strategy": "sound_bridge",
+                    "hook": (
+                        "Ann organizes a FAIR with a horse STALL and TEN bands."
+                    ),
+                    "explanation": (
+                        "Fair—Ann—stall—ten echoes veranstalten while the huge event "
+                        "shows its meaning: to organize."
+                    ),
+                },
+                {
+                    "strategy": "sound_bridge",
+                    "hook": (
+                        "To organize it, put a FAIR, Ann, a STALL, and TEN acts on stage."
+                    ),
+                    "explanation": (
+                        "The ordered sound scene recalls veranstalten without treating "
+                        "its English pieces as real German roots."
+                    ),
+                },
+            ],
+        ),
+    ],
+)
+def test_vocabulary_mnemonic_candidates_are_judged_and_added_to_revision(
+    vocabulary_database,
+    monkeypatch,
+    word,
+    translation,
+    context,
+    analysis,
+    marker,
+    candidates,
+) -> None:
+    item_id = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(
+            original_source=word,
+            normalized_source=word,
+            translation=translation,
+            context=context,
+            noun_gender=None,
+        ),
+    ).json()["item"]["id"]
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            "UPDATE vocabulary_german SET mnemonic_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "useful": True,
+                        "strategy": "acoustic_hook",
+                        "hook": "An old one-pass hook.",
+                        "explanation": "This should be regenerated.",
+                    }
+                ),
+                item_id,
+            ),
+        )
+    model_calls = []
+
+    def fake_structured_model_response(operation, **kwargs):
+        model_calls.append((operation, kwargs))
+        if operation == "vocabulary mnemonic analysis":
+            if word == "veranstalten":
+                return json.dumps(
+                    {
+                        "strategy": None,
+                        "word_structure": "prefixed_verb",
+                        "components": [],
+                        "sound_cue": None,
+                        "analysis_note": "No natural English homophone was found.",
+                    }
+                )
+            return json.dumps(analysis)
+        if operation == "vocabulary mnemonic sound bridge fallback":
+            assert word == "veranstalten"
+            return json.dumps(analysis)
+        if operation == "vocabulary mnemonic candidates":
+            return json.dumps(
+                {
+                    "candidates": [
+                        {**candidate, "components": analysis["components"]}
+                        for candidate in candidates
+                    ]
+                }
+            )
+        assert operation == "vocabulary mnemonic quality review"
+        return json.dumps(
+            {"approved": True, "selected_index": 1, "findings": ["Accurate and vivid."]}
+        )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.mnemonic_structured_model_response",
+        fake_structured_model_response,
+    )
+
+    enrich_vocabulary_mnemonic(item_id)
+    enrich_vocabulary_mnemonic(item_id)
+
+    expected_operations = [
+        "vocabulary mnemonic analysis",
+    ]
+    if word == "veranstalten":
+        expected_operations.append("vocabulary mnemonic sound bridge fallback")
+    expected_operations.extend(
+        [
+            "vocabulary mnemonic candidates",
+            "vocabulary mnemonic quality review",
+        ]
+    )
+    assert [operation for operation, _ in model_calls] == expected_operations
+    calls_by_operation = dict(model_calls)
+    assert f"Dictionary form: {word}" in model_calls[0][1]["messages"][1]["content"]
+    assert marker in calls_by_operation["vocabulary mnemonic candidates"]["messages"][0][
+        "content"
+    ]
+    assert candidates[1]["hook"] in calls_by_operation[
+        "vocabulary mnemonic quality review"
+    ]["messages"][1]["content"]
+    if word == "veranstalten":
+        fallback_prompt = calls_by_operation[
+            "vocabulary mnemonic sound bridge fallback"
+        ]["messages"][0]["content"]
+        assert "near-homophones" in fallback_prompt
+        assert "It need not be a natural phrase" in fallback_prompt
+    expected = {**candidates[1], "components": analysis["components"]}
+    assert client.get("/api/vocabulary").json()[0]["mnemonic"] == expected
+    assert client.get(
+        "/api/revision/session", params={"language": "German"}
+    ).json()["cards"][0]["mnemonic"] == expected
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        stored = json.loads(
+            connection.execute(
+                "SELECT mnemonic_json FROM vocabulary_german WHERE id = ?", (item_id,)
+            ).fetchone()[0]
+        )
+    assert stored["content_version"] == MNEMONIC_CONTENT_VERSION
+
+
+def test_vocabulary_mnemonic_judge_can_reject_both_candidates(
+    vocabulary_database, monkeypatch
+) -> None:
+    item_id = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(
+            original_source="Gift",
+            normalized_source="Gift",
+            translation="poison",
+            context="Das Gift ist gefährlich.",
+        ),
+    ).json()["item"]["id"]
+    operations = []
+
+    def fake_structured_model_response(operation, **kwargs):
+        operations.append(operation)
+        if operation == "vocabulary mnemonic analysis":
+            return json.dumps(
+                {
+                    "strategy": "acoustic_hook",
+                    "word_structure": "other",
+                    "components": [],
+                    "sound_cue": "English gift",
+                    "analysis_note": "A sound association, not a cognate claim.",
+                }
+            )
+        if operation == "vocabulary mnemonic candidates":
+            return json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "strategy": "acoustic_hook",
+                            "components": [],
+                            "hook": "Think of a gift.",
+                            "explanation": "Remember that Gift means poison.",
+                        },
+                        {
+                            "strategy": "acoustic_hook",
+                            "components": [],
+                            "hook": "A gift contains poison.",
+                            "explanation": "The similar sound links the two words.",
+                        },
+                    ]
+                }
+            )
+        return json.dumps(
+            {
+                "approved": False,
+                "selected_index": None,
+                "findings": ["Neither scene is vivid or distinctive enough."],
+            }
+        )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.mnemonic_structured_model_response",
+        fake_structured_model_response,
+    )
+
+    enrich_vocabulary_mnemonic(item_id)
+    enrich_vocabulary_mnemonic(item_id)
+
+    assert len(operations) == 3
+    assert client.get("/api/vocabulary").json()[0]["mnemonic"] is None
 
 
 def test_due_review_summary_tracks_the_grammar_cycle(vocabulary_database) -> None:

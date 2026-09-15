@@ -3,17 +3,17 @@ import {
   renderHighlightedSentence,
   sentenceContaining,
 } from "./text.js?v=5";
-import { languageName, t } from "./i18n.js?v=27";
+import { languageName, t } from "./i18n.js?v=30";
 import {
   cancelGrammarRequests,
   initializeGrammarRevision,
   loadGrammarRevision,
-} from "./grammar.js?v=19";
+} from "./grammar.js?v=22";
 import {
   cancelConjugationRequests,
   initializeConjugationWorkout,
   loadConjugationWorkout,
-} from "./conjugation.js?v=4";
+} from "./conjugation.js?v=7";
 
 const $ = selector => document.querySelector(selector);
 
@@ -141,6 +141,15 @@ document.addEventListener("margin:locale-changed", () => {
   const gender = [...NOUN_GENDERS].find(value => prompt?.classList.contains(`noun-${value}`));
   if (gender) setNounGender(prompt, gender);
   if (currentCard?.exercise === "letter_tiles") renderLetterTiles();
+  const mnemonicStrategy = $("#revision-mnemonic-strategy");
+  if (mnemonicStrategy?.dataset.strategy) {
+    mnemonicStrategy.textContent = t(
+      `revision.mnemonic.${mnemonicStrategy.dataset.strategy}`,
+    );
+  }
+  document.querySelectorAll("[data-mnemonic-role]").forEach(label => {
+    label.textContent = t(`revision.mnemonic.role.${label.dataset.mnemonicRole}`);
+  });
   updateProgress();
 });
 
@@ -369,6 +378,8 @@ function showEmptySession(finished = false) {
 
 function renderNextCard() {
   $("#revision-feedback").hidden = true;
+  $("#revision-mnemonic").hidden = true;
+  $("#revision-mnemonic").open = false;
   $("#revision-matching").hidden = true;
   $("#revision-connector-hint").hidden = true;
   if (!queue.length) {
@@ -956,6 +967,7 @@ async function submitAnswer(selectedAnswer) {
 
     answered += 1;
     if (data.correct) correctAnswers += 1;
+    currentCard.mnemonic = data.item.mnemonic || currentCard.mnemonic;
     if (!data.correct && currentCard.retryCount < 2) {
       const retryAt = Math.min(5, queue.length);
       queue.splice(retryAt, 0, { ...currentCard, retryCount: currentCard.retryCount + 1 });
@@ -981,6 +993,7 @@ async function submitAnswer(selectedAnswer) {
         ? t("revision.correct")
         : t("revision.incorrect", { answer: data.correct_answer });
     renderVocabularyFeedbackContext(currentCard);
+    renderVocabularyMnemonic(currentCard, !data.correct || hintUsed);
     $("#revision-feedback-dictionary").hidden = false;
     $("#revision-feedback-dictionary-value").textContent = data.item.normalized_source;
     $("#revision-feedback").hidden = false;
@@ -998,8 +1011,39 @@ async function submitAnswer(selectedAnswer) {
     $("#revision-context").textContent = "";
     $("#revision-context").hidden = true;
     $("#revision-feedback-dictionary").hidden = true;
+    $("#revision-mnemonic").hidden = true;
     $("#revision-feedback").hidden = false;
   }
+}
+
+function renderVocabularyMnemonic(card, expanded) {
+  const disclosure = $("#revision-mnemonic");
+  const mnemonic = card.mnemonic;
+  disclosure.open = false;
+  disclosure.hidden = !mnemonic;
+  if (!mnemonic) return;
+
+  const strategy = $("#revision-mnemonic-strategy");
+  strategy.dataset.strategy = mnemonic.strategy;
+  strategy.textContent = t(`revision.mnemonic.${mnemonic.strategy}`);
+  const components = $("#revision-mnemonic-components");
+  components.replaceChildren();
+  components.hidden = !mnemonic.components?.length;
+  (mnemonic.components || []).forEach(component => {
+    const row = document.createElement("div");
+    const term = document.createElement("dt");
+    const role = document.createElement("span");
+    const meaning = document.createElement("dd");
+    term.append(document.createTextNode(component.form), role);
+    role.dataset.mnemonicRole = component.role;
+    role.textContent = t(`revision.mnemonic.role.${component.role}`);
+    meaning.textContent = component.meaning;
+    row.append(term, meaning);
+    components.append(row);
+  });
+  $("#revision-mnemonic-hook").textContent = mnemonic.hook;
+  $("#revision-mnemonic-explanation").textContent = mnemonic.explanation;
+  disclosure.open = expanded;
 }
 
 function renderVocabularyFeedbackContext(card) {

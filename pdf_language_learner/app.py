@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal, Mapping
 from urllib.parse import urlsplit
 
 import httpx
@@ -171,7 +171,36 @@ MAX_SYNONYM_CANDIDATES = 32
 MIN_SYNONYM_ZIPF = 2.5
 MAX_SYNONYM_ZIPF_DROP = 2.0
 CONNECTOR_REVISION_LIMIT = 8
+MNEMONIC_BACKFILL_LIMIT = 8
+MNEMONIC_CONTENT_VERSION = 4
 CONNECTOR_BACKFILL_VERSION = "connector-sentences-v2"
+GERMAN_VERB_PREFIX_GUIDANCE = {
+    "ab": "away, off, or downward",
+    "an": "toward, on, or beginning contact",
+    "auf": "up, open, or beginning",
+    "aus": "out, outward, or to completion",
+    "ein": "in or into",
+    "ent": "away, removal, release, or beginning",
+    "er": "arrival at a result or achievement",
+    "fort": "away or onward",
+    "her": "toward the speaker",
+    "hin": "away from the speaker",
+    "los": "loose, away, or starting",
+    "mit": "with or along",
+    "nach": "after, following, or toward",
+    "über": "over, across, or excess",
+    "um": "around, reversal, or change",
+    "unter": "under, among, or interruption",
+    "ver": "change, error, loss, or completion; highly context-dependent",
+    "vor": "before, in front, or forward",
+    "weg": "away",
+    "weiter": "further or onward",
+    "wieder": "again or back",
+    "zer": "apart or into pieces",
+    "zu": "toward, closed, or addition",
+    "zurück": "back or returning",
+    "zusammen": "together",
+}
 # The output budget includes reasoning tokens as well as the structured grade.
 GRAMMAR_GRADING_MAX_OUTPUT_TOKENS = 1000
 GRAMMAR_SUMMARY_MAX_OUTPUT_TOKENS = 2000
@@ -660,6 +689,55 @@ def grammar_grading_effort() -> str:
     return grammar_reasoning_effort("OPENAI_GRAMMAR_GRADING_EFFORT", "high")
 
 
+def mnemonic_model() -> str:
+    variable = (
+        "GEMINI_MNEMONIC_MODEL"
+        if mnemonic_provider() == "gemini"
+        else "OPENAI_MNEMONIC_MODEL"
+    )
+    default = (
+        "gemini-3.8-flash"
+        if mnemonic_provider() == "gemini"
+        else "gpt-5.6-luna"
+    )
+    model = os.getenv(variable, default).strip()
+    if not model:
+        raise ValueError(f"{variable} must not be empty")
+    return model
+
+
+def mnemonic_judge_model() -> str:
+    variable = (
+        "GEMINI_MNEMONIC_JUDGE_MODEL"
+        if mnemonic_provider() == "gemini"
+        else "OPENAI_MNEMONIC_JUDGE_MODEL"
+    )
+    default = (
+        "gemini-3.8-flash" if mnemonic_provider() == "gemini" else "gpt-5.4"
+    )
+    model = os.getenv(variable, default).strip()
+    if not model:
+        raise ValueError(f"{variable} must not be empty")
+    return model
+
+
+def mnemonic_provider() -> Literal["gemini", "openai"]:
+    configured = os.getenv("MNEMONIC_PROVIDER", "").strip().casefold()
+    if not configured:
+        return "gemini" if os.getenv("GEMINI_API_KEY", "").strip() else "openai"
+    if configured not in {"gemini", "openai"}:
+        raise ValueError("MNEMONIC_PROVIDER must be gemini or openai")
+    return configured
+
+
+def mnemonic_generation_effort() -> str:
+    return grammar_reasoning_effort("OPENAI_MNEMONIC_GENERATION_EFFORT", "medium")
+
+
+def mnemonic_judge_effort() -> str:
+    return grammar_reasoning_effort("OPENAI_MNEMONIC_JUDGE_EFFORT", "low")
+
+
 @lru_cache(maxsize=1)
 def openai_client() -> OpenAI:
     """Return one process-wide client so HTTP connections can be reused."""
@@ -680,20 +758,50 @@ def grammar_openai_client() -> OpenAI:
     )
 
 
-def _log_openai_timing(operation: str, response: Any, elapsed_ms: float) -> None:
+@lru_cache(maxsize=1)
+def gemini_client() -> OpenAI:
+    """Return a Gemini client through Google's OpenAI-compatible endpoint."""
+
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY must be set when Gemini mnemonics are enabled")
+    return OpenAI(
+        api_key=api_key,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        timeout=float(os.getenv("GEMINI_TIMEOUT_SECONDS", "60")),
+        max_retries=1,
+    )
+
+
+def _usage_token(usage: Any, *fields: str) -> int | None:
+    for field in fields:
+        value = getattr(usage, field, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _log_model_timing(
+    provider: str, operation: str, response: Any, elapsed_ms: float
+) -> None:
     metrics = [f"wall={elapsed_ms:.1f}ms"]
     usage = getattr(response, "usage", None)
     if usage is not None:
-        for field in ("input_tokens", "output_tokens", "total_tokens"):
-            value = getattr(usage, field, None)
+        for label, fields in (
+            ("input", ("input_tokens", "prompt_tokens")),
+            ("output", ("output_tokens", "completion_tokens")),
+            ("total", ("total_tokens",)),
+        ):
+            value = _usage_token(usage, *fields)
             if isinstance(value, int):
-                metrics.append(f"{field.removesuffix('_tokens')}={value}")
-        reasoning_tokens = getattr(
-            getattr(usage, "output_tokens_details", None), "reasoning_tokens", None
+                metrics.append(f"{label}={value}")
+        details = getattr(usage, "output_tokens_details", None) or getattr(
+            usage, "completion_tokens_details", None
         )
+        reasoning_tokens = getattr(details, "reasoning_tokens", None)
         if isinstance(reasoning_tokens, int):
             metrics.append(f"reasoning={reasoning_tokens}")
-    logger.info("OpenAI %s completed: %s", operation, " ".join(metrics))
+    logger.info("%s %s completed: %s", provider, operation, " ".join(metrics))
 
 
 def _capture_openai_usage(operation: str, model: str, response: Any) -> None:
@@ -706,13 +814,16 @@ def _capture_openai_usage(operation: str, model: str, response: Any) -> None:
         key, {"calls": 0, "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
     )
     totals["calls"] += 1
-    for field in ("input_tokens", "output_tokens"):
-        value = getattr(usage, field, None)
-        if isinstance(value, int):
-            totals[field] += value
-    reasoning = getattr(
-        getattr(usage, "output_tokens_details", None), "reasoning_tokens", None
+    input_tokens = _usage_token(usage, "input_tokens", "prompt_tokens")
+    output_tokens = _usage_token(usage, "output_tokens", "completion_tokens")
+    if input_tokens is not None:
+        totals["input_tokens"] += input_tokens
+    if output_tokens is not None:
+        totals["output_tokens"] += output_tokens
+    details = getattr(usage, "output_tokens_details", None) or getattr(
+        usage, "completion_tokens_details", None
     )
+    reasoning = getattr(details, "reasoning_tokens", None)
     if isinstance(reasoning, int):
         totals["reasoning_tokens"] += reasoning
 
@@ -740,8 +851,26 @@ def timed_openai_response(client: OpenAI, operation: str, **kwargs):
             (time.perf_counter() - started) * 1_000,
         )
         raise
-    _log_openai_timing(
-        operation, response, (time.perf_counter() - started) * 1_000
+    _log_model_timing(
+        "OpenAI", operation, response, (time.perf_counter() - started) * 1_000
+    )
+    _capture_openai_usage(operation, kwargs.get("model", "unknown"), response)
+    return response
+
+
+def timed_gemini_chat_completion(client: OpenAI, operation: str, **kwargs):
+    started = time.perf_counter()
+    try:
+        response = client.chat.completions.create(**kwargs)
+    except Exception:
+        logger.warning(
+            "Gemini %s failed after %.1fms",
+            operation,
+            (time.perf_counter() - started) * 1_000,
+        )
+        raise
+    _log_model_timing(
+        "Gemini", operation, response, (time.perf_counter() - started) * 1_000
     )
     _capture_openai_usage(operation, kwargs.get("model", "unknown"), response)
     return response
@@ -826,6 +955,77 @@ def structured_model_response(
     if getattr(response, "status", "completed") != "completed" or not (response.output_text or "").strip():
         raise StructuredModelOutputError(operation, model, response)
     return response.output_text
+
+
+def gemini_structured_model_response(
+    operation: str,
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    schema: dict,
+    schema_name: str,
+    max_output_tokens: int,
+) -> str:
+    """Request validated JSON through Gemini's OpenAI-compatible chat API."""
+
+    schema_instruction = (
+        f"Return only one valid JSON object matching the {schema_name} JSON Schema. "
+        "Do not use Markdown fences or add commentary. JSON Schema:\n"
+        + json.dumps(strict_json_schema(schema), ensure_ascii=False)
+    )
+    system_messages = [
+        message["content"] for message in messages if message["role"] == "system"
+    ]
+    gemini_messages = [
+        {
+            "role": "system",
+            "content": "\n\n".join([*system_messages, schema_instruction]),
+        },
+        *(message for message in messages if message["role"] != "system"),
+    ]
+    response = timed_gemini_chat_completion(
+        gemini_client(),
+        operation,
+        model=model,
+        messages=gemini_messages,
+        max_tokens=max_output_tokens,
+    )
+    content = response.choices[0].message.content
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError(f"{operation} ({model}) returned empty Gemini output")
+    content = content.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", content, re.DOTALL)
+    return fenced.group(1) if fenced else content
+
+
+def mnemonic_structured_model_response(
+    operation: str,
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    schema: dict,
+    schema_name: str,
+    max_output_tokens: int,
+    reasoning_effort: str,
+) -> str:
+    if mnemonic_provider() == "gemini":
+        return gemini_structured_model_response(
+            operation,
+            model=model,
+            messages=messages,
+            schema=schema,
+            schema_name=schema_name,
+            max_output_tokens=max_output_tokens,
+        )
+    return structured_model_response(
+        operation,
+        model=model,
+        messages=messages,
+        schema=schema,
+        schema_name=schema_name,
+        max_output_tokens=max_output_tokens,
+        reasoning_effort=reasoning_effort,
+    )
 
 
 def grammar_structured_model_response(
@@ -1461,6 +1661,88 @@ class SourceNounGrammar(BaseModel):
     )
 
 
+class MnemonicComponent(BaseModel):
+    form: str = Field(min_length=1, max_length=100)
+    meaning: str = Field(min_length=1, max_length=200)
+    role: Literal["prefix", "stem", "compound_part"]
+
+
+class VocabularyMnemonic(BaseModel):
+    strategy: Literal[
+        "acoustic_hook",
+        "sound_bridge",
+        "literal_root_breakdown",
+        "conceptual_bridge",
+    ]
+    components: list[MnemonicComponent] = Field(max_length=5)
+    hook: str = Field(min_length=1, max_length=300)
+    explanation: str = Field(min_length=1, max_length=600)
+
+    @field_validator("hook", "explanation")
+    @classmethod
+    def strip_mnemonic_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+
+class VocabularyMnemonicAnalysis(BaseModel):
+    strategy: Literal[
+        "acoustic_hook",
+        "sound_bridge",
+        "literal_root_breakdown",
+        "conceptual_bridge",
+    ] | None
+    word_structure: Literal["prefixed_verb", "compound_noun", "other"]
+    components: list[MnemonicComponent] = Field(max_length=5)
+    sound_cue: str | None = Field(default=None, max_length=160)
+    analysis_note: str = Field(min_length=1, max_length=500)
+
+
+class VocabularyMnemonicCandidates(BaseModel):
+    candidates: list[VocabularyMnemonic] = Field(min_length=2, max_length=2)
+
+
+class VocabularyMnemonicQualityReview(BaseModel):
+    approved: bool
+    selected_index: int | None = Field(default=None, ge=0, le=1)
+    findings: list[str] = Field(max_length=6)
+
+    def selected(
+        self, candidates: VocabularyMnemonicCandidates
+    ) -> VocabularyMnemonic | None:
+        if not self.approved or self.selected_index is None:
+            return None
+        return candidates.candidates[self.selected_index]
+
+
+class StoredVocabularyMnemonic(BaseModel):
+    content_version: int
+    mnemonic: VocabularyMnemonic | None
+
+
+class VocabularyMnemonicGeneration(BaseModel):
+    analysis: VocabularyMnemonicAnalysis
+    candidates: VocabularyMnemonicCandidates | None = None
+    quality_review: VocabularyMnemonicQualityReview | None = None
+
+    def selected(self) -> VocabularyMnemonic | None:
+        if self.candidates is None or self.quality_review is None:
+            return None
+        return self.quality_review.selected(self.candidates)
+
+
+def current_stored_mnemonic(value: str | None) -> StoredVocabularyMnemonic | None:
+    if not value:
+        return None
+    try:
+        stored = StoredVocabularyMnemonic.model_validate_json(value)
+    except (ValidationError, ValueError, TypeError):
+        return None
+    return stored if stored.content_version == MNEMONIC_CONTENT_VERSION else None
+
+
 class VocabularyCreate(BaseModel):
     original_source: str = Field(min_length=1, max_length=2_000)
     normalized_source: str = Field(min_length=1, max_length=2_000)
@@ -1514,6 +1796,7 @@ class VocabularyItem(BaseModel):
     document_key: str
     noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
     synonyms: list[SynonymValue] = Field(default_factory=list)
+    mnemonic: VocabularyMnemonic | None = None
     saved_at: str
     review: ReviewState
 
@@ -1540,6 +1823,7 @@ class RevisionCard(BaseModel):
     source_language: str
     target_language: str
     noun_gender: Literal["masculine", "feminine", "neutral"] | None = None
+    mnemonic: VocabularyMnemonic | None = None
 
 
 class SynonymMatchingPair(BaseModel):
@@ -2392,6 +2676,249 @@ def contextual_connector_gloss_messages(
     ]
 
 
+def vocabulary_mnemonic_analysis_messages(
+    *,
+    source: str,
+    translation: str,
+    source_language: str,
+    target_language: str,
+    context: str,
+) -> list[dict[str, str]]:
+    prefix_reference = ""
+    if canonicalize(source_language) == "german":
+        guidance = "; ".join(
+            f"{prefix}-: {meaning}"
+            for prefix, meaning in GERMAN_VERB_PREFIX_GUIDANCE.items()
+        )
+        prefix_reference = (
+            "\nPossible modern German prefix senses (reference, not proof that a "
+            f"split applies): {guidance}"
+        )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You analyse the modern structure and pronunciation of one saved "
+                "vocabulary item before a memory aid is written. Work with the "
+                "contextual meaning supplied. Prefer literal_root_breakdown for a "
+                "transparently prefixed verb and conceptual_bridge for a transparent "
+                "compound noun. For a prefixed verb, return the productive prefix "
+                "and stem, label their roles, explain their meanings in the learner's "
+                "target language, and mention separability or an idiomatic semantic "
+                "shift in analysis_note when relevant. For a compound noun, return "
+                "each modern constituent without inflectional endings or articles. "
+                "When a prefixed verb or compound-looking word has opaque, archaic, "
+                "or only partly usable morphology, prefer sound_bridge if familiar "
+                "target-language words, names, or short exclamations can echo useful "
+                "chunks of its spoken form in order. Near-homophones, approximate "
+                "vowels, and a deliberately odd multiword phrase are acceptable: this "
+                "is a recall device, not a pronunciation claim. Actively try several "
+                "playful sound segmentations before deciding that none works. Put "
+                "that invented phrase in sound_cue. Components must contain only "
+                "independently defensible modern linguistic parts; omit an opaque or "
+                "archaic stem rather than treating it as a modern word. A sound_bridge "
+                "may therefore contain a trustworthy prefix alone, trustworthy partial "
+                "compound parts, or no components. Use acoustic_hook for structurally "
+                "unanalysed other words when a common target-language word or short "
+                "phrase is genuinely close in pronunciation; put that cue in sound_cue "
+                "and return no components. Set strategy to null only when neither a "
+                "structural aid nor a recognizable creative sound cue can be made. Do "
+                "not split a word just "
+                "because its spelling permits a coincidental split. Do not present "
+                "historical roots as modern constituents, and never invent morphology, "
+                "etymology, cognates, or pronunciation. If no strategy is well "
+                "supported, set strategy to null. Return only the requested fields."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Source language: {source_language}\n"
+                f"Learner's target language: {target_language}\n"
+                f"Dictionary form: {source}\n"
+                f"Meaning: {translation}\n"
+                f"Context: {context or '(not available)'}"
+                f"{prefix_reference}\n"
+                "Analyse the word and select the best-supported strategy."
+            ),
+        },
+    ]
+
+
+def vocabulary_sound_bridge_messages(
+    *,
+    source: str,
+    translation: str,
+    source_language: str,
+    target_language: str,
+    context: str,
+    initial_analysis: VocabularyMnemonicAnalysis,
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a creative second-pass mnemonic planner. The cautious first "
+                "analysis found no ordinary root breakdown or natural homophone. Make "
+                "one more serious attempt at a sound_bridge before allowing no aid. "
+                "Invent a short sequence of familiar target-language words, names, "
+                "numbers, or exclamations that echoes recognizable chunks of the source "
+                "word in the same order. It may be surreal, cross syllable boundaries, "
+                "use near-homophones, and approximate unstressed vowels or individual "
+                "consonants. It need not be a natural phrase or reproduce every sound. "
+                "A few strong sound anchors that can drive a vivid scene are enough. "
+                "Prefer a usable, honest approximation over strategy null. Set strategy "
+                "to sound_bridge and put the invented phrase in sound_cue. Retain or add "
+                "only independently defensible modern prefixes or compound parts as "
+                "components; never promote an archaic base or invented sound chunk to a "
+                "linguistic component. Explain the approximation candidly in "
+                "analysis_note. Use strategy null only if even a playful cue would be "
+                "unrecognizable. Return only the requested fields."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Source language: {source_language}\n"
+                f"Learner's target language: {target_language}\n"
+                f"Dictionary form: {source}\n"
+                f"Meaning: {translation}\n"
+                f"Context: {context or '(not available)'}\n"
+                f"Initial analysis: {initial_analysis.model_dump_json()}\n"
+                "Try a creative sound bridge now."
+            ),
+        },
+    ]
+
+
+def vocabulary_mnemonic_candidate_messages(
+    *,
+    source: str,
+    translation: str,
+    source_language: str,
+    target_language: str,
+    context: str,
+    analysis: VocabularyMnemonicAnalysis,
+) -> list[dict[str, str]]:
+    strategy_instructions = {
+        "literal_root_breakdown": (
+            "Write each candidate around the supplied prefix and stem. Name both "
+            "parts and their concrete meanings in the hook. In the explanation, "
+            "show the physical action or change first, then bridge it to the exact "
+            "modern meaning. State briefly when the combination is idiomatic or "
+            "not fully predictable."
+        ),
+        "conceptual_bridge": (
+            "Write each candidate around all supplied compound parts. Name each "
+            "part and its literal meaning in the hook. In the explanation, create "
+            "one concrete mental picture and bridge the literal combination to the "
+            "exact modern meaning."
+        ),
+        "acoustic_hook": (
+            "Use only the supplied target-language sound cue. Each candidate must "
+            "make that cue central to a vivid, funny, or exaggerated scene that "
+            "also depicts the exact meaning. Explicitly frame it as a sound memory "
+            "device rather than an origin or cognate."
+        ),
+        "sound_bridge": (
+            "Build each candidate around the supplied target-language sound cue and "
+            "keep its strongest sound anchors in the source word's order. Smooth the "
+            "cue into a memorable scene; it does not need to preserve every source "
+            "sound or form a natural sentence. Combine the cue "
+            "with any supplied trustworthy component, but never assign the invented "
+            "sound chunks linguistic meanings or present them as etymology. If a "
+            "prefix's contribution to this word is opaque, label it as a recall cue "
+            "rather than claiming that it compositionally produces the modern meaning. "
+            "Turn the sound phrase into one vivid, funny, or exaggerated scene that "
+            "clearly depicts the exact contextual meaning."
+        ),
+    }[analysis.strategy]
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You write concise vocabulary memory aids from a prior linguistic "
+                "analysis. Produce exactly two distinct candidates using the selected "
+                "strategy and copy the supplied components exactly into each candidate; "
+                "do not change the strategy, parts, "
+                "meanings, or sound cue. The hook is one short memorable line. The "
+                "explanation is at most two short sentences and must connect the aid "
+                "to the contextual meaning without merely repeating the hook. Avoid "
+                "generic encouragement, strained jokes, and factual claims not present "
+                "in the analysis. "
+                f"{strategy_instructions} Return only the requested fields."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Source language: {source_language}\n"
+                f"Learner's target language: {target_language}\n"
+                f"Dictionary form: {source}\n"
+                f"Meaning: {translation}\n"
+                f"Context: {context or '(not available)'}\n"
+                f"Grounded analysis: {analysis.model_dump_json()}\n"
+                "Write exactly two memory-aid candidates."
+            ),
+        },
+    ]
+
+
+def vocabulary_mnemonic_judge_messages(
+    *,
+    source: str,
+    translation: str,
+    source_language: str,
+    target_language: str,
+    context: str,
+    analysis: VocabularyMnemonicAnalysis,
+    candidates: VocabularyMnemonicCandidates,
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are an independent quality judge for vocabulary memory aids. "
+                "Check the source-language word, contextual meaning, analysis, and "
+                "both candidates yourself. Reject both if the morphology, constituent "
+                "meaning, prefix mechanics, separability claim, pronunciation match, "
+                "or semantic bridge is inaccurate or materially misleading. For a "
+                "sound_bridge, treat the sound chunks as deliberately invented memory "
+                "material: judge whether enough distinctive sounds occur in order to "
+                "support recall. Allow near-homophones, accent differences, approximate "
+                "unstressed sounds, names, and surreal phrasing. Do not reject a useful "
+                "cue merely because it is not a natural phrase or exact transcription, "
+                "while rejecting any claim that its chunks are real "
+                "morphemes, etymology, or cognates. Permit a real prefix as an additional "
+                "recall cue even when its semantic contribution in this particular word "
+                "is opaque, provided the aid says so rather than inventing a mechanical "
+                "derivation. Also "
+                "reject aids that do not make recall easier, connect only to the form "
+                "but not the meaning, confuse an invented association with etymology, "
+                "or require a long explanation to work. Among candidates that are "
+                "accurate, select the more vivid, concrete, concise, and retrievable "
+                "one. Approval requires a clearly useful candidate, not merely an "
+                "acceptable sentence. If approved is false, selected_index must be "
+                "null. Findings must briefly state the decisive checks. Return only "
+                "the requested fields."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Source language: {source_language}\n"
+                f"Learner's target language: {target_language}\n"
+                f"Dictionary form: {source}\n"
+                f"Meaning: {translation}\n"
+                f"Context: {context or '(not available)'}\n"
+                f"Analysis: {analysis.model_dump_json()}\n"
+                f"Candidates: {candidates.model_dump_json()}\n"
+                "Select one candidate only if it clears every quality check."
+            ),
+        },
+    ]
+
+
 def synonym_ranking_messages(
     *,
     source: str,
@@ -2808,6 +3335,7 @@ def create_vocabulary_table(connection: sqlite3.Connection, table_name: str) -> 
             context TEXT NOT NULL DEFAULT '',
             document_key TEXT NOT NULL DEFAULT '',
             noun_gender TEXT,
+            mnemonic_json TEXT,
             saved_at TEXT NOT NULL,
             last_reviewed_at TEXT,
             next_review_at TEXT,
@@ -2882,6 +3410,17 @@ def migrate_vocabulary_gender(connection: sqlite3.Connection) -> None:
         }
         if "noun_gender" not in columns:
             connection.execute(f"ALTER TABLE {table_name} ADD COLUMN noun_gender TEXT")
+
+
+def migrate_vocabulary_mnemonics(connection: sqlite3.Connection) -> None:
+    for registered in registered_language_tables(connection):
+        table_name = registered["table_name"]
+        columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if "mnemonic_json" not in columns:
+            connection.execute(f"ALTER TABLE {table_name} ADD COLUMN mnemonic_json TEXT")
 
 
 def migrate_legacy_vocabulary(connection: sqlite3.Connection) -> None:
@@ -3388,6 +3927,7 @@ def vocabulary_database() -> Iterator[sqlite3.Connection]:
         seed_initial_grammar_progress(connection)
         migrate_legacy_vocabulary(connection)
         migrate_vocabulary_gender(connection)
+        migrate_vocabulary_mnemonics(connection)
         backfill_connector_sentences(connection)
         yield connection
         connection.commit()
@@ -3466,6 +4006,162 @@ def enrich_connector_sentence(sentence_id: str) -> None:
         )
 
 
+def valid_mnemonic_analysis(analysis: VocabularyMnemonicAnalysis) -> bool:
+    roles = [component.role for component in analysis.components]
+    if analysis.strategy == "literal_root_breakdown":
+        return (
+            analysis.word_structure == "prefixed_verb"
+            and "prefix" in roles
+            and "stem" in roles
+        )
+    if analysis.strategy == "conceptual_bridge":
+        return (
+            analysis.word_structure == "compound_noun"
+            and len(roles) >= 2
+            and set(roles) == {"compound_part"}
+        )
+    if analysis.strategy == "acoustic_hook":
+        return bool(analysis.sound_cue and not analysis.components)
+    if analysis.strategy == "sound_bridge":
+        if not analysis.sound_cue:
+            return False
+        if analysis.word_structure == "prefixed_verb":
+            return set(roles) <= {"prefix", "stem"}
+        if analysis.word_structure == "compound_noun":
+            return set(roles) <= {"compound_part"}
+        return False
+    return analysis.strategy is None
+
+
+def generate_vocabulary_mnemonic(
+    row: Mapping[str, Any],
+) -> VocabularyMnemonicGeneration:
+    details = {
+        "source": row["normalized_source"],
+        "translation": row["translation"],
+        "source_language": row["source_language"],
+        "target_language": row["target_language"],
+        "context": row["context"],
+    }
+    analysis_content = mnemonic_structured_model_response(
+        "vocabulary mnemonic analysis",
+        model=mnemonic_model(),
+        messages=vocabulary_mnemonic_analysis_messages(**details),
+        schema=VocabularyMnemonicAnalysis.model_json_schema(),
+        schema_name="vocabulary_mnemonic_analysis",
+        max_output_tokens=1400,
+        reasoning_effort=mnemonic_generation_effort(),
+    )
+    analysis = VocabularyMnemonicAnalysis.model_validate_json(analysis_content)
+    if analysis.strategy is None and analysis.word_structure in {
+        "prefixed_verb",
+        "compound_noun",
+    }:
+        fallback_content = mnemonic_structured_model_response(
+            "vocabulary mnemonic sound bridge fallback",
+            model=mnemonic_model(),
+            messages=vocabulary_sound_bridge_messages(
+                **details,
+                initial_analysis=analysis,
+            ),
+            schema=VocabularyMnemonicAnalysis.model_json_schema(),
+            schema_name="vocabulary_mnemonic_sound_bridge_analysis",
+            max_output_tokens=1400,
+            reasoning_effort=mnemonic_generation_effort(),
+        )
+        fallback = VocabularyMnemonicAnalysis.model_validate_json(fallback_content)
+        if fallback.strategy == "sound_bridge" and valid_mnemonic_analysis(fallback):
+            analysis = fallback
+    if not valid_mnemonic_analysis(analysis) or analysis.strategy is None:
+        return VocabularyMnemonicGeneration(analysis=analysis)
+
+    candidate_content = mnemonic_structured_model_response(
+        "vocabulary mnemonic candidates",
+        model=mnemonic_model(),
+        messages=vocabulary_mnemonic_candidate_messages(
+            **details,
+            analysis=analysis,
+        ),
+        schema=VocabularyMnemonicCandidates.model_json_schema(),
+        schema_name="vocabulary_mnemonic_candidates",
+        max_output_tokens=1800,
+        reasoning_effort=mnemonic_generation_effort(),
+    )
+    candidates = VocabularyMnemonicCandidates.model_validate_json(candidate_content)
+    if any(
+        candidate.strategy != analysis.strategy
+        for candidate in candidates.candidates
+    ):
+        raise ValueError("mnemonic candidate changed the selected strategy")
+    if any(
+        candidate.components != analysis.components
+        for candidate in candidates.candidates
+    ):
+        raise ValueError("mnemonic candidate changed the grounded components")
+
+    review_content = mnemonic_structured_model_response(
+        "vocabulary mnemonic quality review",
+        model=mnemonic_judge_model(),
+        messages=vocabulary_mnemonic_judge_messages(
+            **details,
+            analysis=analysis,
+            candidates=candidates,
+        ),
+        schema=VocabularyMnemonicQualityReview.model_json_schema(),
+        schema_name="vocabulary_mnemonic_quality_review",
+        max_output_tokens=1400,
+        reasoning_effort=mnemonic_judge_effort(),
+    )
+    review = VocabularyMnemonicQualityReview.model_validate_json(review_content)
+    return VocabularyMnemonicGeneration(
+        analysis=analysis,
+        candidates=candidates,
+        quality_review=review,
+    )
+
+
+def enrich_vocabulary_mnemonic(item_id: str) -> None:
+    """Generate and persist a judged, best-effort memory aid for one saved item."""
+
+    try:
+        row = None
+        table_name = None
+        with vocabulary_database() as connection:
+            for registered in registered_language_tables(connection):
+                candidate = connection.execute(
+                    f"SELECT * FROM {registered['table_name']} WHERE id = ?",
+                    (item_id,),
+                ).fetchone()
+                if candidate is not None:
+                    row = candidate
+                    table_name = registered["table_name"]
+                    break
+        if row is None or table_name is None:
+            return
+        if current_stored_mnemonic(row["mnemonic_json"]) is not None:
+            return
+
+        generated = generate_vocabulary_mnemonic(row)
+        stored = StoredVocabularyMnemonic(
+            content_version=MNEMONIC_CONTENT_VERSION,
+            mnemonic=generated.selected(),
+        )
+        with vocabulary_database() as connection:
+            connection.execute(
+                f"UPDATE {table_name} SET mnemonic_json = ? WHERE id = ?",
+                (stored.model_dump_json(), item_id),
+            )
+    except Exception:
+        # Mnemonics are optional enrichment. A card remains fully usable when
+        # either model is unavailable or the generated material is invalid.
+        logger.exception("Vocabulary mnemonic enrichment failed for item %s", item_id)
+
+
+def vocabulary_mnemonic(row: sqlite3.Row) -> VocabularyMnemonic | None:
+    stored = current_stored_mnemonic(row["mnemonic_json"])
+    return stored.mnemonic if stored is not None else None
+
+
 def vocabulary_synonyms(
     connection: sqlite3.Connection,
     item_id: str,
@@ -3501,6 +4197,7 @@ def vocabulary_item(
         document_key=row["document_key"],
         noun_gender=row["noun_gender"],
         synonyms=synonyms or [],
+        mnemonic=vocabulary_mnemonic(row),
         saved_at=row["saved_at"],
         review=ReviewState(
             last_reviewed_at=row["last_reviewed_at"],
@@ -3697,6 +4394,7 @@ def revision_card(
         source_language=row["source_language"],
         target_language=row["target_language"],
         noun_gender=row["noun_gender"],
+        mnemonic=vocabulary_mnemonic(row),
     )
 
 
@@ -5213,6 +5911,8 @@ def save_vocabulary(
         )
     if connector_sentence_id is not None:
         background_tasks.add_task(enrich_connector_sentence, connector_sentence_id)
+    if current_stored_mnemonic(row["mnemonic_json"]) is None:
+        background_tasks.add_task(enrich_vocabulary_mnemonic, row["id"])
     return VocabularySaveResult(item=item, created=created)
 
 
@@ -5319,6 +6019,13 @@ def revision_session(
 
     due_count = sum(is_due(schedule_state(row), at=now) for row in rows)
     selected = select_session_rows(rows, now=now, limit=limit)
+    missing_mnemonics = [
+        row["id"]
+        for row in selected
+        if current_stored_mnemonic(row["mnemonic_json"]) is None
+    ][:MNEMONIC_BACKFILL_LIMIT]
+    for item_id in missing_mnemonics:
+        background_tasks.add_task(enrich_vocabulary_mnemonic, item_id)
     for pending in pending_connector_sentences:
         background_tasks.add_task(enrich_connector_sentence, pending["sentence_id"])
     return RevisionSession(

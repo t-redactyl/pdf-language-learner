@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Margin — PDF language reader with audio transcripts</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css?v=51">
+  <link rel="stylesheet" href="/static/styles.css?v=53">
 </head>
 <body>
   <header class="topbar">
@@ -127,6 +127,13 @@
                 <span data-i18n="revision.dictionaryForm">Dictionary form</span>:
                 <strong id="revision-feedback-dictionary-value"></strong>
               </p>
+              <details id="revision-mnemonic" class="revision-mnemonic" hidden>
+                <summary data-i18n="revision.memoryAid">Memory aid</summary>
+                <p id="revision-mnemonic-strategy" class="revision-mnemonic-strategy"></p>
+                <dl id="revision-mnemonic-components" class="revision-mnemonic-components"></dl>
+                <strong id="revision-mnemonic-hook"></strong>
+                <p id="revision-mnemonic-explanation"></p>
+              </details>
               <button id="revision-continue" class="primary-button" type="button" data-i18n="revision.continue">Continue</button>
             </div>
           </article>
@@ -356,7 +363,7 @@
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
-  <script type="module" src="/static/revision.js?v=49"></script>
-  <script type="module" src="/static/app.js?v=52"></script>
+  <script type="module" src="/static/revision.js?v=52"></script>
+  <script type="module" src="/static/app.js?v=55"></script>
 </body>
 </html>
