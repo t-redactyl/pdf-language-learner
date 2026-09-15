@@ -172,6 +172,7 @@ MIN_SYNONYM_ZIPF = 2.5
 MAX_SYNONYM_ZIPF_DROP = 2.0
 CONNECTOR_REVISION_LIMIT = 8
 MNEMONIC_BACKFILL_LIMIT = 8
+MNEMONIC_BACKFILL_INTERVAL_SECONDS = 300
 MNEMONIC_CONTENT_VERSION = 4
 CONNECTOR_BACKFILL_VERSION = "connector-sentences-v2"
 GERMAN_VERB_PREFIX_GUIDANCE = {
@@ -214,6 +215,7 @@ GRAMMAR_CONTENT_LOCKS = {
 }
 GRAMMAR_PREPARATION_WAKE = threading.Event()
 GRAMMAR_PREPARATION_INTERVAL_SECONDS = 300
+MNEMONIC_BACKFILL_WAKE = threading.Event()
 GERMAN_CONNECTORS = {
     "obwohl": {
         "categories": ("subordinating conjunction",),
@@ -4157,6 +4159,41 @@ def enrich_vocabulary_mnemonic(item_id: str) -> None:
         logger.exception("Vocabulary mnemonic enrichment failed for item %s", item_id)
 
 
+def backfill_vocabulary_mnemonics(stop: threading.Event | None = None) -> None:
+    """Attempt every saved item that lacks a mnemonic for the current version."""
+
+    with vocabulary_database() as connection:
+        pending_item_ids = [
+            row["id"]
+            for registered in registered_language_tables(connection)
+            for row in connection.execute(
+                f"SELECT id, mnemonic_json FROM {registered['table_name']}"
+            ).fetchall()
+            if current_stored_mnemonic(row["mnemonic_json"]) is None
+        ]
+
+    if pending_item_ids:
+        logger.info(
+            "Backfilling mnemonics for %d saved vocabulary items",
+            len(pending_item_ids),
+        )
+    for item_id in pending_item_ids:
+        if stop is not None and stop.is_set():
+            return
+        enrich_vocabulary_mnemonic(item_id)
+
+
+def mnemonic_backfill_worker(stop: threading.Event) -> None:
+    while not stop.is_set():
+        MNEMONIC_BACKFILL_WAKE.clear()
+        try:
+            backfill_vocabulary_mnemonics(stop)
+        except Exception:
+            logger.exception("Vocabulary mnemonic backfill failed; will retry")
+        if not stop.is_set():
+            MNEMONIC_BACKFILL_WAKE.wait(MNEMONIC_BACKFILL_INTERVAL_SECONDS)
+
+
 def vocabulary_mnemonic(row: sqlite3.Row) -> VocabularyMnemonic | None:
     stored = current_stored_mnemonic(row["mnemonic_json"])
     return stored.mnemonic if stored is not None else None
@@ -4547,17 +4584,25 @@ def connector_revision_cards(
 @asynccontextmanager
 async def application_lifespan(application: FastAPI):
     stop = threading.Event()
-    worker = threading.Thread(
-        target=grammar_preparation_worker, args=(stop,),
-        name="grammar-preparation", daemon=True,
-    )
-    worker.start()
+    workers = [
+        threading.Thread(
+            target=grammar_preparation_worker, args=(stop,),
+            name="grammar-preparation", daemon=True,
+        ),
+        threading.Thread(
+            target=mnemonic_backfill_worker, args=(stop,),
+            name="mnemonic-backfill", daemon=True,
+        ),
+    ]
+    for worker in workers:
+        worker.start()
     try:
         yield
     finally:
         stop.set()
         GRAMMAR_PREPARATION_WAKE.set()
-        await asyncio.to_thread(worker.join)
+        MNEMONIC_BACKFILL_WAKE.set()
+        await asyncio.gather(*(asyncio.to_thread(worker.join) for worker in workers))
 
 
 app = FastAPI(title="PDF Language Learner", lifespan=application_lifespan)

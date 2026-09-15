@@ -21,6 +21,7 @@ from pdf_language_learner.app import (
     SynonymValue,
     WordAnalysis,
     analyze_word_in_context,
+    backfill_vocabulary_mnemonics,
     app,
     cached_model_translation,
     cached_ranked_synonyms,
@@ -2708,6 +2709,58 @@ def test_vocabulary_mnemonic_judge_can_reject_both_candidates(
 
     assert len(operations) == 3
     assert client.get("/api/vocabulary").json()[0]["mnemonic"] is None
+
+
+def test_mnemonic_backfill_attempts_all_pending_saved_words(
+    vocabulary_database, monkeypatch
+) -> None:
+    pending_ids = {
+        client.post(
+            "/api/vocabulary",
+            json=vocabulary_payload(
+                original_source="Häuser",
+                normalized_source="Haus",
+                translation="house",
+            ),
+        ).json()["item"]["id"],
+        client.post(
+            "/api/vocabulary",
+            json=vocabulary_payload(
+                original_source="perros",
+                normalized_source="perro",
+                translation="dog",
+                source_language="Spanish",
+            ),
+        ).json()["item"]["id"],
+    }
+    current_id = client.post(
+        "/api/vocabulary",
+        json=vocabulary_payload(),
+    ).json()["item"]["id"]
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        connection.execute(
+            "UPDATE vocabulary_german SET mnemonic_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "content_version": MNEMONIC_CONTENT_VERSION,
+                        "mnemonic": None,
+                    }
+                ),
+                current_id,
+            ),
+        )
+
+    attempted_ids = []
+    monkeypatch.setattr(
+        "pdf_language_learner.app.enrich_vocabulary_mnemonic",
+        attempted_ids.append,
+    )
+
+    backfill_vocabulary_mnemonics()
+
+    assert set(attempted_ids) == pending_ids
+    assert current_id not in attempted_ids
 
 
 def test_due_review_summary_tracks_the_grammar_cycle(vocabulary_database) -> None:
