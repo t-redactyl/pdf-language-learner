@@ -147,7 +147,7 @@ def test_home_serves_reader() -> None:
     assert 'id="toggle-translation-panel"' in response.text
     assert 'aria-controls="translation-panel-body"' in response.text
     assert '/static/styles.css?v=51' in response.text
-    assert '/static/revision.js?v=47' in response.text
+    assert '/static/revision.js?v=49' in response.text
     assert '/static/app.js?v=52' in response.text
     assert 'id="suggestions-groups"' in response.text
     assert 'id="translation-vocabulary-toggle"' in response.text
@@ -175,7 +175,7 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert './i18n.js?v=27' in app_script
     assert './i18n.js?v=27' in revision_script
     assert './i18n.js?v=27' in grammar_script
-    assert './grammar.js?v=17' in revision_script
+    assert './grammar.js?v=19' in revision_script
     assert '"conjugation.preparing"' in revision_script
     assert './conjugation.js?v=4' in revision_script
     assert './i18n.js?v=27' in conjugation_script
@@ -202,6 +202,9 @@ def test_frontend_entry_points_share_current_dependency_versions() -> None:
     assert 'document.addEventListener("margin:revision-closed"' in app_script
     assert '"grammar.reviewRules.other": "Reviewing {count} grammar rules"' in i18n_script
     assert "function renderTopicHeading()" in grammar_script
+    assert 'lesson.hidden = activeSession.kind !== "lesson"' in grammar_script
+    assert 'activeSession.kind === "review" || activeSession.kind === "mixed"' in grammar_script
+    assert 'activeSession.kind === "mixed" ? topics.slice(0, -1) : topics' in grammar_script
     assert "function loadTopicSummary(topic, summary)" in grammar_script
     assert 'disclosure.className = "grammar-topic-disclosure"' in grammar_script
     assert "function ruleSummaryPoints(summary)" in grammar_script

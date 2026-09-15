@@ -133,7 +133,7 @@ function renderSession() {
   $("#grammar-session-kind").textContent = t(`grammar.kind.${activeSession.kind}`);
   renderTopicHeading();
   const lesson = $("#grammar-lesson");
-  lesson.hidden = activeSession.kind === "review";
+  lesson.hidden = activeSession.kind !== "lesson";
   $("#grammar-rule-summary").replaceChildren(
     ...ruleSummaryPoints(activeSession.rule_summary).map(point => {
       const item = document.createElement("li");
@@ -219,14 +219,18 @@ function renderTopicHeading() {
   const title = $("#grammar-topic-title");
   const list = $("#grammar-topic-list");
   list.replaceChildren();
-  if (activeSession.kind !== "review") {
+  const showsReviewTopics = activeSession.kind === "review" || activeSession.kind === "mixed";
+  if (!showsReviewTopics) {
     title.textContent = topics.map(topic => topic.title).join(" · ");
     list.hidden = true;
     return;
   }
-  const countKey = topics.length === 1 ? "one" : "other";
-  title.textContent = t(`grammar.reviewRules.${countKey}`, { count: topics.length });
-  list.replaceChildren(...topics.map(topic => {
+  // Mixed sessions were removed from new scheduling, but an answered legacy
+  // session remains resumable. Their new topic was stored after the reviews.
+  const reviewTopics = activeSession.kind === "mixed" ? topics.slice(0, -1) : topics;
+  const countKey = reviewTopics.length === 1 ? "one" : "other";
+  title.textContent = t(`grammar.reviewRules.${countKey}`, { count: reviewTopics.length });
+  list.replaceChildren(...reviewTopics.map(topic => {
     const item = document.createElement("li");
     const disclosure = document.createElement("details");
     disclosure.className = "grammar-topic-disclosure";
