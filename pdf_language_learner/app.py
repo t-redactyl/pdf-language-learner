@@ -926,6 +926,25 @@ class StructuredModelOutputError(ValueError):
         )
 
 
+class GeminiStructuredModelOutputError(ValueError):
+    """Diagnostics for Gemini chat output stopped before the JSON was complete."""
+
+    def __init__(self, operation: str, model: str, response: Any, finish_reason: Any):
+        self.reason = str(finish_reason or "unknown")
+        normalized_reason = self.reason.casefold()
+        self.retryable = any(
+            marker in normalized_reason
+            for marker in ("length", "max_tokens", "max_output_tokens")
+        )
+        usage = getattr(response, "usage", None)
+        super().__init__(
+            f"{operation} ({model}) returned incomplete Gemini structured output: "
+            f"finish_reason={self.reason}, "
+            f"completion_tokens={getattr(usage, 'completion_tokens', None)}, "
+            f"total_tokens={getattr(usage, 'total_tokens', None)}"
+        )
+
+
 def structured_model_response(
     operation: str,
     *,
@@ -992,7 +1011,13 @@ def gemini_structured_model_response(
         messages=gemini_messages,
         max_tokens=max_output_tokens,
     )
-    content = response.choices[0].message.content
+    choice = response.choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason is not None and str(finish_reason).casefold() != "stop":
+        raise GeminiStructuredModelOutputError(
+            operation, model, response, finish_reason
+        )
+    content = choice.message.content
     if not isinstance(content, str) or not content.strip():
         raise ValueError(f"{operation} ({model}) returned empty Gemini output")
     content = content.strip()
@@ -1028,6 +1053,72 @@ def mnemonic_structured_model_response(
         max_output_tokens=max_output_tokens,
         reasoning_effort=reasoning_effort,
     )
+
+
+def validated_mnemonic_response[T: BaseModel](
+    operation: str,
+    *,
+    response_model: type[T],
+    model: str,
+    messages: list[dict[str, str]],
+    schema_name: str,
+    max_output_tokens: int,
+    reasoning_effort: str,
+    max_attempts: int = 2,
+) -> T:
+    """Retry truncated or invalid mnemonic JSON with more completion headroom."""
+
+    budget = max_output_tokens
+    attempt_messages = list(messages)
+    for attempt in range(max_attempts):
+        try:
+            content = mnemonic_structured_model_response(
+                operation,
+                model=model,
+                messages=attempt_messages,
+                schema=response_model.model_json_schema(),
+                schema_name=schema_name,
+                max_output_tokens=budget,
+                reasoning_effort=reasoning_effort,
+            )
+            return response_model.model_validate_json(content)
+        except (StructuredModelOutputError, GeminiStructuredModelOutputError) as exc:
+            if not exc.retryable or attempt == max_attempts - 1:
+                raise
+            budget *= 2
+            logger.warning(
+                "%s; retrying (%s/%s), tokens=%s",
+                exc,
+                attempt + 1,
+                max_attempts - 1,
+                budget,
+            )
+        except ValidationError as exc:
+            if attempt == max_attempts - 1:
+                raise ValueError(
+                    f"{operation}: invalid structured response after "
+                    f"{max_attempts} attempts: {exc}"
+                ) from exc
+            budget *= 2
+            logger.warning(
+                "%s returned invalid structured data; retrying (%s/%s), tokens=%s",
+                operation,
+                attempt + 1,
+                max_attempts - 1,
+                budget,
+            )
+            attempt_messages = [
+                *messages,
+                {
+                    "role": "user",
+                    "content": (
+                        "The previous response was incomplete or did not match the "
+                        "required schema. Return one complete JSON object matching every "
+                        "required field and constraint."
+                    ),
+                },
+            ]
+    raise AssertionError("unreachable")
 
 
 def grammar_structured_model_response(
@@ -4045,51 +4136,48 @@ def generate_vocabulary_mnemonic(
         "target_language": row["target_language"],
         "context": row["context"],
     }
-    analysis_content = mnemonic_structured_model_response(
+    analysis = validated_mnemonic_response(
         "vocabulary mnemonic analysis",
+        response_model=VocabularyMnemonicAnalysis,
         model=mnemonic_model(),
         messages=vocabulary_mnemonic_analysis_messages(**details),
-        schema=VocabularyMnemonicAnalysis.model_json_schema(),
         schema_name="vocabulary_mnemonic_analysis",
         max_output_tokens=1400,
         reasoning_effort=mnemonic_generation_effort(),
     )
-    analysis = VocabularyMnemonicAnalysis.model_validate_json(analysis_content)
     if analysis.strategy is None and analysis.word_structure in {
         "prefixed_verb",
         "compound_noun",
     }:
-        fallback_content = mnemonic_structured_model_response(
+        fallback = validated_mnemonic_response(
             "vocabulary mnemonic sound bridge fallback",
+            response_model=VocabularyMnemonicAnalysis,
             model=mnemonic_model(),
             messages=vocabulary_sound_bridge_messages(
                 **details,
                 initial_analysis=analysis,
             ),
-            schema=VocabularyMnemonicAnalysis.model_json_schema(),
             schema_name="vocabulary_mnemonic_sound_bridge_analysis",
             max_output_tokens=1400,
             reasoning_effort=mnemonic_generation_effort(),
         )
-        fallback = VocabularyMnemonicAnalysis.model_validate_json(fallback_content)
         if fallback.strategy == "sound_bridge" and valid_mnemonic_analysis(fallback):
             analysis = fallback
     if not valid_mnemonic_analysis(analysis) or analysis.strategy is None:
         return VocabularyMnemonicGeneration(analysis=analysis)
 
-    candidate_content = mnemonic_structured_model_response(
+    candidates = validated_mnemonic_response(
         "vocabulary mnemonic candidates",
+        response_model=VocabularyMnemonicCandidates,
         model=mnemonic_model(),
         messages=vocabulary_mnemonic_candidate_messages(
             **details,
             analysis=analysis,
         ),
-        schema=VocabularyMnemonicCandidates.model_json_schema(),
         schema_name="vocabulary_mnemonic_candidates",
         max_output_tokens=1800,
         reasoning_effort=mnemonic_generation_effort(),
     )
-    candidates = VocabularyMnemonicCandidates.model_validate_json(candidate_content)
     if any(
         candidate.strategy != analysis.strategy
         for candidate in candidates.candidates
@@ -4101,20 +4189,19 @@ def generate_vocabulary_mnemonic(
     ):
         raise ValueError("mnemonic candidate changed the grounded components")
 
-    review_content = mnemonic_structured_model_response(
+    review = validated_mnemonic_response(
         "vocabulary mnemonic quality review",
+        response_model=VocabularyMnemonicQualityReview,
         model=mnemonic_judge_model(),
         messages=vocabulary_mnemonic_judge_messages(
             **details,
             analysis=analysis,
             candidates=candidates,
         ),
-        schema=VocabularyMnemonicQualityReview.model_json_schema(),
         schema_name="vocabulary_mnemonic_quality_review",
         max_output_tokens=1400,
         reasoning_effort=mnemonic_judge_effort(),
     )
-    review = VocabularyMnemonicQualityReview.model_validate_json(review_content)
     return VocabularyMnemonicGeneration(
         analysis=analysis,
         candidates=candidates,

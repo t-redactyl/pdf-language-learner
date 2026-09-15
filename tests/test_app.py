@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from pdf_language_learner.app import (
     GRAMMAR_CONTENT_VERSION,
+    GeminiStructuredModelOutputError,
     LOCAL_NOUN_GRAMMAR_CACHE,
     MNEMONIC_CONTENT_VERSION,
     MULTI_WORD_TERMS,
@@ -19,6 +20,7 @@ from pdf_language_learner.app import (
     STANZA_PIPELINES,
     SynonymCandidateSet,
     SynonymValue,
+    VocabularyMnemonicAnalysis,
     WordAnalysis,
     analyze_word_in_context,
     backfill_vocabulary_mnemonics,
@@ -53,6 +55,7 @@ from pdf_language_learner.app import (
     strict_json_schema,
     timed_openai_response,
     translation_model,
+    validated_mnemonic_response,
     wordnet_synonym_candidates,
 )
 from pdf_language_learner.grammar_revision import (
@@ -479,6 +482,79 @@ def test_gemini_structured_response_injects_schema_and_records_usage(
             "reasoning_tokens": 0,
         }
     }
+
+
+def test_gemini_structured_response_rejects_token_truncated_json(
+    monkeypatch,
+) -> None:
+    fake_response = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="length",
+                message=SimpleNamespace(content='{"analysis_note": "cut off'),
+            )
+        ],
+        usage=SimpleNamespace(completion_tokens=1400, total_tokens=2462),
+    )
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=lambda **kwargs: fake_response)
+        )
+    )
+    monkeypatch.setattr("pdf_language_learner.app.gemini_client", lambda: fake_client)
+
+    with pytest.raises(
+        GeminiStructuredModelOutputError, match="finish_reason=length"
+    ) as caught:
+        gemini_structured_model_response(
+            "mnemonic analysis",
+            model="gemini-test",
+            messages=[{"role": "user", "content": "Analyze this word."}],
+            schema={"type": "object"},
+            schema_name="mnemonic_analysis",
+            max_output_tokens=1400,
+        )
+
+    assert caught.value.retryable
+    assert "total_tokens=2462" in str(caught.value)
+
+
+def test_mnemonic_validation_retries_incomplete_json_with_larger_budget(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def respond(operation, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return '{"strategy": "acoustic_hook", "sound_cue": "kaum'
+        return json.dumps(
+            {
+                "strategy": "acoustic_hook",
+                "word_structure": "other",
+                "components": [],
+                "sound_cue": "English comb",
+                "analysis_note": "A sound association only.",
+            }
+        )
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.mnemonic_structured_model_response", respond
+    )
+
+    result = validated_mnemonic_response(
+        "vocabulary mnemonic analysis",
+        response_model=VocabularyMnemonicAnalysis,
+        model="gemini-test",
+        messages=[{"role": "user", "content": "Analyze kaum."}],
+        schema_name="vocabulary_mnemonic_analysis",
+        max_output_tokens=1400,
+        reasoning_effort="medium",
+    )
+
+    assert result.sound_cue == "English comb"
+    assert [call["max_output_tokens"] for call in calls] == [1400, 2800]
+    assert "previous response was incomplete" in calls[1]["messages"][-1]["content"]
 
 
 def test_grammar_model_defaults_and_can_be_overridden(monkeypatch) -> None:
