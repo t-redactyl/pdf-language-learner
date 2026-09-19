@@ -98,6 +98,18 @@ logger = logging.getLogger("uvicorn.error").getChild("margin")
 MODEL_USAGE_CAPTURE: ContextVar[dict[str, dict[str, Any]] | None] = ContextVar(
     "model_usage_capture", default=None
 )
+MODEL_CALL_ATTEMPT: ContextVar[int] = ContextVar("model_call_attempt", default=1)
+
+
+@dataclass
+class GrammarGenerationUsageRun:
+    id: str
+    next_call_index: int = 1
+
+
+GRAMMAR_GENERATION_USAGE_RUN: ContextVar[GrammarGenerationUsageRun | None] = ContextVar(
+    "grammar_generation_usage_run", default=None
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 GRAMMAR_CONTENT_VERSION = 6
@@ -638,6 +650,15 @@ def grammar_model() -> str:
     return os.getenv("OPENAI_GRAMMAR_MODEL", "gpt-5.6-luna").strip()
 
 
+def grammar_pregeneration_enabled() -> bool:
+    value = os.getenv("GRAMMAR_PREGENERATION_ENABLED", "false").strip().casefold()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("GRAMMAR_PREGENERATION_ENABLED must be true or false")
+
+
 def grammar_judge_model() -> str:
     model = os.getenv("OPENAI_GRAMMAR_JUDGE_MODEL", "gpt-5.4").strip()
     if not model:
@@ -806,28 +827,61 @@ def _log_model_timing(
     logger.info("%s %s completed: %s", provider, operation, " ".join(metrics))
 
 
-def _capture_openai_usage(operation: str, model: str, response: Any) -> None:
+def _capture_openai_usage(
+    operation: str, model: str, response: Any, request: Mapping[str, Any] | None = None,
+) -> None:
     capture = MODEL_USAGE_CAPTURE.get()
     usage = getattr(response, "usage", None)
-    if capture is None or usage is None:
+    if usage is None:
         return
-    key = f"{operation} [{model}]"
-    totals = capture.setdefault(
-        key, {"calls": 0, "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
-    )
-    totals["calls"] += 1
     input_tokens = _usage_token(usage, "input_tokens", "prompt_tokens")
     output_tokens = _usage_token(usage, "output_tokens", "completion_tokens")
-    if input_tokens is not None:
-        totals["input_tokens"] += input_tokens
-    if output_tokens is not None:
-        totals["output_tokens"] += output_tokens
     details = getattr(usage, "output_tokens_details", None) or getattr(
         usage, "completion_tokens_details", None
     )
     reasoning = getattr(details, "reasoning_tokens", None)
-    if isinstance(reasoning, int):
-        totals["reasoning_tokens"] += reasoning
+    if capture is not None:
+        key = f"{operation} [{model}]"
+        totals = capture.setdefault(
+            key, {"calls": 0, "input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+        )
+        totals["calls"] += 1
+        if input_tokens is not None:
+            totals["input_tokens"] += input_tokens
+        if output_tokens is not None:
+            totals["output_tokens"] += output_tokens
+        if isinstance(reasoning, int):
+            totals["reasoning_tokens"] += reasoning
+    run = GRAMMAR_GENERATION_USAGE_RUN.get()
+    if run is not None:
+        input_details = getattr(usage, "input_tokens_details", None) or getattr(
+            usage, "prompt_tokens_details", None
+        )
+        reasoning_request = (request or {}).get("reasoning") or {}
+        try:
+            with vocabulary_database() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO grammar_model_usage (
+                        run_id, call_index, operation, model, attempt,
+                        input_tokens, cached_input_tokens, output_tokens,
+                        reasoning_tokens, total_tokens, max_output_tokens,
+                        reasoning_effort, recorded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run.id, run.next_call_index, operation, model,
+                        MODEL_CALL_ATTEMPT.get(), input_tokens,
+                        getattr(input_details, "cached_tokens", None), output_tokens,
+                        reasoning if isinstance(reasoning, int) else None,
+                        _usage_token(usage, "total_tokens"),
+                        (request or {}).get("max_output_tokens"),
+                        reasoning_request.get("effort"), datetime.now(UTC).isoformat(),
+                    ),
+                )
+            run.next_call_index += 1
+        except Exception:
+            logger.exception("Could not persist grammar model usage for run %s", run.id)
 
 
 @contextmanager
@@ -856,7 +910,9 @@ def timed_openai_response(client: OpenAI, operation: str, **kwargs):
     _log_model_timing(
         "OpenAI", operation, response, (time.perf_counter() - started) * 1_000
     )
-    _capture_openai_usage(operation, kwargs.get("model", "unknown"), response)
+    _capture_openai_usage(
+        operation, kwargs.get("model", "unknown"), response, request=kwargs
+    )
     return response
 
 
@@ -1156,10 +1212,14 @@ def validated_grammar_response[T: BaseModel](
     attempt_messages = list(messages)
     for attempt in range(max_attempts):
         try:
-            content = grammar_structured_model_response(
-                operation, response_model=response_model, messages=attempt_messages,
-                max_output_tokens=budget, effort=effort, model=model,
-            )
+            attempt_token = MODEL_CALL_ATTEMPT.set(attempt + 1)
+            try:
+                content = grammar_structured_model_response(
+                    operation, response_model=response_model, messages=attempt_messages,
+                    max_output_tokens=budget, effort=effort, model=model,
+                )
+            finally:
+                MODEL_CALL_ATTEMPT.reset(attempt_token)
             parsed = response_model.model_validate_json(content)
             if validate is not None:
                 validate(parsed)
@@ -3642,6 +3702,57 @@ def create_grammar_tables(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS grammar_generation_runs (
+            id TEXT PRIMARY KEY,
+            canonical_language TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            topic_keys_json TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            status TEXT NOT NULL,
+            quality_review_passes INTEGER NOT NULL DEFAULT 0,
+            blocking_findings INTEGER NOT NULL DEFAULT 0,
+            repair_required INTEGER NOT NULL DEFAULT 0,
+            final_approved INTEGER NOT NULL DEFAULT 0,
+            error TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS grammar_model_usage (
+            run_id TEXT NOT NULL,
+            call_index INTEGER NOT NULL,
+            operation TEXT NOT NULL,
+            model TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            input_tokens INTEGER,
+            cached_input_tokens INTEGER,
+            output_tokens INTEGER,
+            reasoning_tokens INTEGER,
+            total_tokens INTEGER,
+            max_output_tokens INTEGER,
+            reasoning_effort TEXT,
+            recorded_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, call_index),
+            FOREIGN KEY (run_id) REFERENCES grammar_generation_runs(id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS grammar_generation_runs_started_at
+        ON grammar_generation_runs (started_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS grammar_model_usage_operation
+        ON grammar_model_usage (operation, model)
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS schema_migrations (
             name TEXT PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -4671,16 +4782,20 @@ def connector_revision_cards(
 @asynccontextmanager
 async def application_lifespan(application: FastAPI):
     stop = threading.Event()
-    workers = [
-        threading.Thread(
+    workers = []
+    if grammar_pregeneration_enabled():
+        workers.append(threading.Thread(
             target=grammar_preparation_worker, args=(stop,),
             name="grammar-preparation", daemon=True,
-        ),
+        ))
+    else:
+        logger.info("Automatic grammar pre-generation is disabled")
+    workers.append(
         threading.Thread(
             target=mnemonic_backfill_worker, args=(stop,),
             name="mnemonic-backfill", daemon=True,
-        ),
-    ]
+        )
+    )
     for worker in workers:
         worker.start()
     try:
@@ -5008,31 +5123,109 @@ def saved_grammar_vocabulary(
     ]
 
 
+def start_grammar_generation_usage_run(
+    language: str, kind: GrammarSessionKind, topics: list[GrammarTopic]
+) -> GrammarGenerationUsageRun:
+    run = GrammarGenerationUsageRun(id=str(uuid.uuid4()))
+    try:
+        with vocabulary_database() as connection:
+            connection.execute(
+                """
+                INSERT INTO grammar_generation_runs (
+                    id, canonical_language, kind, topic_keys_json,
+                    started_at, status
+                ) VALUES (?, ?, ?, ?, ?, 'running')
+                """,
+                (
+                    run.id, language, kind.value,
+                    json.dumps([topic.key for topic in topics]),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+    except Exception:
+        logger.exception("Could not start grammar usage run %s", run.id)
+    return run
+
+
+def finish_grammar_generation_usage_run(
+    run: GrammarGenerationUsageRun,
+    generated: GrammarGeneratedSession | None,
+    failure: Exception | None,
+) -> None:
+    verdicts = []
+    candidate = generated
+    if isinstance(failure, GrammarGenerationFailure):
+        verdicts = failure.verdicts
+        candidate = failure.candidate or candidate
+    elif generated is not None and generated.quality_review is not None:
+        verdicts = generated.quality_review.verdicts
+    approved = bool(
+        failure is None
+        and candidate is not None
+        and candidate.quality_review is not None
+        and candidate.quality_review.verdicts[-1].approved
+    )
+    try:
+        with vocabulary_database() as connection:
+            connection.execute(
+                """
+                UPDATE grammar_generation_runs SET
+                    completed_at = ?, status = ?, quality_review_passes = ?,
+                    blocking_findings = ?, repair_required = ?,
+                    final_approved = ?, error = ?
+                WHERE id = ?
+                """,
+                (
+                    datetime.now(UTC).isoformat(),
+                    "approved" if approved else "failed",
+                    len(verdicts),
+                    sum(verdict.blocking_count for verdict in verdicts),
+                    int(any(not verdict.approved for verdict in verdicts)),
+                    int(approved),
+                    None if failure is None else f"{type(failure).__name__}: {failure}",
+                    run.id,
+                ),
+            )
+    except Exception:
+        logger.exception("Could not finish grammar usage run %s", run.id)
+
+
 def generate_grammar_content(
     language: str,
     kind: GrammarSessionKind,
     topics: list[GrammarTopic],
     vocabulary: list[str],
 ) -> GrammarGeneratedSession:
+    run = start_grammar_generation_usage_run(language, kind, topics)
+    usage_token = GRAMMAR_GENERATION_USAGE_RUN.set(run)
     topic_data = grammar_topic_generation_data(topics)
     generated = None
+    failure = None
     try:
-        content = validated_grammar_response(
-            "grammar session generation",
-            messages=grammar_generation_messages(
-                language=language, kind=kind, topics=topic_data, saved_vocabulary=vocabulary
-            ),
-            response_model=GrammarGenerationResponse,
-            max_output_tokens=grammar_generation_tokens(),
-            effort=grammar_generation_effort(),
-        )
-        generated = content.to_generated_session()
-        validate_generated_grammar_topics(generated, topics)
+        try:
+            content = validated_grammar_response(
+                "grammar session generation",
+                messages=grammar_generation_messages(
+                    language=language, kind=kind, topics=topic_data, saved_vocabulary=vocabulary
+                ),
+                response_model=GrammarGenerationResponse,
+                max_output_tokens=grammar_generation_tokens(),
+                effort=grammar_generation_effort(),
+            )
+            generated = content.to_generated_session()
+            validate_generated_grammar_topics(generated, topics)
+        except Exception as exc:
+            raise GrammarGenerationFailure(
+                f"grammar session generation failed: {exc}", candidate=generated, verdicts=[],
+            ) from exc
+        generated = review_grammar_content(language, kind, topics, vocabulary, generated)
+        return generated
     except Exception as exc:
-        raise GrammarGenerationFailure(
-            f"grammar session generation failed: {exc}", candidate=generated, verdicts=[],
-        ) from exc
-    return review_grammar_content(language, kind, topics, vocabulary, generated)
+        failure = exc
+        raise
+    finally:
+        GRAMMAR_GENERATION_USAGE_RUN.reset(usage_token)
+        finish_grammar_generation_usage_run(run, generated, failure)
 
 
 def grammar_topic_generation_data(topics: list[GrammarTopic]) -> list[dict]:

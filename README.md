@@ -59,6 +59,7 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | `GEMINI_MNEMONIC_JUDGE_MODEL`  | `gemini-3.8-flash`         | Gemini mnemonic quality judge model           |
 | `GEMINI_TIMEOUT_SECONDS`       | `60`                       | Gemini mnemonic request timeout               |
 | `OPENAI_GRAMMAR_MODEL`         | `gpt-5.6-luna`             | OpenAI model used for grammar                 |
+| `GRAMMAR_PREGENERATION_ENABLED` | `false`                    | Generate upcoming grammar sessions in the background |
 | `OPENAI_GRAMMAR_TIMEOUT_SECONDS` | `180`                    | Grammar request timeout                      |
 | `OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS` | `20000`               | Grammar generation token ceiling             |
 | `OPENAI_GRAMMAR_GENERATION_EFFORT` | `xhigh`                | Reasoning effort for lesson generation       |
@@ -190,9 +191,10 @@ analysis finds no strategy for an opaque prefixed verb or compound noun, a
 creative second pass tries looser near-homophones, names, numbers, and surreal
 phrases before accepting that no useful aid is available.
 
-Starting or restarting the Space resumes any missing grammar preparation for
-languages with practice history or an active lesson. An untouched language makes
-no automatic model requests. OpenAI request and Stanza initialization/inference timings are
+When `GRAMMAR_PREGENERATION_ENABLED=true`, starting or restarting the Space
+resumes any missing grammar preparation for languages with practice history or
+an active lesson. An untouched language makes no automatic model requests.
+OpenAI request and Stanza initialization/inference timings are
 written to the server log. Repeated
 word analyses, grammatical classifications, and exact translation requests are
 held in bounded in-memory caches for the lifetime of the server process. Source
@@ -222,6 +224,31 @@ lesson and one review per language, retries missing or failed work every five
 minutes, and resumes after a restart. The server must be running to prepare
 exercises; a sleeping Space catches up when it wakes. Use one Uvicorn worker
 (the deployment default) so background and on-demand generation share locks.
+Automatic pre-generation is disabled by default. Set
+`GRAMMAR_PREGENERATION_ENABLED=true` to enable it. Grammar sessions remain
+available and generate on demand when opened, so changing this setting does not
+remove the feature or lose progress.
+
+Each generation attempt is recorded in `grammar_generation_runs`. Every model
+response belonging to that run is recorded separately in `grammar_model_usage`,
+including its operation, model, call order, retry attempt, input and cached-input
+tokens, output and reasoning tokens, configured output ceiling, and reasoning
+effort. Completed runs also retain their topics, approval or failure status,
+quality-review count, blocking-finding count, repair status, and error. Requests
+that fail before the provider returns usage still appear as failed runs, but
+cannot have a corresponding usage row because no token totals were returned.
+
+For example, this query summarizes grammar generation by pipeline stage:
+
+```sql
+SELECT operation, model, COUNT(*) AS calls,
+       SUM(input_tokens) AS input_tokens,
+       SUM(output_tokens) AS output_tokens,
+       SUM(reasoning_tokens) AS reasoning_tokens
+FROM grammar_model_usage
+GROUP BY operation, model
+ORDER BY SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) DESC;
+```
 
 Every newly generated lesson and review now passes through an independent LLM
 judge before being saved. The judge checks all fifteen exercises, the rule

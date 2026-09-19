@@ -301,6 +301,7 @@ def test_foreground_reuses_in_flight_preparation(preparation, monkeypatch):
 def test_lifespan_recovers_preparation_without_a_browser(preparation, monkeypatch):
     clock, calls = preparation
     close_cycle("spanish", clock.value)
+    monkeypatch.setenv("GRAMMAR_PREGENERATION_ENABLED", "true")
     prepared = threading.Event()
     prepare = backend.prepare_upcoming_grammar
 
@@ -316,3 +317,18 @@ def test_lifespan_recovers_preparation_without_a_browser(preparation, monkeypatc
     with TestClient(backend.app):
         assert prepared.wait(10)
     assert len(calls) == 2
+
+
+def test_lifespan_defaults_to_disabled_grammar_pregeneration(preparation, monkeypatch):
+    clock, calls = preparation
+    close_cycle("spanish", clock.value)
+    prepared = threading.Event()
+
+    def observed_prepare(stop=None):
+        prepared.set()
+
+    monkeypatch.delenv("GRAMMAR_PREGENERATION_ENABLED", raising=False)
+    monkeypatch.setattr(backend, "prepare_upcoming_grammar", observed_prepare)
+    with TestClient(backend.app):
+        assert not prepared.wait(0.1)
+    assert calls == []

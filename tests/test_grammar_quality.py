@@ -2,6 +2,7 @@ import importlib
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -132,6 +133,75 @@ def test_approved_content_does_not_need_repair(quality_env, monkeypatch):
     assert calls == ["grammar session generation", "grammar session quality review"]
 
 
+def test_generation_persists_each_model_call_and_retry(quality_env, monkeypatch):
+    topics = list(backend.grammar_catalogue("spanish")[:1])
+    judgments = iter([verdict(rejected=True), verdict()])
+    generation_attempts = 0
+
+    def respond(operation, **kwargs):
+        nonlocal generation_attempts
+        response_number = respond.calls + 1
+        respond.calls = response_number
+        usage = SimpleNamespace(
+            input_tokens=1000 + response_number,
+            output_tokens=2000 + response_number,
+            total_tokens=3000 + response_number,
+            input_tokens_details=SimpleNamespace(cached_tokens=100 + response_number),
+            output_tokens_details=SimpleNamespace(reasoning_tokens=1500 + response_number),
+        )
+        backend._capture_openai_usage(
+            operation,
+            kwargs.get("model") or backend.grammar_model(),
+            SimpleNamespace(usage=usage),
+            request={
+                "max_output_tokens": kwargs["max_output_tokens"],
+                "reasoning": {"effort": kwargs["effort"]},
+            },
+        )
+        if operation == "grammar session generation":
+            generation_attempts += 1
+            if generation_attempts == 1:
+                return "{}"
+            return json.dumps(provider_content(topics))
+        if operation == "grammar session quality review":
+            return json.dumps(next(judgments))
+        return json.dumps(provider_content(topics, repair=True))
+
+    respond.calls = 0
+    monkeypatch.setattr(backend, "grammar_structured_model_response", respond)
+
+    generated = backend.generate_grammar_content(
+        "spanish", GrammarSessionKind.LESSON, topics, []
+    )
+
+    assert generated.quality_review.verdicts[-1].approved
+    with backend.vocabulary_database() as connection:
+        run = connection.execute("SELECT * FROM grammar_generation_runs").fetchone()
+        usage = connection.execute(
+            "SELECT * FROM grammar_model_usage ORDER BY call_index"
+        ).fetchall()
+    assert run["canonical_language"] == "spanish"
+    assert json.loads(run["topic_keys_json"]) == [topics[0].key]
+    assert run["status"] == "approved"
+    assert run["quality_review_passes"] == 2
+    assert run["blocking_findings"] == 1
+    assert run["repair_required"] == 1
+    assert run["final_approved"] == 1
+    assert run["error"] is None
+    assert [row["operation"] for row in usage] == [
+        "grammar session generation", "grammar session generation",
+        "grammar session quality review", "grammar session repair",
+        "grammar session quality review",
+    ]
+    assert [row["attempt"] for row in usage] == [1, 2, 1, 1, 1]
+    assert [row["call_index"] for row in usage] == [1, 2, 3, 4, 5]
+    assert usage[0]["input_tokens"] == 1001
+    assert usage[0]["cached_input_tokens"] == 101
+    assert usage[0]["reasoning_tokens"] == 1501
+    assert usage[0]["max_output_tokens"] == 20000
+    assert usage[0]["reasoning_effort"] == "xhigh"
+
+
 @pytest.mark.parametrize("judge_failure", ["reject", "malformed", "unavailable"])
 def test_failed_quality_review_never_creates_session(quality_env, monkeypatch, judge_failure):
     calls = []
@@ -154,6 +224,10 @@ def test_failed_quality_review_never_creates_session(quality_env, monkeypatch, j
     with backend.vocabulary_database() as connection:
         assert connection.execute("SELECT COUNT(*) FROM grammar_sessions").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM grammar_prepared_content").fetchone()[0] == 0
+        run = connection.execute("SELECT * FROM grammar_generation_runs").fetchone()
+        assert run["status"] == "failed"
+        assert run["final_approved"] == 0
+        assert run["error"].startswith("GrammarGenerationFailure:")
 
 
 def test_judge_requires_all_exercises_and_cannot_save_a_rejection():
