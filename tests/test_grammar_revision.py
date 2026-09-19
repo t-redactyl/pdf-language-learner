@@ -460,7 +460,7 @@ def test_grammar_review_prompt_forbids_new_topics() -> None:
     )
 
 
-def test_closed_grammar_grading_normalizes_punctuation() -> None:
+def test_local_grammar_grading_normalizes_punctuation() -> None:
     assert deterministic_grammar_grade(
         GrammarExerciseType.FILL_BLANK,
         "  Hablo. ",
@@ -469,9 +469,21 @@ def test_closed_grammar_grading_normalizes_punctuation() -> None:
     ) is True
     assert deterministic_grammar_grade(
         GrammarExerciseType.TRANSLATION,
-        "Hablo",
-        [],
-        "Hablo",
+        "  Ich gehe heute ins Kino! ",
+        ["Heute gehe ich ins Kino."],
+        "Ich gehe heute ins Kino.",
+    ) is True
+    assert deterministic_grammar_grade(
+        GrammarExerciseType.TRANSLATION,
+        "HEUTE GEHE ICH INS KINO",
+        ["Heute gehe ich ins Kino."],
+        "Ich gehe heute ins Kino.",
+    ) is True
+    assert deterministic_grammar_grade(
+        GrammarExerciseType.TRANSLATION,
+        "Ich gehe heute zum Kino.",
+        ["Heute gehe ich ins Kino."],
+        "Ich gehe heute ins Kino.",
     ) is None
     assert deterministic_grammar_grade(
         "ordering",
@@ -657,8 +669,8 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
         "translation",
         "translation",
     ]
-    assert calls.count("grammar answer grading") == 5
-    assert grading_token_budgets == [1000] * 5
+    assert calls.count("grammar answer grading") == 0
+    assert grading_token_budgets == []
     with sqlite3.connect(database) as connection:
         progress = connection.execute(
             "SELECT repetitions, lapses FROM grammar_reviews WHERE topic_key = ?",

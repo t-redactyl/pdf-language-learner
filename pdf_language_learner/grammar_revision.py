@@ -312,7 +312,7 @@ def deterministic_grammar_grade(
     accepted_answers: list[str],
     reference_answer: str,
 ) -> bool | None:
-    """Grade closed exercises locally and defer open-ended ones to the model."""
+    """Grade closed tasks and exact translations locally; defer other translations."""
 
     if isinstance(exercise_type, str):
         try:
@@ -322,6 +322,16 @@ def deterministic_grammar_grade(
                 return None
             if exercise_type not in LEGACY_CLOSED_GRAMMAR_EXERCISE_TYPES:
                 raise
+    normalized = normalize_grammar_answer(answer)
+    if exercise_type is GrammarExerciseType.TRANSLATION:
+        translations = {reference_answer, *accepted_answers}
+        return (
+            True
+            if normalized in {
+                normalize_grammar_answer(item) for item in translations
+            }
+            else None
+        )
     if exercise_type not in {
         GrammarExerciseType.MULTIPLE_CHOICE,
         GrammarExerciseType.FILL_BLANK,
@@ -329,7 +339,6 @@ def deterministic_grammar_grade(
     }:
         return None
     expected = accepted_answers or [reference_answer]
-    normalized = normalize_grammar_answer(answer)
     return normalized in {normalize_grammar_answer(item) for item in expected}
 
 

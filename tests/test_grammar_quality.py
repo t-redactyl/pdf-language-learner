@@ -445,7 +445,8 @@ def test_terminal_failure_retains_draft_and_verdicts(quality_env, monkeypatch, f
 
 def test_judge_distinguishes_translation_grading_from_closed_answers():
     prompt = grammar_quality_messages(language="spanish", kind="lesson", topics=[], vocabulary=[], candidate={})[0]["content"]
-    assert "Translations are graded by an LLM" in prompt
+    assert "Every other translation is graded by an LLM" in prompt
+    assert "Non-exact translations are graded by an LLM" in prompt
     assert "do not flag an omitted equivalent" in prompt
 
 

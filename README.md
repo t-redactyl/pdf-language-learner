@@ -266,6 +266,8 @@ Findings distinguish blocking errors from optional suggestions; suggestions are
 retained in the report but do not prevent approval. The judge uses the actual
 grading policy, including case-insensitive closed-answer matching and translation
 grading against the whole prompt, reference, and rubric together.
+Translations matching a normalized reference or accepted answer are marked
+correct locally; only non-matching translations require a model grading call.
 Only approved content is saved; if
 review fails or the judge is unavailable, background preparation retries later
 and on-demand generation reports a failure. This also applies to the preview
