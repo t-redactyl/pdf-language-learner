@@ -67,6 +67,39 @@ def test_grammar_generation_explains_rules_in_english() -> None:
     assert "five multiple_choice, five fill_blank, and five translation" in system_instruction
 
 
+@pytest.mark.parametrize(
+    ("language", "included_example", "excluded_example"),
+    [
+        (
+            "German",
+            "Verbposition in Satzverbindungen",
+            "Objeto Indirecto (OI)",
+        ),
+        (
+            "Spanish",
+            "Objeto Indirecto (OI)",
+            "Verbposition in Satzverbindungen",
+        ),
+    ],
+)
+def test_grammar_generation_includes_only_the_matching_language_example(
+    language: str, included_example: str, excluded_example: str
+) -> None:
+    messages = grammar_generation_messages(
+        language=language,
+        kind=GrammarSessionKind.LESSON,
+        topics=[{
+            "key": "topic", "title": "Topic", "level": "A1",
+            "example": "Example.",
+        }],
+        saved_vocabulary=[],
+    )
+
+    system_instruction = messages[0]["content"]
+    assert included_example in system_instruction
+    assert excluded_example not in system_instruction
+
+
 def test_rule_table_limit_is_sent_to_the_model_and_not_only_checked() -> None:
     """A cap the model never sees can only reject a response already paid for.
 

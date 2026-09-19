@@ -421,6 +421,16 @@ def grammar_generation_messages(
         for topic in topics
     )
     vocabulary = ", ".join(saved_vocabulary) or "none available"
+    formatting_example = {
+        "german": GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION,
+        "spanish": GRAMMAR_SPANISH_NEW_EXAMPLE_EXPLANATION,
+    }.get(language.strip().casefold())
+    formatting_guidance = (
+        f"Use this {language} grammar explanation as a formatting example: "
+        f"{formatting_example} "
+        if formatting_example
+        else ""
+    )
     if kind is GrammarSessionKind.LESSON:
         distribution = (
             "All fifteen exercises must target the one topic and progress from recognition "
@@ -474,8 +484,7 @@ def grammar_generation_messages(
                 "For new exercises, please give a succinct explanation of the grammar rule.  "
                 "Use rule_tables only for genuine paradigms, such as one table per declension or "
                 f"conjugation pattern, and never more than {GRAMMAR_RULE_TABLE_LIMIT}. Prose belongs in the rule summary. "
-                f"There is an example of how to format the German grammar instructions in {GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION}, "
-                f"and an example of how to format the Spanish grammar instructions in {GRAMMAR_SPANISH_NEW_EXAMPLE_EXPLANATION}. "
+                f"{formatting_guidance}"
                 "Multiple-choice tasks must ask the learner to select the form or "
                 "connector that makes the displayed sentence correct. Fill-blank tasks should be "
                 "guided sentence completion or sentence combination: supply any required connector "
