@@ -199,7 +199,7 @@ def test_generation_persists_each_model_call_and_retry(quality_env, monkeypatch)
     assert usage[0]["cached_input_tokens"] == 101
     assert usage[0]["reasoning_tokens"] == 1501
     assert usage[0]["max_output_tokens"] == 20000
-    assert usage[0]["reasoning_effort"] == "xhigh"
+    assert usage[0]["reasoning_effort"] == "high"
 
 
 @pytest.mark.parametrize("judge_failure", ["reject", "malformed", "unavailable"])

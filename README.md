@@ -62,7 +62,7 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | `GRAMMAR_PREGENERATION_ENABLED` | `false`                    | Generate upcoming grammar sessions in the background |
 | `OPENAI_GRAMMAR_TIMEOUT_SECONDS` | `180`                    | Grammar request timeout                      |
 | `OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS` | `20000`               | Grammar generation token ceiling             |
-| `OPENAI_GRAMMAR_GENERATION_EFFORT` | `xhigh`                | Reasoning effort for lesson generation       |
+| `OPENAI_GRAMMAR_GENERATION_EFFORT` | `high`                 | Reasoning effort for lesson generation       |
 | `OPENAI_GRAMMAR_GRADING_EFFORT` | `high`                    | Reasoning effort for open-ended grading      |
 | `OPENAI_GRAMMAR_JUDGE_MODEL`   | `gpt-5.4`                  | Independent exercise-quality judge           |
 | `OPENAI_GRAMMAR_JUDGE_EFFORT`  | `low`                      | Reasoning effort for the quality judge        |

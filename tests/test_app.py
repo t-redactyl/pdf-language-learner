@@ -570,7 +570,7 @@ def test_openai_grammar_settings(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_GRAMMAR_GENERATION_EFFORT", raising=False)
     monkeypatch.delenv("OPENAI_GRAMMAR_GRADING_EFFORT", raising=False)
     assert grammar_generation_tokens() == 20000
-    assert grammar_generation_effort() == "xhigh"
+    assert grammar_generation_effort() == "high"
     assert grammar_grading_effort() == "high"
 
     monkeypatch.setenv("OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS", "16000")

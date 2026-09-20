@@ -705,7 +705,7 @@ def grammar_reasoning_effort(variable: str, default: str) -> str:
 
 
 def grammar_generation_effort() -> str:
-    return grammar_reasoning_effort("OPENAI_GRAMMAR_GENERATION_EFFORT", "xhigh")
+    return grammar_reasoning_effort("OPENAI_GRAMMAR_GENERATION_EFFORT", "high")
 
 
 def grammar_grading_effort() -> str:
