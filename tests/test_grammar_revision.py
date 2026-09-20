@@ -68,22 +68,14 @@ def test_grammar_generation_explains_rules_in_english() -> None:
 
 
 @pytest.mark.parametrize(
-    ("language", "included_example", "excluded_example"),
+    ("language", "excluded_topic_prefix"),
     [
-        (
-            "German",
-            "Verbposition in Satzverbindungen",
-            "Objeto Indirecto (OI)",
-        ),
-        (
-            "Spanish",
-            "Objeto Indirecto (OI)",
-            "Verbposition in Satzverbindungen",
-        ),
+        ("German", "[example topic: es_"),
+        ("Spanish", "[example topic: a1b1_"),
     ],
 )
 def test_grammar_generation_includes_only_the_matching_language_example(
-    language: str, included_example: str, excluded_example: str
+    language: str, excluded_topic_prefix: str
 ) -> None:
     messages = grammar_generation_messages(
         language=language,
@@ -95,9 +87,30 @@ def test_grammar_generation_includes_only_the_matching_language_example(
         saved_vocabulary=[],
     )
 
-    system_instruction = messages[0]["content"]
-    assert included_example in system_instruction
-    assert excluded_example not in system_instruction
+    prompt = messages[1]["content"]
+    assert "STYLE EXEMPLARS FOR TOPICS WITHOUT AN AUTHORED SOURCE" in prompt
+    assert "[example topic:" in prompt
+    assert excluded_topic_prefix not in prompt
+
+
+def test_grammar_generation_uses_matching_authored_source_without_extra_exemplars() -> None:
+    messages = grammar_generation_messages(
+        language="Spanish",
+        kind=GrammarSessionKind.LESSON,
+        topics=[{
+            "key": "es_a1_u1_regular_ar_verbs",
+            "title": "Regular -ar verbs",
+            "level": "A1",
+            "example": "estudio, estudias",
+        }],
+        saved_vocabulary=[],
+    )
+
+    prompt = messages[1]["content"]
+    assert "AUTHORED SOURCES FOR SELECTED TOPICS" in prompt
+    assert "[topic: es_a1_u1_regular_ar_verbs]" in prompt
+    assert "Example (estudiar)" in prompt
+    assert "STYLE EXEMPLARS" not in prompt
 
 
 def test_rule_table_limit_is_sent_to_the_model_and_not_only_checked() -> None:

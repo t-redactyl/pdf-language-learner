@@ -250,6 +250,14 @@ GROUP BY operation, model
 ORDER BY SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) DESC;
 ```
 
+Grammar generation loads completed Markdown sections from `grammar_rules/german`
+and `grammar_rules/spanish`, matched by their stable `topic` comments. Material
+for a selected topic is treated as the primary explanation source. If a selected
+topic still contains a `TODO`, the generator instead receives up to two short,
+same-language completed sections as style and depth exemplars; incomplete text is
+never sent. Updating a rule affects newly generated content without requiring a
+code change.
+
 Every newly generated lesson and review now passes through an independent LLM
 judge before being saved. The judge checks all fifteen exercises, the rule
 explanation, tables, and examples for natural vocabulary and collocations,

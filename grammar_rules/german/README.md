@@ -1,8 +1,9 @@
 # German grammar rule source
 
-This directory is an inactive drafting area for textbook grammar rules. The
-application does not read these files yet; grammar sessions continue to use the
-metadata and examples in `pdf_language_learner/german_grammar_catalogue.py`.
+This directory contains optional, human-authored grammar rules used by grammar
+generation. A completed section for a selected topic is supplied to the model as
+its primary source. When a selected topic is incomplete, completed sections from
+this directory are supplied as style and depth exemplars instead.
 
 Enter the selected A1–B1 review material in `a1-b1.md` and the Grammatik Aktiv
 B2/C1 material in `b2-c1.md`. Each grammar topic already has a heading and its
@@ -32,6 +33,6 @@ comment and the next `topic` comment. If the textbook treats two catalogue
 topics together, repeat the relevant text or add a short cross-reference so
 that each section remains understandable on its own.
 
-When every `TODO` has been replaced, the files will be ready for a separate
-integration change that loads these rules and includes them in model prompts.
-
+Sections containing a `TODO` are ignored until they are completed. Changes take
+effect on newly generated grammar content; existing prepared content is not
+rewritten in place.

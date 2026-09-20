@@ -113,7 +113,7 @@ GRAMMAR_GENERATION_USAGE_RUN: ContextVar[GrammarGenerationUsageRun | None] = Con
 )
 
 ROOT = Path(__file__).resolve().parent.parent
-GRAMMAR_CONTENT_VERSION = 8
+GRAMMAR_CONTENT_VERSION = 9
 
 validate_conjugation_inventory((*GRAMMAR_TOPICS, *SPANISH_GRAMMAR_TOPICS))
 

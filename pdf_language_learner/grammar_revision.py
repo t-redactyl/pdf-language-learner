@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from pdf_language_learner.revision import ScheduleState
 from pdf_language_learner.grammar_quality import GrammarQualityReview, GrammarQualityVerdict
+from pdf_language_learner.grammar_rule_sources import grammar_rule_prompt_material
 
 
 GRAMMAR_CORRECT_INTERVAL_DAYS = (3, 7, 14, 30, 60, 120)
@@ -23,57 +24,6 @@ GRAMMAR_EXERCISES_PER_TYPE = 5
 # article at all.  This must stay on both the provider response and the internal
 # session: only the former reaches the model as a schema constraint.
 GRAMMAR_RULE_TABLE_LIMIT = 3
-GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION = """
-Verbposition in Satzverbindungen (Verb Position in Connected Sentences)
-
-The Rule
-In German, when you connect two clauses, the position of the verb depends on the type of connecting word you use. There are three main types:
-
-Type 1 — Koordinierende Konnektoren (Position 0)
-Words like und, aber, oder, denn, sondern connect two main clauses. The word order in both clauses stays normal — subject first, verb second. These connectors occupy "position 0", meaning they don't count as part of the clause.
-* Ich arbeite viel, aber ich verdiene wenig.
-* Er kommt nicht, denn er ist krank.
-
-Type 2 — Adverbiale Konnektoren (Position 1)
-Words like deshalb, trotzdem, dennoch, außerdem, dann, danach are adverbs, not conjunctions. They sit in position 1, which pushes the verb to position 2 and the subject to position 3.
-* Ich war müde. Deshalb bin ich früh ins Bett gegangen.
-* Er hat wenig Geld. Trotzdem kauft er teure Kleidung.
-
-Notice the pattern: Konnektor — Verb — Subjekt
-
-Type 3 — Subordinierende Konnektoren (Nebensatz)
-Words like weil, obwohl, dass, wenn, obwohl, damit send the verb to the end of the clause.
-* Ich gehe nicht aus, weil ich müde bin.
-* Er kauft teure Kleidung, obwohl er wenig Geld hat.
-
-Common Connectors by Type
-Type 1 (Position 0): und, aber, oder, denn, sondern
-Type 2 (Position 1): deshalb, trotzdem, dennoch, außerdem, danach, dann, daher, deswegen
-Type 3 (Nebensatz): weil, obwohl, dass, wenn, falls, damit, obwohl, nachdem, während
-"""
-
-GRAMMAR_SPANISH_NEW_EXAMPLE_EXPLANATION = """
-Objeto Indirecto (OI) — Indirect Object Pronouns
-
-The rule: Indirect object pronouns indicate to whom or for whom an action is done. They do not change for gender.
-
-| Person | Pronoun |
-| ------ | ------- |
-| yo | me |
-| tú | te | 
-| él/ella/usted | le |
-| nosotros/as | nos | 
-| vosotros/as | os |
-| ellos/ellas/ustedes | les |
-
-They go before the conjugated verb. Common verbs that take an indirect object: dar, decir, escribir, mandar, preguntar, regalar, gustar, encantar, parecer.
-
-Le doy el libro a María. (I give the book to María.)
-
-Important: When OI and OD pronouns appear together in the same sentence, the indirect comes first. And le/les changes to se before lo/la/los/las:
-
-¿Le das el libro a María? → Se lo doy. (NOT le lo)
-"""
 
 
 class GrammarSessionKind(StrEnum):
@@ -421,16 +371,7 @@ def grammar_generation_messages(
         for topic in topics
     )
     vocabulary = ", ".join(saved_vocabulary) or "none available"
-    formatting_example = {
-        "german": GRAMMAR_GERMAN_NEW_EXAMPLE_EXPLANATION,
-        "spanish": GRAMMAR_SPANISH_NEW_EXAMPLE_EXPLANATION,
-    }.get(language.strip().casefold())
-    formatting_guidance = (
-        f"Use this {language} grammar explanation as a formatting example: "
-        f"{formatting_example} "
-        if formatting_example
-        else ""
-    )
+    rule_material = grammar_rule_prompt_material(language, topics)
     if kind is GrammarSessionKind.LESSON:
         distribution = (
             "All fifteen exercises must target the one topic and progress from recognition "
@@ -484,7 +425,14 @@ def grammar_generation_messages(
                 "For new exercises, please give a succinct explanation of the grammar rule.  "
                 "Use rule_tables only for genuine paradigms, such as one table per declension or "
                 f"conjugation pattern, and never more than {GRAMMAR_RULE_TABLE_LIMIT}. Prose belongs in the rule summary. "
-                f"{formatting_guidance}"
+                "When the user supplies an AUTHORED SOURCE for a selected topic, use it as the "
+                "primary source for the lesson and exercises. Preserve its rule coverage and "
+                "examples where useful, while correcting only clear errors and adapting it into "
+                "the structured response fields. Do not replace it with a generic explanation. "
+                "Material labelled STYLE EXEMPLAR demonstrates the desired depth and formatting "
+                "only: never copy its grammar facts or examples into a different topic. For a "
+                "topic without an authored source, create an accurate explanation at a similar "
+                "level of clarity and detail. "
                 "Multiple-choice tasks must ask the learner to select the form or "
                 "connector that makes the displayed sentence correct. Fill-blank tasks should be "
                 "guided sentence completion or sentence combination: supply any required connector "
@@ -503,7 +451,8 @@ def grammar_generation_messages(
             "content": (
                 f"Create a {kind.value} session.\nTopics:\n{topic_lines}\n"
                 f"Saved vocabulary: {vocabulary}\n{distribution}\n"
-                "Give a concise rule summary and 2-4 useful worked examples. Model the "
+                + (f"\nGrammar source material:\n{rule_material}\n" if rule_material else "")
+                + "Give a concise rule summary and 2-4 useful worked examples. Model the "
                 "clarity of a compact textbook exercise rather than a comprehensive grammar reference."
             ),
         },

@@ -1,15 +1,9 @@
 """Static catalogue of grammar topics used to drive topic selection and
 spaced-repetition scheduling for the grammar revision feature.
 
-This module intentionally stores only *structured metadata* — a stable key,
-source book, CEFR level, category, title, and one illustrative example
-phrase — and never a full rule explanation. Explanations and exercises are
-generated on demand by an LLM call that is seeded with this metadata, the
-same way vocabulary translations and connector glosses are generated
-elsewhere in the app rather than stored verbatim. This keeps the catalogue
-small, avoids duplicating content the model already produces well, and lets
-explanations be tailored (e.g. to a learner's known error patterns) instead
-of being a fixed string.
+This module stores structured topic metadata. Optional human-authored rule
+explanations live in ``grammar_rules/german`` and are supplied to generation
+when available; the LLM creates explanations for topics that remain incomplete.
 
 Keys are stable slugs and must not be renamed once scheduling data
 (`grammar_reviews` rows) references them.

@@ -1,15 +1,9 @@
-"""Static catalogue of Spanish grammar topics, mirroring
-german_grammar_catalogue.py's design for German: structured metadata only (no
-prose explanations), used to drive topic selection and spaced-repetition
-scheduling for the grammar revision feature.
+"""Static catalogue of Spanish grammar topics used for topic selection and
+spaced-repetition scheduling.
 
-As with the German catalogue, explanations and exercises are generated on
-demand by an LLM call seeded with this metadata, rather than stored
-verbatim - even though the source PDFs this was built from ("A1 Spanish
-grammar" and "A2 Spanish grammar") contain full written explanations. Storing only
-the topic identity and one illustrative example keeps the catalogue small,
-avoids duplicating content a model can generate well, and lets explanations
-be tailored to the learner rather than fixed.
+Optional human-authored rule explanations live in ``grammar_rules/spanish``
+and are supplied to generation when available; the LLM creates explanations
+for topics that remain incomplete.
 
 Unlike the German source (Grammatik Aktiv B2/C1), this book does not group
 topics by grammatical category across units - each "Unidad" bundles several
