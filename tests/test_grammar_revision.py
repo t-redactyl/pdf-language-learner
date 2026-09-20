@@ -374,7 +374,7 @@ def test_grammar_review_excludes_the_freshly_taught_topic(
     monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
     client.get("/api/grammar/topics", params={"language": "Spanish"})
     now = datetime(2026, 9, 5, 12, tzinfo=UTC)
-    taught = SPANISH_GRAMMAR_TOPICS[61]
+    taught = SPANISH_GRAMMAR_TOPICS[56]
 
     with sqlite3.connect(database) as connection:
         connection.row_factory = sqlite3.Row
@@ -464,7 +464,7 @@ def test_scheduled_grammar_review_includes_only_three_seen_topics(
     kind, topics = selection
     assert kind is GrammarSessionKind.REVIEW
     assert len(topics) == 3
-    seen_topic_keys = {topic.key for topic in SPANISH_GRAMMAR_TOPICS[:61]}
+    seen_topic_keys = {topic.key for topic in SPANISH_GRAMMAR_TOPICS[:56]}
     assert {topic.key for topic in topics} <= seen_topic_keys
 
 
@@ -537,7 +537,7 @@ def test_grammar_lesson_is_resumable_and_introduced_only_on_completion(
 ) -> None:
     database = tmp_path / "margin.db"
     monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", database)
-    next_topic = SPANISH_GRAMMAR_TOPICS[61]
+    next_topic = SPANISH_GRAMMAR_TOPICS[56]
     calls = []
     grading_token_budgets = []
 
@@ -816,5 +816,5 @@ def test_grammar_topics_distinguish_seen_and_new(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("pdf_language_learner.app.DATABASE_PATH", tmp_path / "margin.db")
     topics = client.get("/api/grammar/topics", params={"language": "Spanish"}).json()
 
-    assert topics[60]["status"] == "seen"
-    assert topics[61]["status"] == "new"
+    assert topics[55]["status"] == "seen"
+    assert topics[56]["status"] == "new"

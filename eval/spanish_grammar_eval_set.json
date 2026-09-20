@@ -18,7 +18,7 @@
       "error_type": null,
       "correct_form": null,
       "note": "mano is feminine despite ending in -o - an exception to the usual -o = masculine pattern. Correct as written.",
-      "topic_key": "es_a1_u1_gender_of_nouns"
+      "topic_key": "es_a1_u3_adjectives"
     },
     {
       "id": 2,
@@ -29,7 +29,7 @@
       "error_type": "masculine article used with mano, which is a feminine exception to the -o ending pattern",
       "correct_form": "La mano derecha me duele.",
       "note": "mano ends in -o but is feminine; el mano is never correct.",
-      "topic_key": "es_a1_u1_gender_of_nouns"
+      "topic_key": "es_a1_u3_adjectives"
     },
     {
       "id": 3,

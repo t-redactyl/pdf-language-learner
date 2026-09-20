@@ -25,10 +25,9 @@ def test_inventory_is_stable_unique_and_backed_by_the_two_catalogues() -> None:
     validate_conjugation_inventory((*GRAMMAR_TOPICS, *SPANISH_GRAMMAR_TOPICS))
 
     assert len(CONJUGATION_ITEMS) == len(CONJUGATION_ITEMS_BY_KEY)
-    assert len(CONJUGATION_ITEMS) == 493
+    assert len(CONJUGATION_ITEMS) == 439
     assert all(item.answers for item in CONJUGATION_ITEMS)
     assert {
-        "a1b1_praeteritum_perfekt",
         "b2c1_konjunktiv2_gegenwart_formen",
         "b2c1_passiv_in_allen_zeiten",
         "b2c1_ueberblick_zeiten",
@@ -230,12 +229,11 @@ def test_conjugation_topics_endpoint_reports_the_audited_inventory(
     topics = client.get(
         "/api/conjugation/topics", params={"language": "German"}
     ).json()
-    assert sum(topic["forms"] for topic in topics) == 296
+    assert sum(topic["forms"] for topic in topics) == 242
     assert {topic["key"] for topic in topics} == {
         item.topic_key for item in CONJUGATION_ITEMS if item.language.value == "german"
     }
-    assert any(topic["unlocked"] for topic in topics)
-    assert any(not topic["unlocked"] for topic in topics)
+    assert not any(topic["unlocked"] for topic in topics)
 
 
 def test_german_preposition_cards_unlock_and_use_existing_review_api(

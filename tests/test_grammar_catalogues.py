@@ -34,9 +34,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_catalogues_have_unique_language_specific_ordering() -> None:
-    assert len(GRAMMAR_TOPICS) == 100
-    assert len(SPANISH_GRAMMAR_TOPICS) == 71
-    assert len(A1_SPANISH_GRAMMAR_TOPICS) == 43
+    assert len(GRAMMAR_TOPICS) == 99
+    assert len(SPANISH_GRAMMAR_TOPICS) == 66
+    assert len(A1_SPANISH_GRAMMAR_TOPICS) == 38
     assert len(A2_SPANISH_GRAMMAR_TOPICS) == 28
 
     for language, topics in (
@@ -126,7 +126,7 @@ def test_initial_progress_matches_existing_coursework() -> None:
 
     assert german == list(A1_B1_TOPICS)
     assert B2_C1_TOPICS[0] not in german
-    assert len(spanish) == 61
+    assert len(spanish) == 56
     assert spanish[-1].key == "es_a2_u6_affirmative_imperative"
     assert A2_SPANISH_GRAMMAR_TOPICS[18] not in spanish
 
@@ -145,7 +145,7 @@ def test_initial_progress_is_seeded_once_without_overwriting_reviews() -> None:
             """,
             (
                 "spanish",
-                "es_a1_u1_definite_articles",
+                "es_a1_u1_regular_ar_verbs",
                 "2026-01-01T00:00:00+00:00",
                 2,
                 2,
@@ -165,14 +165,14 @@ def test_initial_progress_is_seeded_once_without_overwriting_reviews() -> None:
             SELECT introduced_at, repetitions
             FROM grammar_reviews
             WHERE canonical_language = 'spanish'
-              AND topic_key = 'es_a1_u1_definite_articles'
+              AND topic_key = 'es_a1_u1_regular_ar_verbs'
             """
         ).fetchone()
         connection.execute(
             """
             DELETE FROM grammar_reviews
             WHERE canonical_language = 'spanish'
-              AND topic_key = 'es_a1_u1_gender_of_nouns'
+              AND topic_key = 'es_a1_u2_indefinite_articles'
             """
         )
         seed_initial_grammar_progress(connection, introduced_at=introduced_at)
@@ -180,13 +180,13 @@ def test_initial_progress_is_seeded_once_without_overwriting_reviews() -> None:
             """
             SELECT 1 FROM grammar_reviews
             WHERE canonical_language = 'spanish'
-              AND topic_key = 'es_a1_u1_gender_of_nouns'
+              AND topic_key = 'es_a1_u2_indefinite_articles'
             """
         ).fetchone()
     finally:
         connection.close()
 
-    assert counts == {"german": 12, "spanish": 61}
+    assert counts == {"german": 11, "spanish": 56}
     assert preserved == ("2026-01-01T00:00:00+00:00", 2)
     assert deleted_stays_new is None
 

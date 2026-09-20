@@ -261,18 +261,6 @@ def _german_items() -> list[ConjugationItem]:
     def paradigm(topic: str, lemma: str, form: str, answers: tuple[str, ...], note: str = "") -> None:
         items.extend(_items(de, topic, lemma, form, DE_PERSONS, answers, note=note))
 
-    paradigm("a1b1_praeteritum_perfekt", "sein", "Präteritum", ("war", "warst", "war", "waren", "wart", "waren"))
-    paradigm("a1b1_praeteritum_perfekt", "haben", "Präteritum", ("hatte", "hattest", "hatte", "hatten", "hattet", "hatten"))
-    paradigm("a1b1_praeteritum_perfekt", "machen", "Perfekt", ("habe gemacht", "hast gemacht", "hat gemacht", "haben gemacht", "habt gemacht", "haben gemacht"), "Supply the complete verb phrase.")
-    for lemma, forms in {
-        "können": ("konnte", "konntest", "konnte", "konnten", "konntet", "konnten"),
-        "müssen": ("musste", "musstest", "musste", "mussten", "musstet", "mussten"),
-        "dürfen": ("durfte", "durftest", "durfte", "durften", "durftet", "durften"),
-        "sollen": ("sollte", "solltest", "sollte", "sollten", "solltet", "sollten"),
-        "wollen": ("wollte", "wolltest", "wollte", "wollten", "wolltet", "wollten"),
-        "mögen": ("mochte", "mochtest", "mochte", "mochten", "mochtet", "mochten"),
-    }.items():
-        paradigm("a1b1_praeteritum_perfekt", lemma, "Präteritum", forms)
     for lemma, forms in {
         "haben": ("hätte", "hättest", "hätte", "hätten", "hättet", "hätten"),
         "sein": ("wäre", "wärst", "wäre", "wären", "wärt", "wären"),

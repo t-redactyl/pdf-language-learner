@@ -63,12 +63,7 @@ def a1_spanish_grammar_topic(
 
 
 _A1_SPANISH_GRAMMAR_TOPICS: tuple[GrammarTopic, ...] = (
-    a1_spanish_grammar_topic("es_a1_u1_definite_articles", 1, "Articles", "Definite articles", "el teatro / los teatros; la palabra / las palabras"),
-    a1_spanish_grammar_topic("es_a1_u1_gender_of_nouns", 1, "Nouns", "Gender of nouns", "el libro (masculine); la mesa (feminine)"),
-    a1_spanish_grammar_topic("es_a1_u1_plural_of_nouns", 1, "Nouns", "Plural of nouns", "playa -> playas; hotel -> hoteles"),
-    a1_spanish_grammar_topic("es_a1_u1_personal_pronouns", 1, "Subject pronouns", "Personal pronouns", "yo, tú, él/ella/usted, nosotros/as, vosotros/as, ellos/ellas/ustedes"),
     a1_spanish_grammar_topic("es_a1_u1_regular_ar_verbs", 1, "Present tense", "Regular -ar verbs", "estudio, estudias, estudia, estudiamos, estudiáis, estudian"),
-    a1_spanish_grammar_topic("es_a1_u1_pronunciation", 1, "Pronunciation", "Pronunciation", "cinco ('th'/'s'); llave ('y'); año ('ny')"),
     a1_spanish_grammar_topic("es_a1_u2_indefinite_articles", 2, "Articles", "Indefinite articles", "un libro, una mesa, unos libros, unas mesas"),
     a1_spanish_grammar_topic("es_a1_u2_masculine_feminine_professions", 2, "Nouns and adjectives", "Masculine and feminine professions", "el enfermero / la enfermera; el camarero / la camarera"),
     a1_spanish_grammar_topic("es_a1_u2_negation", 2, "Negation", "Negation", "No trabajo los domingos."),

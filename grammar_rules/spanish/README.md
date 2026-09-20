@@ -13,15 +13,15 @@ Replace each `TODO` comment with the rule text. Use ordinary Markdown for
 paragraphs, lists, examples, emphasis, and tables. For example:
 
 ```markdown
-<!-- topic: es_a1_u1_definite_articles -->
-## Definite articles
+<!-- topic: es_a1_u2_indefinite_articles -->
+## Indefinite articles
 
-Spanish definite articles agree with the noun in gender and number.
+Spanish indefinite articles agree with the noun in gender and number.
 
 |          | Singular | Plural |
 |----------|----------|--------|
-| Masculine | el      | los    |
-| Feminine  | la      | las    |
+| Masculine | un      | unos   |
+| Feminine  | una     | unas   |
 ```
 
 The section heading is for navigation; it does not need to match the textbook
@@ -32,4 +32,3 @@ that each section remains understandable on its own.
 
 When every `TODO` has been replaced, the files will be ready for a separate
 integration change that loads these rules and includes them in model prompts.
-

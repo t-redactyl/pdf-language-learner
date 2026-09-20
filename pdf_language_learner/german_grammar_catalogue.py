@@ -83,14 +83,6 @@ _A1_B1_TOPICS: tuple[GrammarTopic, ...] = (
         example="Ich sehe ihn. / Ich helfe ihm.",
     ),
     german_grammar_topic(
-        key="a1b1_praeteritum_perfekt",
-        book=GrammarBook.A1_B1,
-        level=GrammarLevel.A1_B1,
-        category="Bildung der Zeiten",
-        title="Präteritum und Perfekt: ich war, ich hatte / Was hast du gestern gemacht?",
-        example="Ich war, ich hatte / Was hast du gestern gemacht?",
-    ),
-    german_grammar_topic(
         key="a1b1_temporale_nebensaetze",
         book=GrammarBook.A1_B1,
         level=GrammarLevel.A1_B1,
