@@ -2,7 +2,6 @@ import importlib
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -99,13 +98,28 @@ def test_judge_checks_complete_candidate_and_feedback_drives_repair(quality_env,
     repair_prompt = calls[2][1]["messages"][-1]["content"]
     assert "implausible collocation" in repair_prompt
     assert "omit saved words" in repair_prompt
+    repair_material = json.loads(calls[2][1]["messages"][1]["content"])
+    assert set(repair_material["candidate"]) == {"lesson", "exercises"}
+    assert repair_material["candidate"]["lesson"]["rule_summary"] == "The rule."
+    assert len(repair_material["candidate"]["exercises"]) == 1
+    assert repair_material["candidate"]["exercises"][0]["position"] == 1
+    assert repair_material["candidate"]["exercises"][0]["prompt"] == "Original sentence"
     assert set(calls[2][1]["response_model"].model_fields) == {"lesson", "exercise_1"}
     # The second judge gets the earlier findings and the exact change scope.
     second_judge = calls[3][1]["messages"]
     assert len(second_judge) == 2
-    assert json.loads(second_judge[1]["content"])["candidate"]["exercises"][0]["prompt"] == "Repaired sentence"
-    assert json.loads(second_judge[1]["content"])["previous_review"] is not None
-    assert json.loads(second_judge[1]["content"])["changed_exercises"] == [1]
+    assert "targeted re-review" in second_judge[0]["content"]
+    second_material = json.loads(second_judge[1]["content"])
+    assert len(second_material["candidate"]["exercises"]) == 1
+    assert second_material["candidate"]["exercises"][0]["position"] == 1
+    assert second_material["candidate"]["exercises"][0]["prompt"] == "Repaired sentence"
+    assert second_material["candidate"]["lesson"]["rule_summary"] == "The rule."
+    previous_exercises = second_material["previous_review"]["exercises"]
+    assert len(previous_exercises) == 1
+    assert previous_exercises[0]["position"] == 1
+    assert previous_exercises[0]["issues"][0]["severity"] == "blocking"
+    assert "implausible collocation" in previous_exercises[0]["issues"][0]["problem"]
+    assert second_material["changed_exercises"] == [1]
     assert all(exercise.prompt == "Original sentence" for exercise in generated.exercises[1:])
     assert generated.quality_review.model == "independent-judge"
     assert [item.approved for item in generated.quality_review.verdicts] == [False, True]

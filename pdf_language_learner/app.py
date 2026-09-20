@@ -74,6 +74,7 @@ from pdf_language_learner.grammar_quality import (
     GRAMMAR_QUALITY_MAX_REVISIONS,
     GrammarQualityReview,
     GrammarQualityVerdict,
+    grammar_blocking_feedback,
     grammar_quality_messages,
     grammar_repair_message,
 )
@@ -5235,6 +5236,27 @@ def grammar_topic_generation_data(topics: list[GrammarTopic]) -> list[dict]:
     ]
 
 
+def targeted_grammar_candidate(
+    generated: GrammarGeneratedSession, exercise_positions: list[int],
+) -> dict[str, Any]:
+    """Keep lesson context while omitting exercises outside a repair's scope."""
+
+    return {
+        "lesson": {
+            "rule_summary": generated.rule_summary,
+            "rule_tables": [table.model_dump(mode="json") for table in generated.rule_tables],
+            "worked_examples": generated.worked_examples,
+        },
+        "exercises": [
+            {
+                "position": position,
+                **generated.exercises[position - 1].model_dump(mode="json"),
+            }
+            for position in exercise_positions
+        ],
+    }
+
+
 def review_grammar_content(
     language: str, kind: GrammarSessionKind, topics: list[GrammarTopic],
     vocabulary: list[str], generated: GrammarGeneratedSession,
@@ -5258,8 +5280,14 @@ def review_grammar_content(
                 messages=grammar_quality_messages(
                     language=language, kind=kind.value, topics=topic_data,
                     vocabulary=vocabulary,
-                    candidate=generated.model_dump(mode="json", exclude={"quality_review"}),
-                    previous_review=verdicts[-1].model_dump(mode="json") if verdicts else None,
+                    candidate=(
+                        targeted_grammar_candidate(generated, changed_exercises)
+                        if changed_exercises is not None
+                        else generated.model_dump(mode="json", exclude={"quality_review"})
+                    ),
+                    previous_review=(
+                        grammar_blocking_feedback(verdicts[-1]) if verdicts else None
+                    ),
                     changed_exercises=changed_exercises,
                     lesson_changed=lesson_changed,
                 ),
@@ -5282,13 +5310,14 @@ def review_grammar_content(
             if revision == GRAMMAR_QUALITY_MAX_REVISIONS:
                 break
             operation = "grammar session repair"
+            repair_positions = verdict.repair_positions
             repair = validated_grammar_response(
                 operation, response_model=grammar_repair_response_model(verdict),
                 messages=[
                     {"role": "system", "content": f"You edit {language} grammar teaching material using targeted replacements."},
                     {"role": "user", "content": json.dumps({
                         "topics": topic_data, "kind": kind.value,
-                        "candidate": generated.model_dump(mode="json", exclude={"quality_review"}),
+                        "candidate": targeted_grammar_candidate(generated, repair_positions),
                     }, ensure_ascii=False)},
                     grammar_repair_message(verdict),
                 ],
@@ -5297,10 +5326,9 @@ def review_grammar_content(
                 max_attempts=2,
             )
             repaired = apply_grammar_repair(generated, repair)
-            changed_exercises = [
-                position for position, (before, after) in enumerate(zip(generated.exercises, repaired.exercises), 1)
-                if before != after
-            ]
+            # Recheck every requested position even when a repair accidentally
+            # returns unchanged content, so an unresolved issue cannot pass.
+            changed_exercises = repair_positions
             lesson_changed = any(
                 getattr(generated, field) != getattr(repaired, field)
                 for field in ("rule_summary", "rule_tables", "worked_examples")

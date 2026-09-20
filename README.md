@@ -260,8 +260,11 @@ are instructed to omit words that would make an exercise unnatural.
 The generator receives concrete feedback and can revise the session once.
 Repairs use a restricted schema containing only exercises with blocking findings
 and an optional replacement lesson section. Other exercises are preserved by the
-application. Each revision is judged with the previous findings and the actual
-change list, so the judge checks fixes and regressions using the same standards.
+application. The repair call receives only those exercises plus the lesson context
+and blocking feedback. The second review likewise receives only repaired exercises,
+the lesson context, and the relevant earlier findings; it preserves the first-pass
+approval of untouched exercises while checking fixes and regressions with the same
+standards.
 Findings distinguish blocking errors from optional suggestions; suggestions are
 retained in the report but do not prevent approval. The judge uses the actual
 grading policy, including case-insensitive closed-answer matching and translation
