@@ -660,6 +660,17 @@ def grammar_pregeneration_enabled() -> bool:
     raise ValueError("GRAMMAR_PREGENERATION_ENABLED must be true or false")
 
 
+def grammar_generation_enabled() -> bool:
+    """Whether the deployed application may create new grammar exercises."""
+
+    value = os.getenv("GRAMMAR_GENERATION_ENABLED", "false").strip().casefold()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("GRAMMAR_GENERATION_ENABLED must be true or false")
+
+
 def mnemonic_autogeneration_enabled() -> bool:
     """Whether ordinary app activity may trigger paid mnemonic generation."""
 
@@ -4820,7 +4831,9 @@ def connector_revision_cards(
 async def application_lifespan(application: FastAPI):
     stop = threading.Event()
     workers = []
-    if grammar_pregeneration_enabled():
+    if not grammar_generation_enabled():
+        logger.info("Grammar exercise generation is disabled")
+    elif grammar_pregeneration_enabled():
         workers.append(threading.Thread(
             target=grammar_preparation_worker, args=(stop,),
             name="grammar-preparation", daemon=True,
@@ -5236,6 +5249,8 @@ def generate_grammar_content(
     topics: list[GrammarTopic],
     vocabulary: list[str],
 ) -> GrammarGeneratedSession:
+    if not grammar_generation_enabled():
+        raise RuntimeError("Grammar exercise generation is disabled")
     run = start_grammar_generation_usage_run(language, kind, topics)
     usage_token = GRAMMAR_GENERATION_USAGE_RUN.set(run)
     topic_data = grammar_topic_generation_data(topics)
@@ -5924,6 +5939,11 @@ def start_grammar_session(
                 )
                 vocabulary = saved_grammar_vocabulary(connection, canonical_language)
             if generated is None:
+                if not grammar_generation_enabled():
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Grammar exercise generation is temporarily disabled",
+                    )
                 try:
                     generated = generate_grammar_content(
                         canonical_language, kind, topics, vocabulary

@@ -60,6 +60,7 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | `GEMINI_MNEMONIC_JUDGE_MODEL`  | `gemini-3.8-flash`         | Gemini mnemonic quality judge model           |
 | `GEMINI_TIMEOUT_SECONDS`       | `60`                       | Gemini mnemonic request timeout               |
 | `OPENAI_GRAMMAR_MODEL`         | `gpt-5.6-luna`             | OpenAI model used for grammar                 |
+| `GRAMMAR_GENERATION_ENABLED`   | `false`                    | Permit creation of new grammar exercises      |
 | `GRAMMAR_PREGENERATION_ENABLED` | `false`                    | Generate upcoming grammar sessions in the background |
 | `OPENAI_GRAMMAR_TIMEOUT_SECONDS` | `180`                    | Grammar request timeout                      |
 | `OPENAI_GRAMMAR_MAX_OUTPUT_TOKENS` | `20000`               | Grammar generation token ceiling             |
@@ -130,7 +131,7 @@ Then select topics by key, level, or category. Filters can be repeated and are
 combined; `--samples` generates independent versions of each selected topic:
 
 ```bash
-uv run python scripts/preview_grammar.py \
+GRAMMAR_GENERATION_ENABLED=true uv run python scripts/preview_grammar.py \
   --language Spanish \
   --level A2 \
   --limit 12 \
@@ -195,7 +196,10 @@ analysis finds no strategy for an opaque prefixed verb or compound noun, a
 creative second pass tries looser near-homophones, names, numbers, and surreal
 phrases before accepting that no useful aid is available.
 
-When `GRAMMAR_PREGENERATION_ENABLED=true`, starting or restarting the Space
+Grammar exercise generation is disabled by default. Existing compatible sessions
+and prepared exercises remain usable. Set `GRAMMAR_GENERATION_ENABLED=true` to
+allow on-demand generation. When both `GRAMMAR_GENERATION_ENABLED=true` and
+`GRAMMAR_PREGENERATION_ENABLED=true`, starting or restarting the Space
 resumes any missing grammar preparation for languages with practice history or
 an active lesson. An untouched language makes no automatic model requests.
 OpenAI request and Stanza initialization/inference timings are

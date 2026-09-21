@@ -37,6 +37,7 @@ from pdf_language_learner.app import (
     gemini_client,
     gemini_structured_model_response,
     grammar_generation_effort,
+    grammar_generation_enabled,
     grammar_generation_tokens,
     grammar_grading_effort,
     grammar_model,
@@ -592,6 +593,18 @@ def test_openai_grammar_settings(monkeypatch) -> None:
     assert grammar_generation_tokens() == 16000
     assert grammar_generation_effort() == "high"
     assert grammar_grading_effort() == "medium"
+
+
+def test_grammar_generation_is_explicitly_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("GRAMMAR_GENERATION_ENABLED", raising=False)
+    assert grammar_generation_enabled() is False
+
+    monkeypatch.setenv("GRAMMAR_GENERATION_ENABLED", "true")
+    assert grammar_generation_enabled() is True
+
+    monkeypatch.setenv("GRAMMAR_GENERATION_ENABLED", "sometimes")
+    with pytest.raises(ValueError, match="must be true or false"):
+        grammar_generation_enabled()
 
 
 def test_grammar_structured_response_uses_openai_model_and_effort(
@@ -2884,6 +2897,30 @@ def test_mnemonic_backfill_attempts_all_pending_saved_words(
 
     assert set(attempted_ids) == pending_ids
     assert current_id not in attempted_ids
+
+
+def test_disabled_grammar_generation_never_calls_model(
+    vocabulary_database, monkeypatch
+) -> None:
+    monkeypatch.setenv("GRAMMAR_GENERATION_ENABLED", "false")
+    called = False
+
+    def unexpected_generation(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("generation must remain disabled")
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.generate_grammar_content", unexpected_generation
+    )
+
+    response = client.post("/api/grammar/session", json={"language": "Spanish"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Grammar exercise generation is temporarily disabled"
+    )
+    assert called is False
 
 
 def test_due_review_summary_tracks_the_grammar_cycle(vocabulary_database) -> None:
