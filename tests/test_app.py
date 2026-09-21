@@ -45,6 +45,7 @@ from pdf_language_learner.app import (
     load_local_environment,
     multi_word_term_in_context,
     mnemonic_judge_model,
+    mnemonic_autogeneration_enabled,
     mnemonic_model,
     mnemonic_provider,
     openai_client,
@@ -384,6 +385,18 @@ def test_mnemonic_provider_auto_selects_gemini_when_key_is_present(
     monkeypatch.setenv("MNEMONIC_PROVIDER", "gemini")
     monkeypatch.delenv("GEMINI_API_KEY")
     assert mnemonic_provider() == "gemini"
+
+
+def test_mnemonic_autogeneration_is_explicitly_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("MNEMONIC_AUTOGENERATION_ENABLED", raising=False)
+    assert mnemonic_autogeneration_enabled() is False
+
+    monkeypatch.setenv("MNEMONIC_AUTOGENERATION_ENABLED", "true")
+    assert mnemonic_autogeneration_enabled() is True
+
+    monkeypatch.setenv("MNEMONIC_AUTOGENERATION_ENABLED", "sometimes")
+    with pytest.raises(ValueError, match="must be true or false"):
+        mnemonic_autogeneration_enabled()
 
 
 def test_gemini_mnemonic_models_default_and_can_be_overridden(monkeypatch) -> None:
@@ -2786,6 +2799,39 @@ def test_vocabulary_mnemonic_judge_can_reject_both_candidates(
 
     assert len(operations) == 3
     assert client.get("/api/vocabulary").json()[0]["mnemonic"] is None
+
+
+def test_failed_mnemonic_is_not_retried_until_content_version_changes(
+    vocabulary_database, monkeypatch
+) -> None:
+    item_id = client.post(
+        "/api/vocabulary", json=vocabulary_payload()
+    ).json()["item"]["id"]
+    attempts = 0
+
+    def fail(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("provider failure")
+
+    monkeypatch.setattr(
+        "pdf_language_learner.app.mnemonic_structured_model_response", fail
+    )
+
+    enrich_vocabulary_mnemonic(item_id)
+    enrich_vocabulary_mnemonic(item_id)
+
+    assert attempts == 1
+    with sqlite3.connect(vocabulary_database / "margin.db") as connection:
+        stored = json.loads(
+            connection.execute(
+                "SELECT mnemonic_json FROM vocabulary_german WHERE id = ?", (item_id,)
+            ).fetchone()[0]
+        )
+    assert stored == {
+        "content_version": MNEMONIC_CONTENT_VERSION,
+        "mnemonic": None,
+    }
 
 
 def test_mnemonic_backfill_attempts_all_pending_saved_words(

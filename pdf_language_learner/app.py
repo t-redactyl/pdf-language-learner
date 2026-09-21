@@ -660,6 +660,17 @@ def grammar_pregeneration_enabled() -> bool:
     raise ValueError("GRAMMAR_PREGENERATION_ENABLED must be true or false")
 
 
+def mnemonic_autogeneration_enabled() -> bool:
+    """Whether ordinary app activity may trigger paid mnemonic generation."""
+
+    value = os.getenv("MNEMONIC_AUTOGENERATION_ENABLED", "false").strip().casefold()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("MNEMONIC_AUTOGENERATION_ENABLED must be true or false")
+
+
 def grammar_judge_model() -> str:
     model = os.getenv("OPENAI_GRAMMAR_JUDGE_MODEL", "gpt-5.4").strip()
     if not model:
@@ -806,9 +817,9 @@ def _usage_token(usage: Any, *fields: str) -> int | None:
 
 
 def _log_model_timing(
-    provider: str, operation: str, response: Any, elapsed_ms: float
+    provider: str, operation: str, model: str, response: Any, elapsed_ms: float
 ) -> None:
-    metrics = [f"wall={elapsed_ms:.1f}ms"]
+    metrics = [f"model={model}", f"wall={elapsed_ms:.1f}ms"]
     usage = getattr(response, "usage", None)
     if usage is not None:
         for label, fields in (
@@ -819,6 +830,12 @@ def _log_model_timing(
             value = _usage_token(usage, *fields)
             if isinstance(value, int):
                 metrics.append(f"{label}={value}")
+        input_details = getattr(usage, "input_tokens_details", None) or getattr(
+            usage, "prompt_tokens_details", None
+        )
+        cached_tokens = getattr(input_details, "cached_tokens", None)
+        if isinstance(cached_tokens, int):
+            metrics.append(f"cached={cached_tokens}")
         details = getattr(usage, "output_tokens_details", None) or getattr(
             usage, "completion_tokens_details", None
         )
@@ -909,7 +926,8 @@ def timed_openai_response(client: OpenAI, operation: str, **kwargs):
         )
         raise
     _log_model_timing(
-        "OpenAI", operation, response, (time.perf_counter() - started) * 1_000
+        "OpenAI", operation, kwargs.get("model", "unknown"), response,
+        (time.perf_counter() - started) * 1_000,
     )
     _capture_openai_usage(
         operation, kwargs.get("model", "unknown"), response, request=kwargs
@@ -929,7 +947,8 @@ def timed_gemini_chat_completion(client: OpenAI, operation: str, **kwargs):
         )
         raise
     _log_model_timing(
-        "Gemini", operation, response, (time.perf_counter() - started) * 1_000
+        "Gemini", operation, kwargs.get("model", "unknown"), response,
+        (time.perf_counter() - started) * 1_000,
     )
     _capture_openai_usage(operation, kwargs.get("model", "unknown"), response)
     return response
@@ -4355,6 +4374,23 @@ def enrich_vocabulary_mnemonic(item_id: str) -> None:
     except Exception:
         # Mnemonics are optional enrichment. A card remains fully usable when
         # either model is unavailable or the generated material is invalid.
+        # Record the attempt so a permanently failing item is not charged again
+        # every five minutes. A later content-version bump can try it again.
+        if row is not None and table_name is not None:
+            try:
+                stored = StoredVocabularyMnemonic(
+                    content_version=MNEMONIC_CONTENT_VERSION,
+                    mnemonic=None,
+                )
+                with vocabulary_database() as connection:
+                    connection.execute(
+                        f"UPDATE {table_name} SET mnemonic_json = ? WHERE id = ?",
+                        (stored.model_dump_json(), item_id),
+                    )
+            except Exception:
+                logger.exception(
+                    "Could not mark failed mnemonic enrichment for item %s", item_id
+                )
         logger.exception("Vocabulary mnemonic enrichment failed for item %s", item_id)
 
 
@@ -4791,12 +4827,15 @@ async def application_lifespan(application: FastAPI):
         ))
     else:
         logger.info("Automatic grammar pre-generation is disabled")
-    workers.append(
-        threading.Thread(
-            target=mnemonic_backfill_worker, args=(stop,),
-            name="mnemonic-backfill", daemon=True,
+    if mnemonic_autogeneration_enabled():
+        workers.append(
+            threading.Thread(
+                target=mnemonic_backfill_worker, args=(stop,),
+                name="mnemonic-backfill", daemon=True,
+            )
         )
-    )
+    else:
+        logger.info("Automatic mnemonic generation is disabled")
     for worker in workers:
         worker.start()
     try:
@@ -6269,7 +6308,10 @@ def save_vocabulary(
         )
     if connector_sentence_id is not None:
         background_tasks.add_task(enrich_connector_sentence, connector_sentence_id)
-    if current_stored_mnemonic(row["mnemonic_json"]) is None:
+    if (
+        mnemonic_autogeneration_enabled()
+        and current_stored_mnemonic(row["mnemonic_json"]) is None
+    ):
         background_tasks.add_task(enrich_vocabulary_mnemonic, row["id"])
     return VocabularySaveResult(item=item, created=created)
 
@@ -6382,8 +6424,9 @@ def revision_session(
         for row in selected
         if current_stored_mnemonic(row["mnemonic_json"]) is None
     ][:MNEMONIC_BACKFILL_LIMIT]
-    for item_id in missing_mnemonics:
-        background_tasks.add_task(enrich_vocabulary_mnemonic, item_id)
+    if mnemonic_autogeneration_enabled():
+        for item_id in missing_mnemonics:
+            background_tasks.add_task(enrich_vocabulary_mnemonic, item_id)
     for pending in pending_connector_sentences:
         background_tasks.add_task(enrich_connector_sentence, pending["sentence_id"])
     return RevisionSession(

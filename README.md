@@ -53,6 +53,7 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | `OPENAI_MNEMONIC_GENERATION_EFFORT` | `medium`              | Mnemonic analysis and writing effort         |
 | `OPENAI_MNEMONIC_JUDGE_MODEL`  | `gpt-5.4`                  | Independent mnemonic-quality judge           |
 | `OPENAI_MNEMONIC_JUDGE_EFFORT` | `low`                      | Mnemonic judge reasoning effort              |
+| `MNEMONIC_AUTOGENERATION_ENABLED` | `false`                  | Generate and backfill mnemonics automatically |
 | `GEMINI_API_KEY`               | —                          | Gemini key; its presence enables Gemini mnemonics |
 | `MNEMONIC_PROVIDER`            | automatic                  | Optional `gemini` or `openai` override        |
 | `GEMINI_MNEMONIC_MODEL`        | `gemini-3.8-flash`         | Gemini mnemonic analysis and generation model |
@@ -73,6 +74,9 @@ The defaults can be changed in the Space's **Settings → Variables** page:
 | `MARGIN_OPEN_THESAURUS_PATH`   | `/data/openthesaurus.txt`  | German thesaurus location                    |
 | `STANZA_RESOURCES_DIR`         | `/data/stanza`             | Stanza model directory                       |
 
+Automatic mnemonic generation is disabled by default because one saved word can
+require several model calls. Set `MNEMONIC_AUTOGENERATION_ENABLED=true` to
+generate mnemonics when words are saved or reviewed and to backfill older words.
 When `GEMINI_API_KEY` is set, mnemonic analysis, candidate generation, and
 quality judging use Gemini automatically. Translation and grammar requests
 continue to use OpenAI. Set `MNEMONIC_PROVIDER=openai` to keep mnemonic requests
